@@ -10,6 +10,5 @@ __pycache__/
 # auto_codabench/bundles/*/
 # auto_codabench/bundles/*.zip
 logs/
-autocodabench-orchestrator
-codabench-bundle
-competition-design
+auto_codabench/runs/*/
+auto_codabench/runs/LATEST

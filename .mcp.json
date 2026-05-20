@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "autocodabench": {
+      "type": "stdio",
+      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
+      "args": [
+        "-m",
+        "auto_codabench.mcp_server.server"
+      ],
+      "env": {}
+    },
+    "semantic-scholar": {
+      "type": "stdio",
+      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
+      "args": [
+        "-m",
+        "semantic_scholar.server"
+      ],
+      "env": {
+        "SEMANTIC_SCHOLAR_API_KEY": "",
+        "SEMANTIC_SCHOLAR_ENABLE_HTTP_BRIDGE": "0"
+      }
+    }
+  }
+}

@@ -28,10 +28,10 @@ servers:
 
 You have **two conversations** with Claude:
 
-| Session | What happens | What gets written |
-|---------|--------------|--------------------|
-| **1 — Planning** | Claude asks you questions, searches papers, makes proposals. You push back, iterate. *No bundle files are created.* | `specs/*.md` (one per module) + `implementation_plan.md` |
-| **2 — Execution** | A fresh chat. Spawn subagents from the plan. They write data, scoring program, pages, assemble the bundle, validate, zip. | `auto_codabench/bundles/<slug>.zip` + run logs |
+| Session                  | What happens                                                                                                              | What gets written                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **1 — Planning**  | Claude asks you questions, searches papers, makes proposals. You push back, iterate.*No bundle files are created.*      | `auto_codabench/runs/<branch_id>_<runtime_id>/` containing `specs/*.md`, `implementation_plan.md`, `events.jsonl`, `tool_calls/`, `mcp_stderr/` |
+| **2 — Execution** | A fresh chat. Spawn subagents from the plan. They write data, scoring program, pages, assemble the bundle, validate, zip. | `auto_codabench/bundles/<slug>.zip` + further files inside the same run dir under `artifacts/` |
 
 That separation is the most important rule in this whole repo. If Claude
 ever starts writing bundle files during Session 1, stop it and remind it of
@@ -151,35 +151,58 @@ a small icon (hammer / plug) showing connected MCP servers. Click it — you
 should see `semantic-scholar` and `autocodabench` both listed, with their
 tools enumerated.
 
-### B. Claude Code (in this repo)
+### B. Claude Code (recommended for this repo)
+
+Use the built-in `claude mcp add` command — it writes the canonical
+project-scope file `.mcp.json` at the repo root for you. Do **not** edit
+`.claude/settings.json` for MCP; that file is not read by Claude Code's
+MCP loader (this is a common confusion).
 
 From the repo root:
 
 ```bash
-mkdir -p .claude
+# Register the autocodabench server (project scope)
+claude mcp add autocodabench --scope project -- \
+  /Users/<you>/miniconda3/envs/semantic-scholar/bin/python \
+  -m auto_codabench.mcp_server.server
+
+# Register the semantic-scholar server (project scope; key optional).
+# SEMANTIC_SCHOLAR_ENABLE_HTTP_BRIDGE=0 turns off the server's bonus HTTP
+# bridge that otherwise tries to bind port 8000 — disable it unless you
+# specifically want the REST surface, otherwise port conflicts will make
+# the server fail to start.
+claude mcp add semantic-scholar --scope project \
+  --env SEMANTIC_SCHOLAR_API_KEY=your-key-or-leave-blank \
+  --env SEMANTIC_SCHOLAR_ENABLE_HTTP_BRIDGE=0 -- \
+  /Users/<you>/miniconda3/envs/semantic-scholar/bin/python \
+  -m semantic_scholar.server
 ```
 
-Create `.claude/settings.json`:
+Each command prints `File modified: <repo>/.mcp.json` on success. Verify:
 
-```json
-{
-  "mcpServers": {
-    "semantic-scholar": {
-      "command": "/Users/<you>/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "semantic_scholar.server"],
-      "env": {
-        "SEMANTIC_SCHOLAR_API_KEY": "paste-your-key-here-or-leave-blank"
-      }
-    },
-    "autocodabench": {
-      "command": "/Users/<you>/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "auto_codabench.mcp_server.server"]
-    }
-  }
-}
+```bash
+claude mcp list
 ```
 
-Then run `claude` in the repo and confirm with `/mcp` that both servers are connected.
+Expected output (the leading "Checking MCP server health…" is fine):
+
+```
+autocodabench:    ... -m auto_codabench.mcp_server.server  - ✓ Connected
+semantic-scholar: ... -m semantic_scholar.server           - ✓ Connected
+```
+
+If you see anything other than `✓ Connected`, the most likely cause is the
+wrong absolute path to the conda env's `python`. Re-check with
+`which python` while the env is activated.
+
+Inside a chat you can also type `/mcp` to see the live tool count and
+status.
+
+> **Tip — user scope vs project scope.** `--scope project` writes
+> `.mcp.json` next to your repo and is shared with collaborators (commit
+> it). Use `--scope user` instead if you want the servers available in
+> *every* directory you launch `claude` from; that writes to
+> `~/.claude.json` and is per-machine.
 
 ---
 
@@ -203,7 +226,7 @@ ln -s "$(pwd)/auto_codabench/skills/autocodabench-orchestrator"  ~/.claude/skill
 mkdir -p .claude/skills
 ln -s "$(pwd)/auto_codabench/skills/competition-design"          .claude/skills/competition-design
 ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"            .claude/skills/codabench-bundle
-ln -s "$(pwd)/auto_codabench/skills/autocodabench-orchestrator"  .claude/skills/autocodabench-orchestrator
+ln -s "$(pwd)/auto_codabench/skills/orchestrator"  .claude/skills/autocodabench-orchestrator
 ```
 
 Restart Claude (Desktop) or relaunch `claude` (Code). Type `/skills` —
@@ -241,14 +264,15 @@ I want to design a Codabench competition on detecting AI-generated text.
    - "Is this single-language English-only, or multilingual?"
 4. Cycle Q&A + paper searches until every dimension is locked down or
    has a citation-backed proposal you've confirmed.
-5. Write seven files:
-   - `auto_codabench/specs/01-task-framing.md`
-   - `auto_codabench/specs/02-data.md`
-   - `auto_codabench/specs/03-metrics-and-leaderboard.md`
-   - `auto_codabench/specs/04-baseline-and-starting-kit.md`
-   - `auto_codabench/specs/05-bundle-and-pages.md`
-   - `auto_codabench/specs/06-run-logging-and-env.md`
-   - `auto_codabench/implementation_plan.md`
+5. Open a run dir (`autocodabench_open_run`) and tell you where it is.
+   Everything else in this session lands inside it:
+   - `auto_codabench/runs/<branch_id>_<runtime_id>/specs/01-task-framing.md`
+   - `…/specs/02-data.md`
+   - `…/specs/03-metrics-and-leaderboard.md`
+   - `…/specs/04-baseline-and-starting-kit.md`
+   - `…/specs/05-bundle-and-pages.md`
+   - `…/specs/06-run-logging-and-env.md`
+   - `…/implementation_plan.md`
 6. **Stop.** No bundle file under `bundles/<slug>/` exists yet.
 
 ### Your job in Session 1
@@ -259,8 +283,14 @@ I want to design a Codabench competition on detecting AI-generated text.
 - **Push back** when something feels wrong. "The book says X but my
   audience is undergrads — adjust." Claude will revise.
 - When all seven files exist, **read the specs** in your editor (they
-  live in `auto_codabench/specs/`). Anything ambiguous? Tell Claude in
-  the same chat. Iterate until happy.
+  live under `auto_codabench/runs/LATEST/specs/`, which is a symlink to
+  the active session). Anything ambiguous? Tell Claude in the same chat.
+  Iterate until happy.
+- If you want to see *exactly* what Claude has been doing,
+  `cat auto_codabench/runs/LATEST/events.jsonl` is a structured timeline,
+  and `ls auto_codabench/runs/LATEST/tool_calls/` shows every MCP tool
+  call with its full request and response. (See §11 for the postmortem
+  workflow.)
 
 ### Red flag
 
@@ -283,15 +313,18 @@ the execution subagents focused.)
 ### Opening prompt
 
 ```
-Execute auto_codabench/implementation_plan.md.
+Execute auto_codabench/runs/LATEST/implementation_plan.md.
 
 Use /agents to spawn the subagents it defines. Each subagent should
-work in parallel where the plan permits, and log to
-logs/<branchid>_<runtime_id>/ as specified in spec 06.
+work in parallel where the plan permits.
 
-When done, write a final report from the meta-reviewer subagent
-summarising what was produced, what the validate_bundle output was,
-and where the final .zip lives.
+CRITICAL: set AUTOCODABENCH_RUN_DIR to the same path as Session 1's
+run so all execution-phase logs land in the same directory:
+  export AUTOCODABENCH_RUN_DIR=$(readlink -f auto_codabench/runs/LATEST)
+
+When done, the meta-reviewer subagent writes a final report at
+<run>/artifacts/meta-reviewer/report.md summarising what was produced,
+what validate_bundle said, and where the final .zip lives.
 ```
 
 ### What happens
@@ -299,16 +332,16 @@ and where the final .zip lives.
 The plan defines roughly these subagents (the exact list is whatever
 Session 1 wrote — read your plan):
 
-| Subagent | Tools it can use | What it produces |
-|----------|------------------|------------------|
-| `data-curator` | filesystem + `autocodabench_attach_data` | populates `reference_data/`, `input_data/` |
-| `scoring-author` | `autocodabench_write_scoring_program` | `scoring_program/score.py` + `metadata.yaml` |
-| `baseline-author` | `autocodabench_write_solution` | a "barely-passes" reference solution |
-| `pages-author` | `autocodabench_write_page` | overview / evaluation / terms / data pages |
-| `bundle-assembler` | `autocodabench_write_competition_yaml` | the master `competition.yaml` |
-| `bundle-validator` | `autocodabench_validate_bundle` | runs the linter, fixes issues, retries |
-| `packager` | `autocodabench_zip_bundle` | the final `.zip` at the bundle root |
-| `meta-reviewer` | read-only on logs/ + bundles/ | the final report (markdown + viz) |
+| Subagent             | Tools it can use                          | What it produces                                 |
+| -------------------- | ----------------------------------------- | ------------------------------------------------ |
+| `data-curator`     | filesystem +`autocodabench_attach_data` | populates `reference_data/`, `input_data/`   |
+| `scoring-author`   | `autocodabench_write_scoring_program`   | `scoring_program/score.py` + `metadata.yaml` |
+| `baseline-author`  | `autocodabench_write_solution`          | a "barely-passes" reference solution             |
+| `pages-author`     | `autocodabench_write_page`              | overview / evaluation / terms / data pages       |
+| `bundle-assembler` | `autocodabench_write_competition_yaml`  | the master `competition.yaml`                  |
+| `bundle-validator` | `autocodabench_validate_bundle`         | runs the linter, fixes issues, retries           |
+| `packager`         | `autocodabench_zip_bundle`              | the final `.zip` at the bundle root            |
+| `meta-reviewer`    | read-only on logs/ + bundles/             | the final report (markdown + viz)                |
 
 Each subagent has narrow permissions — the `pages-author` cannot
 overwrite the scoring program, etc.
@@ -316,10 +349,17 @@ overwrite the scoring program, etc.
 ### What you end up with
 
 ```
-auto_codabench/bundles/<slug>/         ← the unpacked bundle (browse it)
-auto_codabench/bundles/<slug>.zip      ← upload THIS to Codabench
-logs/<branchid>_<runtime_id>/          ← stdout, stderr, structured events
-auto_codabench/specs/<slug>-report.md  ← meta-reviewer's audit
+auto_codabench/bundles/<slug>/                          ← the unpacked bundle (browse it)
+auto_codabench/bundles/<slug>.zip                       ← upload THIS to Codabench
+auto_codabench/runs/<branch_id>_<runtime_id>/           ← one folder per session
+  ├── events.jsonl                                       ← structured timeline
+  ├── tool_calls/NNNN_<tool>.json                        ← every MCP call captured
+  ├── specs/                                             ← final specs
+  ├── implementation_plan.md
+  ├── specs_history/                                     ← versioned spec rewrites
+  ├── mcp_stderr/autocodabench.log                       ← server stderr
+  └── artifacts/<subagent>/                              ← Session-2 outputs (report, plots, etc.)
+auto_codabench/runs/LATEST                              ← symlink to most recent run
 ```
 
 Upload `<slug>.zip` to https://www.codabench.org → Benchmark →
@@ -331,12 +371,18 @@ Upload `<slug>.zip` to https://www.codabench.org → Benchmark →
 
 ### "I don't see the MCP servers in Claude"
 
-- Check the Python path in your JSON config is **absolute** and **points
-  to the conda env's** `python`, not system Python.
-- Check the JSON is valid (a missing comma will silently disable the
-  whole `mcpServers` block).
-- Open Claude Desktop's "MCP" / server-logs panel. The server's stderr
-  goes there. Look for ImportError, file-not-found, port-in-use.
+- **Claude Code:** run `claude mcp list`. Both should print `✓ Connected`.
+  If they don't appear at all, you probably edited `.claude/settings.json`
+  by hand — that file is **not** read by the MCP loader. Use
+  `claude mcp add --scope project ...` instead; it writes the correct file
+  (`.mcp.json` at the repo root). You can `cat .mcp.json` to confirm.
+- **Claude Desktop:** quit fully (Cmd-Q) and reopen — config is read only
+  at launch. Then click the plug/hammer icon and inspect server logs.
+- In both cases, the Python path must be **absolute** and must point to
+  the *conda env's* `python` (`…/envs/semantic-scholar/bin/python`), not
+  system Python. `~` is not expanded.
+- JSON validity: a missing comma silently disables the whole
+  `mcpServers` block. If in doubt, pipe through `python -m json.tool`.
 
 ### "Claude says the tool failed"
 
@@ -383,35 +429,113 @@ If that fails, repeat step 3.
 
 ---
 
-## 9. Quick reference
+## 9. Postmortems — when something went wrong (or you just want to know what Claude did)
+
+Every session — both planning (Session 1) and execution (Session 2) — writes
+to a dedicated directory:
+
+```
+auto_codabench/runs/<branch_id>_<runtime_id>/
+auto_codabench/runs/LATEST                  ← symlink to the most recent
+```
+
+### What's in there
+
+| File / dir | What it tells you |
+|------------|-------------------|
+| `meta.json` | When the run started, what git branch + SHA, conda env, pid, slug |
+| `events.jsonl` | Structured timeline. One JSON object per line. `kind` = `run_opened`, `tool_call_started`, `question_asked`, `ss_searched`, `proposal_made`, `spec_written`, `iter1_done`, etc. (see orchestrator skill §11) |
+| `tool_calls/NNNN_<tool>.json` | Full request + response of every MCP tool call, in order. Includes args, return value, duration_ms, error if any. |
+| `specs/` | The current set of specs. If you re-ran the orchestrator and the specs changed, only the latest is here. |
+| `specs_history/` | Every rewrite of every spec, timestamp-suffixed. `diff` adjacent ones to see what Claude changed. |
+| `implementation_plan.md` | The Session-2 input. Lists subagents and what each will do. |
+| `mcp_stderr/autocodabench.log` | Stderr from the autocodabench MCP server — useful when a tool errored silently. |
+| `artifacts/<subagent>/` | Session-2 output: model checkpoints, plots, the meta-reviewer's report. |
+
+### Useful commands
+
+```bash
+# Latest run, at a glance
+ls -la auto_codabench/runs/LATEST/
+cat   auto_codabench/runs/LATEST/meta.json
+
+# Greppable timeline (needs `jq`)
+jq -c '{ts, kind, tool: (.tool // null), msg: (.message // null)}' \
+  < auto_codabench/runs/LATEST/events.jsonl
+
+# Which tool calls erred?
+jq -c 'select(.error != null)' \
+  < auto_codabench/runs/LATEST/events.jsonl
+
+# Pretty-print a specific tool call by counter
+cat auto_codabench/runs/LATEST/tool_calls/0003_*.json | python -m json.tool
+
+# How a spec evolved
+ls auto_codabench/runs/LATEST/specs_history/ | grep '01-task-framing'
+diff auto_codabench/runs/LATEST/specs_history/01-task-framing.2026-05-20T15-12-04Z.md \
+     auto_codabench/runs/LATEST/specs/01-task-framing.md
+```
+
+### Listing all sessions
+
+```bash
+ls -t auto_codabench/runs/             # newest first
+```
+
+Each directory name is `<branch_id>_<runtime_id>`, where `branch_id` is your
+git branch at session start (slashes replaced with hyphens) and `runtime_id`
+is `YYYYMMDDTHHMMSS` in UTC. So you can `cd` into any past run and read its
+specs / events / tool calls without needing to remember the exact name.
+
+### "I expected logs and the run dir doesn't exist"
+
+The orchestrator skill is supposed to call `autocodabench_open_run` as its
+very first MCP action. If you don't see a run dir, that step didn't happen
+— check `auto_codabench/runs/LATEST` and look for the most-recent dir. If
+none, the skill never activated; type `/autocodabench-orchestrator`
+explicitly at the start of the next conversation.
+
+---
+
+## 10. Quick reference
 
 ### Paths you'll touch
 
-| Path | What |
-|------|------|
-| `~/.claude/skills/` (or `.claude/skills/`) | Skill symlinks |
-| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config |
-| `.claude/settings.json` (in repo) | Claude Code MCP config |
-| `.env` (repo root) | API keys, gitignored |
-| `auto_codabench/specs/` | Session-1 output |
-| `auto_codabench/implementation_plan.md` | Session-2 input |
-| `auto_codabench/bundles/<slug>/` | Generated bundle (gitignored) |
-| `auto_codabench/bundles/<slug>.zip` | What you upload |
-| `logs/<branchid>_<runtime_id>/` | Run logs (gitignored) |
+| Path                                                                | What                          |
+| ------------------------------------------------------------------- | ----------------------------- |
+| `~/.claude/skills/` (or `.claude/skills/`)                      | Skill symlinks                |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config            |
+| `.mcp.json` (repo root)                                           | Claude Code MCP config (managed via `claude mcp add`) |
+| `.env` (repo root)                                                | API keys, gitignored          |
+| `auto_codabench/runs/<branch_id>_<runtime_id>/`                   | All artifacts of one session (gitignored): specs, plan, events, tool calls |
+| `auto_codabench/runs/LATEST`                                      | Symlink to the most recent run |
+| `auto_codabench/bundles/<slug>/`                                  | Generated bundle (gitignored) |
+| `auto_codabench/bundles/<slug>.zip`                               | What you upload               |
 
-### The 9 autocodabench tools (so you can read Claude's tool calls)
+### The 13 autocodabench tools (so you can read Claude's tool calls)
 
-| Tool | When it runs |
-|------|--------------|
-| `autocodabench_init_bundle` | First, creates the empty skeleton |
-| `autocodabench_write_competition_yaml` | After all other files exist, ties them together |
-| `autocodabench_write_page` | Overview / evaluation / terms / data tabs |
-| `autocodabench_write_scoring_program` | `score.py` + `metadata.yaml` |
-| `autocodabench_write_ingestion_program` | (Only for code-submission competitions) |
-| `autocodabench_write_solution` | Baseline / starting kit |
-| `autocodabench_attach_data` | Reference data, input data |
-| `autocodabench_validate_bundle` | Lint pass — always run before zipping |
-| `autocodabench_zip_bundle` | Produces the final upload .zip |
+**Runs (Session 1 and Session 2 — manage the run dir):**
+
+| Tool                              | When it runs                                                 |
+| --------------------------------- | ------------------------------------------------------------ |
+| `autocodabench_open_run`        | First MCP call of every session — opens the run dir         |
+| `autocodabench_current_run`     | Sanity-check that a run is open                              |
+| `autocodabench_log_event`       | Each milestone (question asked, SS searched, proposal made, …) |
+| `autocodabench_snapshot_spec`   | Every spec write (also keeps a versioned copy)               |
+
+**Bundle (Session 2 only):**
+
+| Tool                                      | When it runs                                    |
+| ----------------------------------------- | ----------------------------------------------- |
+| `autocodabench_init_bundle`             | First, creates the empty skeleton               |
+| `autocodabench_write_competition_yaml`  | After all other files exist, ties them together |
+| `autocodabench_write_page`              | Overview / evaluation / terms / data tabs       |
+| `autocodabench_write_scoring_program`   | `score.py` + `metadata.yaml`                |
+| `autocodabench_write_ingestion_program` | (Only for code-submission competitions)         |
+| `autocodabench_write_solution`          | Baseline / starting kit                         |
+| `autocodabench_attach_data`             | Reference data, input data                      |
+| `autocodabench_validate_bundle`         | Lint pass — always run before zipping          |
+| `autocodabench_zip_bundle`              | Produces the final upload .zip                  |
 
 ### Commands cheatsheet
 
@@ -443,11 +567,19 @@ PY
 
 ---
 
-## 10. The shortest possible recipe
+## 11. The shortest possible recipe
 
 1. `conda create -n semantic-scholar --clone base -y && conda activate semantic-scholar`
 2. `pip install -e ./semantic-scholar-fastmcp-mcp-server && pip install -e .`
-3. Edit `claude_desktop_config.json` (paths in §4) and restart Claude.
+3. Register both servers (Claude Code):
+   ```bash
+   claude mcp add autocodabench --scope project -- \
+     /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m auto_codabench.mcp_server.server
+   claude mcp add semantic-scholar --scope project --env SEMANTIC_SCHOLAR_API_KEY=YOUR_KEY -- \
+     /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m semantic_scholar.server
+   claude mcp list   # both should print ✓ Connected
+   ```
+   (Or, for Claude Desktop: edit `claude_desktop_config.json` per §4 and restart.)
 4. Symlink the three skills into `~/.claude/skills/` (§5).
 5. New Claude chat: `/autocodabench-orchestrator` + your one-sentence idea.
 6. Iterate until `specs/` + `implementation_plan.md` look right.

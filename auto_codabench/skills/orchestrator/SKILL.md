@@ -7,7 +7,11 @@ description: Drive the iterative loop that turns a vague competition idea into s
 
 You are helping the user turn a one-line competition idea (e.g. *"a competition
 on detecting AI-generated text"*) into a fully specified, plan-only artifact
-set:
+set. **Everything you write lives inside one run directory** —
+`auto_codabench/runs/<branch_id>_<runtime_id>/` — so a postmortem is one
+`ls` away. The run dir is created by the first MCP call you make (see §0).
+
+Produced files (all under `<run>/`):
 
 - `specs/01-task-framing.md`
 - `specs/02-data.md`
@@ -18,10 +22,45 @@ set:
 - `implementation_plan.md` — top-level index that **points to each spec**, names the subagent that will execute each step, and lists the exact MCP tool calls that step will make.
 
 **Iteration 1 rule (NON-NEGOTIABLE).** On the first pass, do *not* call any
-`autocodabench_*` write tool. Do not create bundle files. Plan only. The user
-will review specs, push back, and only when they say "go" do you start a fresh
-session that executes the plan. Treat any urge to "just go ahead and scaffold"
-as a bug.
+`autocodabench_*` *bundle* write tool (`init_bundle`, `write_competition_yaml`,
+`write_page`, `write_scoring_program`, `write_ingestion_program`,
+`write_solution`, `attach_data`, `validate_bundle`, `zip_bundle`). Do not
+create any file under `auto_codabench/bundles/`. Plan only. The user will
+review specs, push back, and only when they say "go" do you start a fresh
+session that executes the plan. Treat any urge to "just go ahead and
+scaffold" as a bug.
+
+The *runs/* tools (`open_run`, `current_run`, `log_event`, `snapshot_spec`)
+are not bundle tools — you SHOULD call them throughout iteration 1.
+
+---
+
+## 0. Open the run (first MCP call, before anything else)
+
+The very first action you take, before even restating the user's idea,
+is to call:
+
+```
+autocodabench_open_run(slug="<short-kebab-case-label-for-this-idea>")
+```
+
+That creates `auto_codabench/runs/<branch_id>_<runtime_id>/` and routes
+every subsequent MCP tool call into its `tool_calls/` directory. From then
+on, you call:
+
+- `autocodabench_snapshot_spec(filename, body)` — every time you write or
+  rewrite a spec. Writes BOTH `<run>/specs/<filename>` AND a versioned
+  copy under `<run>/specs_history/` so you have a diff trail.
+- `autocodabench_log_event(kind, message?, payload?)` — at every meaningful
+  transition. The conventional `kind` values are listed in §11.
+
+If `autocodabench_current_run` ever returns `{"opened": False}`, you forgot
+step 0. Call `open_run` immediately and continue.
+
+After `open_run` returns, briefly tell the user the path. One line, e.g.:
+
+> Run opened at `auto_codabench/runs/bundle-creation-usecase-b_20260520T154233/`.
+> All my events, tool calls, and specs for this session will land there.
 
 ---
 
@@ -105,7 +144,7 @@ items the user has already implied; press on ones they have not.
 | Phases & timing            | Feedback phase length, final phase length, submission caps per day / per phase |
 | Anti-cheating              | Holdout integrity, multi-account risk, label leakage, max submission rate |
 | Compute env (your side)    | Conda env name, Python version, .env keys (`SEMANTIC_SCHOLAR_API_KEY`, etc.) |
-| Logging convention         | `logs/<branchid>_<runtime_id>/` (see §6) |
+| Logging convention         | `auto_codabench/runs/<branch_id>_<runtime_id>/` (see §6) |
 | Fallbacks                  | What happens if an API call (e.g. embedding service) fails mid-evaluation |
 | Post-competition           | Plan to publish dataset, winner solutions, paper |
 
@@ -148,7 +187,13 @@ narrow it (year range, citation count) rather than running more queries.
 The exit condition is: every row of §3 has a *user-confirmed answer* or
 a *clearly marked proposal with a citation*.
 
-Emit each spec under `auto_codabench/specs/` with this structure:
+Each spec is written via `autocodabench_snapshot_spec(filename, body)` —
+**never** via raw filesystem writes — so it lands in `<run>/specs/<filename>`
+and a versioned copy is saved under `<run>/specs_history/`. After writing,
+call `autocodabench_log_event(kind="spec_written_summary", payload={...})`
+with one or two lines of *why* (the versioned copies show *what*).
+
+Spec body structure:
 
 ```markdown
 # Spec N — <title>
@@ -193,9 +238,21 @@ Then `auto_codabench/implementation_plan.md`:
 (For each step, list the exact autocodabench_* tools, with arg shapes.)
 
 ## Logging
-All runs write to `logs/<branchid>_<runtime_id>/{stdout.log,stderr.log,events.jsonl}`.
-Branch id from `git rev-parse --abbrev-ref HEAD | tr / -`. Runtime id from
-`date +%s_%N` at session start.
+All work for this competition lives under the planning session's run dir
+(printed by `autocodabench_open_run` at the start of iteration 1):
+
+  `auto_codabench/runs/<branch_id>_<runtime_id>/`
+
+Subdirs:
+  - `events.jsonl`          — structured timeline (one JSON object per line)
+  - `tool_calls/`           — full request+response of every MCP tool call
+  - `specs/`                — current specs (this directory)
+  - `specs_history/`        — versioned snapshots of every spec rewrite
+  - `mcp_stderr/`           — autocodabench server logs (`autocodabench.log`)
+  - `meta.json`             — branch, sha, started_at, slug, conda env, pid
+
+Implementation-phase subagents MUST inherit the SAME run dir
+(`AUTOCODABENCH_RUN_DIR` env var). Spec 06 dictates this verbatim.
 
 ## Conda env / .env
 - Env: `semantic-scholar` (shared with semantic-scholar-fastmcp)
@@ -214,20 +271,39 @@ After emitting these files, **stop**. Tell the user concisely:
 
 ## 6. Run logging convention (carry into every spec)
 
-Every script the implementation phase will run must log to:
+Every artifact of a planning session lives under:
 
 ```
-logs/<branchid>_<runtime_id>/
-  ├── stdout.log
-  ├── stderr.log
-  ├── events.jsonl       # structured one-event-per-line
-  └── artifacts/         # model checkpoints, predictions, plots
+auto_codabench/runs/<branch_id>_<runtime_id>/
+  ├── meta.json
+  ├── events.jsonl              # one structured event per line (kind, ts, ...)
+  ├── tool_calls/
+  │   └── NNNN_<tool_name>.json # full request + response per MCP call
+  ├── specs/
+  │   ├── 01-task-framing.md
+  │   ├── 02-data.md
+  │   └── ...
+  ├── implementation_plan.md
+  ├── specs_history/             # versioned snapshots — each rewrite preserved
+  ├── mcp_stderr/
+  │   └── autocodabench.log
+  └── artifacts/                 # (execution-phase only) model ckpts, plots, etc.
 ```
 
 Where:
 
-- `branchid` = `git rev-parse --abbrev-ref HEAD | tr / -` (e.g. `bundle-creation-usecase-b`)
-- `runtime_id` = `date +%Y%m%dT%H%M%S` (sortable; collision-resistant enough for a single user)
+- `branch_id` = `git rev-parse --abbrev-ref HEAD | tr / -` (e.g. `bundle-creation-usecase-b`)
+- `runtime_id` = `date +%Y%m%dT%H%M%S` (UTC, sortable, collision-resistant for a single user)
+- `auto_codabench/runs/LATEST` is a symlink to the most recent run dir.
+
+For Session 1 (planning): the entire structure above is created and
+populated by the `autocodabench_*` MCP tools — you never `mkdir` or `open()`
+the files yourself.
+
+For Session 2 (execution): the implementation_plan dictates that every
+subagent reads `AUTOCODABENCH_RUN_DIR` from its environment (set to the
+SAME directory as the planning session) and writes additional artifacts
+into `<run>/artifacts/`, with one subdirectory per subagent name.
 
 Spec 06 must specify this verbatim so the implementation-phase subagents do
 not invent their own logging schemes.
@@ -236,7 +312,10 @@ not invent their own logging schemes.
 
 ## 7. Hard rules — re-read before every message
 
-1. **No write_* tool calls in iteration 1.** Plan only.
+0. **`autocodabench_open_run` is your first MCP call.** No other MCP tool
+   should be called before it. If you forgot, call it now.
+1. **No bundle write_* tool calls in iteration 1.** Plan only. The runs/* and
+   semantic-scholar tools ARE allowed (and required).
 2. **One question at a time** to the user. Never produce a numbered list of
    10 questions.
 3. **Every metric/dataset/baseline proposal needs at least one S2 paperId.**
@@ -256,7 +335,7 @@ not invent their own logging schemes.
 
 ## 8. Tools available to you in this loop
 
-From `semantic-scholar` MCP server:
+From `semantic-scholar` MCP server (USE THROUGHOUT iteration 1):
 - `paper_relevance_search(query, year, min_citation_count, fields)`
 - `paper_title_search(query, fields)`
 - `paper_details(paper_id, fields)`
@@ -264,8 +343,14 @@ From `semantic-scholar` MCP server:
 - `get_paper_recommendations_single(paper_id, fields)`
 - `author_search(query, fields)`, `author_details(author_id, fields)`
 
-From `autocodabench` MCP server — **DO NOT USE IN ITERATION 1**, only in the
-execution session:
+From `autocodabench` MCP server — runs/* tools (USE THROUGHOUT iteration 1):
+- `autocodabench_open_run(slug?, branch_id?, runtime_id?)`            ← first call!
+- `autocodabench_current_run()`                                        ← verify a run is open
+- `autocodabench_log_event(kind, message?, payload?)`                  ← every milestone
+- `autocodabench_snapshot_spec(filename, body)`                        ← every spec write
+
+From `autocodabench` MCP server — bundle tools (**DO NOT USE IN ITERATION 1**,
+only in the execution session):
 - `autocodabench_init_bundle(slug, root_dir?, overwrite?)`
 - `autocodabench_write_competition_yaml(slug, payload, root_dir?)`
 - `autocodabench_write_page(slug, filename, body, root_dir?)`
@@ -311,11 +396,35 @@ question — not to dump a bibliography.
 
 ## 10. When iteration 1 ends
 
-Write a final message that:
+Call `autocodabench_log_event(kind="iter1_done", payload={...})` with a
+summary of what shipped. Then write a final message that:
 
-1. Lists every file you wrote, with one-line summary.
-2. Lists every `[USER]` question that was answered + the answer.
-3. Lists every `[USER]` question still open.
-4. Reminds the user: "say 'go' in a fresh session to execute."
+1. Quotes the run dir path (so the user can `ls auto_codabench/runs/LATEST/`).
+2. Lists every file you wrote (one-line summary each).
+3. Lists every `[USER]` question that was answered + the answer.
+4. Lists every `[USER]` question still open.
+5. Reminds the user: "say 'go' in a fresh session to execute."
 
 Then stop. Resist the urge to start executing.
+
+---
+
+## 11. Conventional `log_event` kinds (use these so postmortems are greppable)
+
+| `kind`                  | When | Recommended `payload` |
+|-------------------------|------|------------------------|
+| `iter1_started`         | After `open_run`, before the first user question | `{slug, idea_one_line}` |
+| `idea_restated`         | After you echo the user's idea back to them | `{summary}` |
+| `question_asked`        | Each `[USER]` question you ask | `{dim, question}` (dim from §3 table) |
+| `user_answer_recorded`  | When the user replies | `{dim, answer_summary}` |
+| `ss_searched`           | After each Semantic Scholar search | `{query, n_results, paper_ids}` |
+| `proposal_made`         | When you make a citation-backed proposal | `{dim, value, citations}` |
+| `proposal_accepted`     | User said yes | `{dim, value}` |
+| `proposal_revised`      | User pushed back | `{dim, old, new, reason}` |
+| `spec_written_summary`  | After every `snapshot_spec` | `{filename, why_one_line}` |
+| `plan_written`          | After writing `implementation_plan.md` | `{n_specs, n_subagents}` |
+| `iter1_done`            | Final event | `{specs, plan_path, open_questions}` |
+
+The autocodabench server emits `run_opened`, `tool_call_started`,
+`tool_call_finished`, `tool_call_error`, and `spec_written` automatically —
+do not duplicate those.

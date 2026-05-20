@@ -7,11 +7,13 @@ from typing import Any
 
 from ..bundle_io import zip_bundle
 from ..mcp import mcp
+from ..run_log import logged_tool
 
 log = logging.getLogger("autocodabench.package")
 
 
 @mcp.tool()
+@logged_tool("autocodabench_zip_bundle")
 async def autocodabench_zip_bundle(
     slug: str,
     root_dir: str | None = None,

@@ -7,11 +7,13 @@ from typing import Any
 
 from ..bundle_io import validate_bundle
 from ..mcp import mcp
+from ..run_log import logged_tool
 
 log = logging.getLogger("autocodabench.validate")
 
 
 @mcp.tool()
+@logged_tool("autocodabench_validate_bundle")
 async def autocodabench_validate_bundle(
     slug: str,
     root_dir: str | None = None,

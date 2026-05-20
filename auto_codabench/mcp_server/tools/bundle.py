@@ -1,9 +1,8 @@
 """MCP tools for *writing* into a Codabench competition bundle.
 
-This module is the thin shim between FastMCP (async, JSON-RPC) and
-bundle_io (sync, file-system). The pattern matches the Semantic Scholar
-reference repo: every tool wraps its body in try/except and returns a
-structured error on failure instead of letting the exception propagate.
+Every public tool is wrapped with `@logged_tool` so its full request/response
+is captured under the active run's `tool_calls/` directory and an entry is
+appended to `events.jsonl`. See `run_log.py` for the details.
 """
 from __future__ import annotations
 
@@ -21,11 +20,13 @@ from ..bundle_io import (
     write_solution,
 )
 from ..mcp import mcp
+from ..run_log import logged_tool
 
 log = logging.getLogger("autocodabench.bundle")
 
 
 @mcp.tool()
+@logged_tool("autocodabench_init_bundle")
 async def autocodabench_init_bundle(
     slug: str,
     root_dir: str | None = None,
@@ -54,6 +55,7 @@ async def autocodabench_init_bundle(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_write_competition_yaml")
 async def autocodabench_write_competition_yaml(
     slug: str,
     payload: dict[str, Any],
@@ -81,6 +83,7 @@ async def autocodabench_write_competition_yaml(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_write_page")
 async def autocodabench_write_page(
     slug: str,
     filename: str,
@@ -109,6 +112,7 @@ async def autocodabench_write_page(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_write_scoring_program")
 async def autocodabench_write_scoring_program(
     slug: str,
     script: str,
@@ -144,6 +148,7 @@ async def autocodabench_write_scoring_program(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_write_ingestion_program")
 async def autocodabench_write_ingestion_program(
     slug: str,
     script: str,
@@ -178,6 +183,7 @@ async def autocodabench_write_ingestion_program(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_write_solution")
 async def autocodabench_write_solution(
     slug: str,
     files: dict[str, str],
@@ -207,6 +213,7 @@ async def autocodabench_write_solution(
 
 
 @mcp.tool()
+@logged_tool("autocodabench_attach_data")
 async def autocodabench_attach_data(
     slug: str,
     target: str,
