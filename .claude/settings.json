@@ -1,15 +1,35 @@
 {
-  "mcpServers": {
-    "semantic-scholar": {
-      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "semantic_scholar.server"],
-      "env": {
-        "SEMANTIC_SCHOLAR_API_KEY": ""
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python /Users/ktgiahieu/Documents/auto-codabench/auto_codabench/runs/log_hook.py"
+          }
+        ]
       }
-    },
-    "autocodabench": {
-      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "auto_codabench.mcp_server.server"]
-    }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python /Users/ktgiahieu/Documents/auto-codabench/auto_codabench/runs/log_hook.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python /Users/ktgiahieu/Documents/auto-codabench/auto_codabench/runs/log_hook.py"
+          }
+        ]
+      }
+    ]
   }
 }

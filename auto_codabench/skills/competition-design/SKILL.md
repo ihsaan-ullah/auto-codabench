@@ -5,9 +5,70 @@ description: Best practices for designing an AI competition — task framing, me
 
 # Competition design
 
-Source: Pavão et al., *AI Competitions and Benchmarks: The Science Behind the Contests* (2024). Chapter cites point to that book.
+Source: **Pavão et al., *AI Competitions and Benchmarks: The Science Behind the Contests* (2024).** Chapter cites point to that book. This is the canonical, quotable source — when in doubt, cite it.
 
 Use this as a decision tree. Resolve every section in order before launch — most failed competitions died at step 1 or 2, not the leaderboard.
+
+---
+
+## 0a. Live tensions in the competition-design literature
+
+Surface these to the user when they hit. They are the dimensions on
+which thoughtful designers disagree, which makes them the most useful
+Phase A conversation accelerators.
+
+| Tension | Sides | Where to read | Why it matters for the design |
+|---------|-------|---------------|-------------------------------|
+| **Fixed vs rolling test sets** | Fixed test set is stable & comparable; rolling test set defeats memorisation by frontier models. | Pavão et al. (Ch. 3 §3.4); Roelofs et al. on benchmark drift | A NeurIPS reviewer will ask which you chose and why. |
+| **λ result-submission vs γ code-submission** | λ is low-effort & community-friendly; γ is the only protocol that guarantees reproducibility and supports private test data. | Pavão et al. (Ch. 2 §2.4, Ch. 11 §11.2, Ch. 12 §12.1) | Decides whether you need a compute-worker, an ingestion program, and how anti-cheating works. |
+| **Multi-task aggregation: Borda vs mean-of-scores** | Mean of normalised scores is interpretable but vulnerable to outliers; average-rank (Borda) is robust but discards magnitude. The book is opinionated *for* Borda. | Pavão et al. (Ch. 5 §5.6); Gibbard's theorem | Decides leaderboard ranking computation and what tie-breaking rule you write into competition.yaml. |
+| **Public-leaderboard size: small vs large fraction of test set** | Small public leaderboard reduces overfitting risk but reduces feedback signal; large public leaderboard improves participant engagement but degrades into Goodharting. | Pavão et al. (Ch. 5 §5.1); Roelofs et al.; "Ladder" leaderboard (Blum & Hardt 2015) | Decides the public/private split ratio and the maximum daily submissions cap. |
+| **Adversarial-accuracy metric direction** | For privacy/utility evaluation, ideal value is **0.5** (indistinguishable from real), NOT 1.0. Easy to set up wrong. | Pavão et al. (Ch. 4 §4.3) | If you mis-document this, participants optimize the wrong direction silently. |
+| **Detection-is-possible vs detection-is-futile (AI-text)** | Sadasivan et al. (2023) argue detection accuracy → chance as generators improve; Krishna et al. (2023) + watermarking line argue this is escapable under specific assumptions. | `oa:W4382349837` vs `oa:W4385245221` | If your competition is on AI-text detection, you need to take a position in the motivation section. |
+| **Single-objective vs multi-objective + weights** | Multi-objective leaderboards (accuracy + latency + fairness) better reflect real deployment but require an explicit aggregation rule declared at launch — otherwise winners are unfalsifiable. | Pavão et al. (Ch. 4 §4.4, Ch. 12 §12.4) | If you have a multi-objective scoring goal, the *aggregation rule* IS the metric. |
+| **Open-generator vs closed-generator phases** | Holding back generators for the final phase (open-generator) measures *true* generalization; freezing the generator set (closed) is fairer to participants who optimized for the announced set. | Pavão et al. (Ch. 5 §5.4); SemEval-2024 Task 8 design notes | This is the strongest distribution-shift lever and the dimension on which AI-text benchmarks diverge. |
+| **Code-sharing requirement: mandatory vs optional** | CTF (Donoho 2017) says winner-shares-code is one of the four pillars. Practice varies: some competitions require it for the prize, some leave it optional. | Pavão et al. (Ch. 1 §1.1, Ch. 13 §13.2) | Decides what you can include in the post-comp paper / shared task series and whether winning solutions are reusable. |
+| **Pre-trained / foundation-model usage** | Allowing foundation models speeds up entry but turns the competition into prompt engineering; disallowing them tests algorithmic novelty but excludes large fraction of the field. | Pavão et al. (Ch. 12 §12.3) | Particularly hot for NLP / vision competitions; usually best declared in the rules section. |
+
+Pattern for surfacing a tension in chat:
+
+> There's a real tension here: **<Side A in one sentence>** [source A] vs.
+> **<Side B in one sentence>** [source B]. The choice changes <which
+> downstream artifact>. Which side do you lean toward, or do you want
+> to design something that sidesteps it?
+
+---
+
+## 0. How to quote from this skill in user-facing chat
+
+The orchestrator skill's §2 *scientific tone* rule requires that every
+proposal made to the user names its source. When you draw on a bullet
+from this file, **surface the chapter handle verbatim** in your reply.
+The right citation form, depending on context:
+
+- **Inline principle**: *"Per Pavão et al. (Ch. 4 §4.2) …"* — use when
+  stating a single rule the user should believe.
+- **End-of-claim parenthetical**: *"… distinct from the random-split
+  baseline (Pavão et al., Ch. 3)."* — use when wrapping up an
+  observation.
+- **Mid-sentence handle only**: *"… the Common Task Framework (Ch. 1) …"*
+  — acceptable for well-known terms-of-art the reader will recognise.
+
+Never paraphrase a chapter title or invent a section number. When this
+skill says `(Ch. 4)`, your user-facing text should say `(Ch. 4)` or
+`Pavão et al. (Ch. 4)` — not "the metric chapter" or "chapter four of the
+competitions book". Researchers will check; treat them like reviewers.
+
+When the book and an empirical paper agree, **cite both**: the book for
+the principle, the paper for the instance. Example:
+
+> Per Pavão et al. (Ch. 5 §5.4), a hybrid λ→γ protocol is a defensible
+> compromise; the M4 shared task adopted it (Wang et al., 2024,
+> [oa:W4392055123]).
+
+When you make a claim that goes beyond what this skill explicitly
+states, prefix with **"Extrapolating from (Ch. X):"** so the user can
+tell where the book ends and your inference begins.
 
 ---
 

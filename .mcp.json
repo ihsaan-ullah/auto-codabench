@@ -9,16 +9,15 @@
       ],
       "env": {}
     },
-    "semantic-scholar": {
+    "alex-mcp": {
       "type": "stdio",
       "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
       "args": [
         "-m",
-        "semantic_scholar.server"
+        "alex_mcp.server"
       ],
       "env": {
-        "SEMANTIC_SCHOLAR_API_KEY": "",
-        "SEMANTIC_SCHOLAR_ENABLE_HTTP_BRIDGE": "0"
+        "OPENALEX_MAILTO": "ktgiahieu@gmail.com"
       }
     }
   }

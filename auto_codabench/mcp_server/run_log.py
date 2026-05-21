@@ -51,6 +51,87 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+# Static per-run README template, written into every run directory on open.
+def _run_readme(meta: dict) -> str:
+    return f"""\
+# Run: `{meta.get('branch_id','?')}_{meta.get('runtime_id','?')}`
+
+| field | value |
+|-------|-------|
+| started_at | `{meta.get('started_at','')}` |
+| branch_id | `{meta.get('branch_id','')}` |
+| runtime_id | `{meta.get('runtime_id','')}` |
+| git_sha | `{meta.get('git_sha','')}` |
+| slug | `{meta.get('slug','') or '(none)'}` |
+| conda_env | `{meta.get('conda_env','')}` |
+| python | `{meta.get('python','')}` |
+| cwd | `{meta.get('cwd','')}` |
+| pid | `{meta.get('pid','')}` |
+
+A *run* is the working folder for one Claude session — either iteration 1
+(planning) or iteration 2 (execution). Every artifact Claude produced
+during this session lives here.
+
+## How to read this folder
+
+### Conversation (what was actually said)
+
+| File | Read it when… |
+|------|---------------|
+| **`transcript.md`** | You want the human-readable back-and-forth. Each turn is rendered with role headers (👤 user / 🤖 claude). Tool calls and tool results are folded into `<details>` blocks so the prose stays readable. **Start here.** |
+| **`transcript.jsonl`** | You want the raw ground-truth Claude Code session log — one JSON object per line. Use this for programmatic analysis (e.g. `jq`). It's a copy of Claude Code's internal session JSONL, refreshed by the `Stop` hook after every assistant turn. |
+
+> The transcript files are produced by the Claude Code hook in
+> `auto_codabench/runs/log_hook.py`, registered in
+> `.claude/settings.json`. If they are missing, the hook either didn't
+> fire (no Claude Code session running here) or this is a session
+> launched via Claude Desktop (which does not invoke the hook).
+
+### Structured timeline
+
+| File | Read it when… |
+|------|---------------|
+| `meta.json` | One-shot snapshot of who/what/when the run started — branch, sha, started_at, conda env, pid, slug. |
+| `events.jsonl` | Structured one-event-per-line timeline. Includes `run_opened`, `tool_call_started`/`tool_call_finished`/`tool_call_error` (auto-emitted by every autocodabench MCP tool), `hook_fired` (auto-emitted by the Claude Code hook), and any skill-level events like `question_asked`, `ss_searched`, `proposal_made`, `spec_written`, `iter1_done`. Greppable with `jq`. |
+| `tool_calls/NNNN_<tool>.json` | Full request + response of every MCP tool call, in order. Each file has `args`, `result`, `error`, `duration_ms`, `started_at`, `finished_at`. The leading `NNNN` is a 4-digit counter so `ls` sorts chronologically. |
+
+### Specs (the deliverables of iteration 1)
+
+| Dir | Read it when… |
+|------|---------------|
+| `specs/` | The current set of planning specs (`01-task-framing.md`, …, `06-run-logging-and-env.md`) plus `implementation_plan.md`. This is what iteration 2 reads as input. |
+| `specs_history/` | Versioned snapshots of each spec — every time Claude rewrote one, a timestamped copy was saved here. `diff` adjacent ones to see what changed. |
+
+### Execution artifacts (iteration 2 only)
+
+| Dir | Read it when… |
+|------|---------------|
+| `artifacts/<subagent>/` | Per-subagent outputs of the execution session — model checkpoints, plots, the meta-reviewer's final report. Empty during iteration 1. |
+| `mcp_stderr/autocodabench.log` | Stderr from the autocodabench MCP server tee'd in. Useful when a tool errored silently. |
+| `mcp_stderr/hook_errors.log` | (Only if non-empty) Errors from the transcript-mirroring hook. |
+
+## Cheatsheet
+
+```bash
+# Read the conversation
+less {meta.get('branch_id','RUN')}_{meta.get('runtime_id','')}/transcript.md
+
+# Greppable timeline
+jq -c '{{ts, kind, tool, msg: .message}}' < events.jsonl
+
+# Which tool calls failed?
+jq -c 'select(.error != null)' < events.jsonl
+
+# All Claude messages in one stream
+jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' \\
+   < transcript.jsonl
+
+# Latest version of a spec
+ls -t specs_history/ | head
+```
+"""
+
+
 def _safe_slug(text: str) -> str:
     out = []
     for ch in text:
@@ -160,6 +241,7 @@ def open_run(slug: str | None = None, *, branch_id: str | None = None, runtime_i
     }
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     (run_path / "events.jsonl").touch()
+    (run_path / "README.md").write_text(_run_readme(meta), encoding="utf-8")
 
     # Maintain a LATEST symlink for easy postmortem access.
     latest = RUNS_ROOT / "LATEST"
