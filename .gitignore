@@ -12,3 +12,4 @@ __pycache__/
 logs/
 auto_codabench/runs/*/
 auto_codabench/runs/LATEST
+.env

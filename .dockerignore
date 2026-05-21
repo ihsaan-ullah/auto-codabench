@@ -1,0 +1,37 @@
+# Keep the image small. Exclude things HF Spaces shouldn't ship.
+
+# Secrets — these come from HF Repository Secrets at runtime, not bake-time.
+.env
+.env.local
+.env.example
+
+# Generated / per-session
+auto_codabench/runs/
+auto_codabench/bundles/
+logs/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+
+# Local agent / IDE settings
+.claude/
+.idea/
+.vscode/
+
+# Documentation we don't need at runtime (saves a few MB)
+documentation/competition_best_practices/*.pdf
+
+# Git internals
+.git/
+.gitignore

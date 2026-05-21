@@ -1,0 +1,11 @@
+# Web UI (Chainlit + Claude Agent SDK)
+chainlit>=2.0,<3.0
+claude-agent-sdk>=0.2.83,<1.0
+python-dotenv>=1.0
+# Pin these to match the rest of the repo's MCP-server stack
+fastmcp>=2.0.0,<3.0.0
+PyYAML>=6.0
+httpx>=0.28.1
+pydantic>=2.7.2
+pyalex==0.18
+aiohttp>=3.8.0

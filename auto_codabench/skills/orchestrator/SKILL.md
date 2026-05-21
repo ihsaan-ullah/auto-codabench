@@ -575,6 +575,12 @@ C only):
   `autocodabench_write_ingestion_program`, `autocodabench_write_solution`,
   `autocodabench_attach_data`, `autocodabench_validate_bundle`,
   `autocodabench_zip_bundle`.
+- `autocodabench_upload_bundle(slug)` — publishes the validated zip to
+  Codabench via the REST API and returns the public
+  `competition_url`. This is the **last** tool called by the packager
+  / publisher subagent in Session 2. Requires
+  `CODABENCH_USERNAME` + `CODABENCH_PASSWORD` (or `CODABENCH_TOKEN`)
+  in the environment.
 
 ---
 
