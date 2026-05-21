@@ -120,9 +120,11 @@ confirm_new_chat = true
 # description = ""
 
 # Chain of Thought (CoT) display mode. Can be "hidden", "tool_call" or "full".
-# "full" so all tool steps render expanded by default; our custom JS adds a
-# single top-right toggle to hide them in bulk.
-cot = "full"
+# "tool_call" — only tool steps render (as inline collapsibles under the
+# assistant message); no separate right-side panel of raw thinking text.
+# Our custom JS (web/public/chat.js) adds a single top-right toggle to hide
+# the resulting tool-step chips in bulk.
+cot = "tool_call"
 
 # Specify a CSS file that can be used to customize the user interface.
 # The CSS file can be served from the public directory or via an external link.

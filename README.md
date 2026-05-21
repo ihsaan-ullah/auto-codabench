@@ -26,7 +26,7 @@ implementation skeleton, and a ready-to-upload Codabench `.zip`.
 |------|------------|
 | `web/` | Chainlit app — the chat UI deployed by this Space (see `web/README.md` for local-dev + deploy details). |
 | `auto_codabench/` | The autocodabench MCP server + skill files + bundle output. |
-| `alex-mcp/` | The OpenAlex MCP server (vendored). |
+| OpenAlex MCP | Installed from upstream `git+https://github.com/drAbreu/alex-mcp.git@v4.8.2` by the Dockerfile and the local conda env — not vendored. |
 | `documentation/codabench_bundle_upload/` | Reference Codabench REST-API upload helper. |
 | `Dockerfile` | Used by HF Spaces to build the image. |
 

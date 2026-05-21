@@ -31,11 +31,14 @@ WORKDIR /app
 # to keep the image small.
 COPY --chown=user:user . /app
 
-# Install the two MCP packages (alex-mcp + autocodabench) editable so that
+# Install the two MCP packages so that
 # `python -m alex_mcp.server` and `python -m auto_codabench.mcp_server.server`
 # work as the agent SDK spawns them.
+#   - alex-mcp: pinned upstream tag (the previously-vendored alex-mcp/ tree
+#     got corrupted; we install directly from GitHub now — it's not on PyPI).
+#   - auto_codabench: editable from the repo (our own code).
 RUN pip install --upgrade pip && \
-    pip install -e ./alex-mcp && \
+    pip install 'git+https://github.com/drAbreu/alex-mcp.git@v4.8.2' && \
     pip install -e . && \
     pip install -r web/requirements.txt && \
     chown -R user:user /app

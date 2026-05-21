@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -127,6 +128,38 @@ def _system_prompt() -> str:
     return body
 
 
+def _probe_mcp_imports() -> list[str]:
+    """Run `python -c "import <module>"` for each MCP server we plan to spawn.
+
+    Returns a list of human-readable error lines. Empty list = both servers
+    are importable. We do this in a subprocess so an ImportError in one MCP
+    module can't crash the web process itself, and so the probe environment
+    matches what the SDK will actually exec.
+    """
+    probes = {
+        "autocodabench": "import auto_codabench.mcp_server.server",
+        "alex-mcp": "import alex_mcp.server",
+    }
+    failures: list[str] = []
+    for name, snippet in probes.items():
+        try:
+            result = subprocess.run(
+                [PYTHON_BIN, "-c", snippet],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"`{name}`: import probe timed out after 15s")
+            continue
+        if result.returncode != 0:
+            # stderr is the useful part — Python tracebacks land there.
+            err = (result.stderr or result.stdout or "").strip().splitlines()
+            tail = "\n".join(err[-6:]) if err else "(no stderr)"
+            failures.append(f"`{name}` failed to import:\n```\n{tail}\n```")
+    return failures
+
+
 def _mcp_servers(run_dir: Path) -> dict:
     """Configure both MCP servers as stdio subprocesses scoped to this session."""
     env_for_mcp = {
@@ -181,6 +214,22 @@ async def on_chat_start():
     cl.user_session.set("run_dir", str(run_dir))
     cl.user_session.set("session_id", session_id)
     cl.user_session.set("started_at", _utc_now())
+
+    # 1b. Self-test: confirm both MCP server modules import in the same
+    # interpreter the SDK will spawn. If not, surface the traceback to the
+    # user immediately — the agent would otherwise see an empty tool list
+    # and produce confusingly tool-less replies.
+    mcp_failures = _probe_mcp_imports()
+    if mcp_failures:
+        await cl.Message(
+            content=(
+                "**⚠️ MCP servers failed to start.** Tools will be unavailable "
+                "in this session — Claude can still chat about design, but "
+                "can't open a run dir, snapshot specs, or search OpenAlex.\n\n"
+                + "\n\n".join(mcp_failures)
+            ),
+            author="autocodabench",
+        ).send()
 
     # 2. Configure the Claude Agent SDK client
     options = ClaudeAgentOptions(
@@ -253,10 +302,16 @@ async def on_message(msg: cl.Message):
                     elif isinstance(block, ToolUseBlock):
                         if block.name in _HIDDEN_TOOLS:
                             continue  # don't pollute the UI with agent machinery
+                        # parent_id ties each tool-step to the current
+                        # response message so the chip renders as a nested
+                        # collapsible under that reply (rather than as a
+                        # separate top-level card or in the right-side
+                        # chain-of-thought panel).
                         step = cl.Step(
                             name=f"→ {_friendly_tool_name(block.name)}",
                             type="tool",
                             show_input="json",
+                            parent_id=response_msg.id,
                         )
                         step.input = block.input
                         await step.send()
