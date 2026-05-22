@@ -19,3 +19,9 @@ huggingface_hub>=0.24,<1.0
 # PDF text extraction for the Demo-B "drop a competition design doc"
 # path — see _extract_attachment_text() in web/app.py.
 pypdf>=4.0,<6.0
+# Render the per-session starting_kit.ipynb (with current outputs) into
+# the right-side panel after every turn. We don't need a kernel here —
+# the kernel runs inside the autocodabench MCP subprocess — we just
+# read the on-disk .ipynb and convert to HTML.
+nbformat>=5.10,<6
+nbconvert>=7.16,<8

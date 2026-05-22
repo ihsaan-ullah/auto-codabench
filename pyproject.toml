@@ -17,6 +17,12 @@ dependencies = [
     "fastmcp==2.14.7",
     "PyYAML>=6.0",
     "python-dotenv>=1.0.0",
+    # Notebook kernel + nbformat IO + nbconvert HTML rendering. Drives the
+    # per-session starting_kit.ipynb in auto_codabench/mcp_server/notebook_kernel.py.
+    "jupyter_client>=8.6,<10",
+    "ipykernel>=6.29,<7",
+    "nbformat>=5.10,<6",
+    "nbconvert>=7.16,<8",
 ]
 
 [project.optional-dependencies]

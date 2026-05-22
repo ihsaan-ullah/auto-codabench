@@ -48,6 +48,18 @@ RUN pip install --upgrade pip && \
     pip install 'git+https://github.com/drAbreu/alex-mcp.git@v4.8.2' && \
     pip install -e . && \
     pip install -r web/requirements.txt && \
+    # Curated whitelist available to the per-session Jupyter kernel that
+    # executes starting_kit.ipynb. Anything outside this list, the agent
+    # has to ask the user before pip-installing — see the orchestrator
+    # skill stage-1 (Setup) guidance. CPU-only, no GPU paths.
+    pip install \
+        numpy \
+        pandas \
+        scikit-learn \
+        matplotlib \
+        seaborn \
+        scipy \
+        pillow && \
     chown -R user:user /app
 
 # Belt-and-suspenders: even with the install order fixed, scorch the

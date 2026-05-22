@@ -157,6 +157,14 @@ _PLANNING_TOOLS = [
     "mcp__autocodabench__autocodabench_current_run",
     "mcp__autocodabench__autocodabench_log_event",
     "mcp__autocodabench__autocodabench_snapshot_spec",
+    # Notebook authoring tools — used throughout stages 1-7. Stage 8
+    # adds the bundle-write tools via _IMPLEMENTATION_TOOLS.
+    "mcp__autocodabench__autocodabench_nb_init",
+    "mcp__autocodabench__autocodabench_nb_write_cell",
+    "mcp__autocodabench__autocodabench_nb_run_stage",
+    "mcp__autocodabench__autocodabench_nb_reset_to_stage",
+    "mcp__autocodabench__autocodabench_nb_render_html",
+    "mcp__autocodabench__autocodabench_nb_shutdown",
     "mcp__alex-mcp__*",
     "Read", "Grep", "Glob",
 ]
@@ -653,6 +661,12 @@ async def on_message(msg: cl.Message):
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
 
+    # Refresh the side panel: notebook HTML + any spec/log files. This
+    # is the user-facing "watch the artifacts appear" signal — without
+    # it, the work happens invisibly under runs/<id>/ and the user
+    # can't track progress without leaving the chat.
+    await _refresh_side_panel(run_dir)
+
     # Persist the entire run_dir to a private HF Dataset, async — so a
     # slow network request doesn't block the next user turn. The user
     # closing the tab mid-turn means we lose at most one turn's data.
@@ -1089,6 +1103,100 @@ def _extract_attachment_text(element) -> tuple[str, str] | None:
     return (label, body)
 
 
+# ---------------------------------------------------------------------------
+# Right-side notebook panel
+#
+# The agent builds <run>/starting_kit.ipynb stage by stage via the
+# autocodabench_nb_* MCP tools. After every assistant turn we render
+# the on-disk notebook (with whatever outputs the kernel has produced
+# so far) to HTML and put it in the side panel — the user sees the
+# notebook materialise in real time. Files (transcript, cost,
+# proposals later in PR4) also live in the same panel as siblings.
+# ---------------------------------------------------------------------------
+
+def _render_notebook_html(run_dir: Path) -> str | None:
+    """Read <run>/starting_kit.ipynb and produce sanitised HTML.
+
+    Returns None if the file doesn't exist yet (no cells written), so
+    the caller can skip the sidebar update on early turns.
+    """
+    nb_path = run_dir / "starting_kit.ipynb"
+    if not nb_path.is_file():
+        return None
+    try:
+        import nbformat
+        from nbconvert import HTMLExporter
+        nb = nbformat.read(nb_path, as_version=4)
+        if not nb.cells:
+            return None
+        exporter = HTMLExporter(template_name="basic")
+        body, _ = exporter.from_notebook_node(nb)
+        return body
+    except Exception as e:
+        log.warning("notebook render failed: %s", e)
+        return None
+
+
+def _collect_side_files(run_dir: Path) -> list["cl.Text"]:
+    """Build the per-turn list of files for cl.ElementSidebar.
+
+    Surfaces (in this order, when present): the executed notebook,
+    transcript.md, cost.jsonl, every spec under specs/. Each is a
+    cl.Text whose `display='side'` makes it open the right drawer
+    when its chip is clicked from chat.
+    """
+    elements: list[cl.Text] = []
+    nb_html = _render_notebook_html(run_dir)
+    if nb_html is not None:
+        elements.append(cl.Text(
+            name="📓 starting_kit.ipynb",
+            content=nb_html,
+            display="side",
+            language="html",
+        ))
+    for name in ("transcript.md", "cost.jsonl"):
+        p = run_dir / name
+        if p.is_file() and p.stat().st_size > 0:
+            try:
+                elements.append(cl.Text(
+                    name=f"📄 {name}",
+                    content=p.read_text(encoding="utf-8", errors="replace"),
+                    display="side",
+                    language="markdown" if name.endswith(".md") else "json",
+                ))
+            except Exception as e:
+                log.warning("read %s for sidebar failed: %s", p, e)
+    specs_dir = run_dir / "specs"
+    if specs_dir.is_dir():
+        for spec in sorted(specs_dir.glob("*.md")):
+            try:
+                elements.append(cl.Text(
+                    name=f"📄 specs/{spec.name}",
+                    content=spec.read_text(encoding="utf-8", errors="replace"),
+                    display="side",
+                    language="markdown",
+                ))
+            except Exception as e:
+                log.warning("read %s for sidebar failed: %s", spec, e)
+    return elements
+
+
+async def _refresh_side_panel(run_dir: Path) -> None:
+    """Push the current file set into cl.ElementSidebar.
+
+    Idempotent — called after every turn. Cheap when nothing changed
+    (a few KB of HTML re-pushed); cheap enough.
+    """
+    try:
+        elements = _collect_side_files(run_dir)
+        if not elements:
+            return
+        await cl.ElementSidebar.set_title("📁 Session files")
+        await cl.ElementSidebar.set_elements(elements)
+    except Exception as e:
+        log.warning("side panel refresh failed: %s", e)
+
+
 def _augment_user_message(run_dir: Path, msg: "cl.Message") -> str:
     """Mix in extracted attachment text so Claude sees PDF / md content.
 
@@ -1219,7 +1327,11 @@ async def _persist_to_hf(run_dir: Path) -> None:
                 # ever ends up here that doesn't belong. We're shipping
                 # text-only data (markdown, json, jsonl, py, yaml).
                 allow_patterns=["*.md", "*.jsonl", "*.json", "*.txt",
-                                "*.py", "*.yaml", "*.yml", "*.log"],
+                                "*.py", "*.yaml", "*.yml", "*.log",
+                                # The per-session starting kit notebook —
+                                # outputs are embedded, so the dataset
+                                # contains the *executed* state.
+                                "*.ipynb"],
             )
 
         # Run blocking HF I/O off the event loop.

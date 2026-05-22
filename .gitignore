@@ -6,8 +6,10 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
-# auto_codabench/bundles/*/
-# auto_codabench/bundles/*.zip
+# Generated competition bundles (per-session output of stage 8).
+auto_codabench/bundles/
+# Claude Code's local skill/plugin symlinks.
+.claude/
 logs/
 auto_codabench/runs/*/
 auto_codabench/runs/LATEST
