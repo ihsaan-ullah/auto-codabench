@@ -33,18 +33,41 @@ servers:
 - `codabench-bundle` — the exact schema Codabench expects.
 - `autocodabench-orchestrator` — the iterative loop you'll run in Session 1.
 
-You have **two conversations** with Claude:
+**Updated workflow (2026-05).** The earlier two-phase prose-proposal
+flow has been replaced by a single **9-stage notebook flow**: you and
+Claude build `starting_kit.ipynb` cell-group by cell-group, and the
+last stage packages the executed notebook into the Codabench
+`.zip`. There's no separate "proposal", no "implementation plan
+markdown" — the executed notebook IS the design artifact, and when
+it runs end-to-end on toy data the design is by construction
+self-consistent.
 
-| Session / Phase                                           | What happens                                                                                                                                                                                       | What gets written                                                                                                                                                       | When it ends                                                                                                            |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **1A — Proposal crystallization**                  | Open-ended scientific conversation. Claude asks mind-opening questions, surfaces controversies in the literature, cites paper IDs to read. The goal is a NeurIPS-track-style competition proposal. | `auto_codabench/runs/<branch_id>_<runtime_id>/specs/project_proposal.md` (5–15 pages of structured markdown). Plus the run's transcript, events, and tool-call logs. | You say*"the proposal looks sharp"* / *"lock the proposal"* / *"draft the proposal"*.                             |
-| **1B — Implementation skeleton** (optional, gated) | Claude translates the accepted proposal into 6 implementation specs + an implementation plan. No new design decisions — just translation.                                                         | `<run>/specs/01-…06-*.md` and `<run>/implementation_plan.md`.                                                                                                      | You say*"ready to implement"* / *"start the specs"*. If you only wanted the proposal, you skip this phase entirely. |
-| **2 — Execution**                                  | A*fresh* chat. Subagents spawned from `implementation_plan.md` write data, scoring program, pages, assemble the bundle, validate, zip.                                                         | `auto_codabench/bundles/<slug>.zip` + per-subagent outputs under the same `<run>/artifacts/`.                                                                       | The packager subagent produces a validated zip; meta-reviewer audits.                                                   |
+| Stage | What happens                                                                                       | What lands in the notebook                              |
+| ----- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 0     | **Roadmap** — design conversation, no cells. Claude shows the 8-stage table + drills into a tension. | (none — design talk)                                    |
+| 1     | **Setup**           — imports, paths, env summary.                                                  | 4-6 cells                                               |
+| 2     | **Data loader**     — `read_data()`, shapes, sample rows.                                          | 3-5 cells; data-split decision encoded                  |
+| 3     | **EDA**             — class distribution + visual probe.                                            | 2-3 cells with plots                                    |
+| 4     | **Metric**          — `score(y_true, y_pred)` + random-baseline sanity test.                        | 1-2 cells + a printed sanity check                      |
+| 5     | **Baseline model**  — trivial + modest baseline (sklearn-class, CPU only).                          | 3-4 cells                                               |
+| 6     | **Predict + score** — apply baselines, score, comparison table.                                      | 2-3 cells with the comparison numbers                   |
+| 7     | **Diagnostics**     — confusion matrix, per-slice metric.                                            | 2-3 cells with plots                                    |
+| 8     | **Bundle**          — generates `competition.yaml`, `scoring_program/`, `solution/`, pages, zips.   | files under `auto_codabench/bundles/<slug>/<slug>.zip`  |
 
-That separation is the most important rule in this whole repo. If Claude
-ever starts writing bundle files during Session 1, stop it and remind it of
-the iteration-1 rule. Similarly, if Claude races into Phase 1B (specs)
-before you've signed off the proposal, redirect them back to Phase 1A.
+After each of stages 1-7, the UI shows an approval gate with three
+actions: **Approve & advance**, **Revise this stage**, **Save &
+exit**. Revise is reversible — it restarts the kernel, drops the
+stage's outputs, re-executes earlier stages, and asks you what to
+refine. You won't lose prior work.
+
+The approval click on stage 7 is the new planning→implementation
+boundary: it rebuilds Claude with bundle-write tools and auto-starts
+stage 8. There's no separate "Session 2"; the whole thing lives in
+one conversation. On the web UI, files appear in the side panel as
+they're written — click any chip (or the `📁 Files` button on the
+right edge) to view a file at any time. On the CLI, use
+`/autocodabench-implement` in a fresh chat to invoke stage 8
+manually against an earlier-built run dir.
 
 ---
 

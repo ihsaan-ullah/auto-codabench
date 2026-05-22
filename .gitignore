@@ -26,3 +26,5 @@ alex-mcp/*.webp
 
 .chainlit/
 test_pdf_folder/
+# Chainlit local per-session attachment cache (auto-created next to web/).
+web/.files/
