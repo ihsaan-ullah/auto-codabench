@@ -650,8 +650,13 @@ After all 7 files exist, send a compact message:
 
 Source of truth: project_proposal.md (unchanged).
 
-Next: start a fresh chat and say "Execute
-auto_codabench/runs/LATEST/implementation_plan.md" to enter Session 2.
+Next:
+  • CLI:    start a fresh chat and type `/autocodabench-implement`.
+  • Web UI: click the big **START IMPLEMENTATION** button below.
+
+Either path loads the autocodabench-implement skill, which reads the
+proposal + specs + plan from this run dir and produces the Codabench
+bundle.
 ```
 
 Then call:

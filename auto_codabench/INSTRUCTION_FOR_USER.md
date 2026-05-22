@@ -365,25 +365,36 @@ under context pressure; the reminders reset it.
 ## 7. Session 2 — execution (a fresh conversation)
 
 When you're happy with the specs and `implementation_plan.md`, **start
-a brand-new chat**. (This is deliberate: a fresh context window keeps
-the execution subagents focused.)
+a brand-new chat** and invoke the implementation skill. (A fresh
+context window keeps the execution focused; the orchestrator's design
+context isn't useful for execution.)
 
 ### Opening prompt
 
 ```
-Execute auto_codabench/runs/LATEST/implementation_plan.md.
-
-Use /agents to spawn the subagents it defines. Each subagent should
-work in parallel where the plan permits.
-
-CRITICAL: set AUTOCODABENCH_RUN_DIR to the same path as Session 1's
-run so all execution-phase logs land in the same directory:
-  export AUTOCODABENCH_RUN_DIR=$(readlink -f auto_codabench/runs/LATEST)
-
-When done, the meta-reviewer subagent writes a final report at
-<run>/artifacts/meta-reviewer/report.md summarising what was produced,
-what validate_bundle said, and where the final .zip lives.
+/autocodabench-implement
 ```
+
+That's it. The skill reads `auto_codabench/runs/LATEST/` (your most
+recent run dir), loads the proposal + 6 specs + `implementation_plan.md`,
+and executes the plan step by step. No env vars to export, no
+multi-line shell setup — the skill picks the run dir up automatically
+from `autocodabench_current_run` / the `LATEST` symlink.
+
+If you want it to publish to Codabench at the end, follow with:
+
+```
+publish to Codabench when validation passes.
+```
+
+The skill won't upload without that explicit instruction — uploading
+creates a public competition page, so it requires a deliberate ask.
+
+### On the web UI
+
+Skip this section entirely — click the big **START IMPLEMENTATION**
+button that appears under the chat once `implementation_plan.md` is
+written. Same skill, same flow, no typing required.
 
 ### What happens
 

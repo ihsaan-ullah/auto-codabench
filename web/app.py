@@ -180,8 +180,21 @@ ORCHESTRATOR_SKILL = SKILLS_ROOT / "autocodabench-orchestrator" / "SKILL.md"
 # Fallback if symlinks not yet installed: read directly from source.
 if not ORCHESTRATOR_SKILL.exists():
     ORCHESTRATOR_SKILL = SKILLS_ROOT / "orchestrator" / "SKILL.md"
+IMPLEMENT_SKILL = SKILLS_ROOT / "autocodabench-implement" / "SKILL.md"
 
 RUNS_ROOT = REPO_ROOT / "auto_codabench" / "runs"
+
+
+def _read_skill(path: Path) -> str:
+    """Return a skill's body without its YAML frontmatter."""
+    if not path.exists():
+        return ""
+    body = path.read_text(encoding="utf-8")
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        if end != -1:
+            body = body[end + 4:].lstrip()
+    return body
 
 
 def _utc_now() -> str:
@@ -189,32 +202,23 @@ def _utc_now() -> str:
 
 
 def _system_prompt(*, phase: str = PHASE_PLANNING) -> str:
-    """Load the orchestrator skill's body, with a phase-aware footer.
+    """Return the per-phase system prompt.
 
-    The CLI orchestrator skill assumes Phase C happens in a *fresh*
-    Claude session. The web UI can't do that — there's only one chat —
-    so we append a footer telling the model the user-visible phase
-    switch is button-driven, and what's expected of it in each phase.
+    Each phase loads its OWN skill body — we don't try to teach the agent
+    both at once. The orchestrator skill is for planning (proposal +
+    specs); the autocodabench-implement skill is for execution.
+
+    A short web-UI footer is appended so the model knows the phase
+    switch is button-driven (no "open a new chat" in either direction).
     """
-    if not ORCHESTRATOR_SKILL.exists():
-        base = (
-            "You are an orchestrator that helps researchers design Codabench "
-            "competitions. (ORCHESTRATOR_SKILL not found at "
-            f"{ORCHESTRATOR_SKILL}; falling back to minimal prompt.)"
-        )
-    else:
-        body = ORCHESTRATOR_SKILL.read_text(encoding="utf-8")
-        # Strip the YAML frontmatter (Anthropic does not need it in the prompt).
-        if body.startswith("---"):
-            end = body.find("\n---", 3)
-            if end != -1:
-                body = body[end + 4:].lstrip()
-        base = body
-
     if phase == PHASE_PLANNING:
+        base = _read_skill(ORCHESTRATOR_SKILL) or (
+            "You are an orchestrator that helps researchers design Codabench "
+            "competitions. (ORCHESTRATOR_SKILL missing.)"
+        )
         footer = (
             "\n\n---\n\n"
-            "## Web UI runtime note (overrides the CLI Phase-C instructions)\n\n"
+            "## Web UI runtime note\n\n"
             "You are running inside the AutoCodabench web UI. The user cannot "
             "open a fresh chat to enter Phase C — instead, the UI shows a big "
             "**START IMPLEMENTATION** button as soon as `implementation_plan.md` "
@@ -227,21 +231,22 @@ def _system_prompt(*, phase: str = PHASE_PLANNING) -> str:
             "Stay in PLANNING mode until that button is clicked."
         )
     else:  # PHASE_IMPLEMENTATION
+        base = _read_skill(IMPLEMENT_SKILL) or (
+            "You are executing Phase C of an AutoCodabench run. "
+            "(autocodabench-implement skill missing — please contact the operator.)"
+        )
         footer = (
             "\n\n---\n\n"
-            "## Web UI runtime note (Phase C — IMPLEMENTATION mode)\n\n"
+            "## Web UI runtime note (Phase C)\n\n"
             "You are running inside the AutoCodabench web UI in Phase C. The "
-            "user clicked **START IMPLEMENTATION** to get here. Your job:\n\n"
-            "1. Read `<run_dir>/specs/project_proposal.md` and the six specs "
-            "   under `<run_dir>/specs/`. Reading these is the *first* thing "
-            "   you do — do not assume their content from memory.\n"
-            "2. Execute `<run_dir>/implementation_plan.md` step by step. The "
-            "   plan dictates which `autocodabench_*` write tools to call in "
-            "   what order.\n"
-            "3. End by calling `autocodabench_zip_bundle` and, if the user "
-            "   asks, `autocodabench_upload_bundle` to publish to Codabench.\n\n"
-            "There is no Phase D. You will NOT switch back to Phase A/B from "
-            "this session — that's been disabled at the UI level."
+            "user reached this mode by clicking **START IMPLEMENTATION**, "
+            "which has already been confirmed. `/agents` is NOT available "
+            "here — execute the plan serially in this chat. The user will "
+            "see your tool chips (`Running …`) for each step.\n\n"
+            "Start now: call `autocodabench_current_run` to find the run "
+            "dir, then follow §1–§6 of the autocodabench-implement skill. "
+            "Don't wait for additional instructions — the user expects you "
+            "to begin immediately."
         )
     return base + footer
 
@@ -760,15 +765,10 @@ async def _on_confirm_switch(action: cl.Action):
     _append_transcript(run_dir, role="user",
                        text="[ui] User clicked START IMPLEMENTATION — switching to Phase C.")
 
-    # Send the kickoff prompt and stream the response.
-    kickoff_text = (
-        f"The user just clicked START IMPLEMENTATION in the web UI. You "
-        f"are now in Phase C. Execute "
-        f"`{run_dir / 'specs' / 'implementation_plan.md'}` step by step. "
-        f"First action: read project_proposal.md and the six specs in "
-        f"`{run_dir / 'specs'}/`, then start calling the bundle-write tools."
-    )
-    await _stream_one_turn(run_dir, kickoff_text)
+    # The system prompt is already the autocodabench-implement skill,
+    # which tells the agent exactly what to do. A one-word kickoff is
+    # all we need — the skill handles the rest.
+    await _stream_one_turn(run_dir, "Begin.")
 
 
 async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
