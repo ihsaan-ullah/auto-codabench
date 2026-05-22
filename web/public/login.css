@@ -256,3 +256,41 @@ button[data-ac-impl-button="cancel"] {
     border-radius: 8px !important;
     cursor: pointer !important;
 }
+
+
+/* ============================================================
+ * Persistent "📁 Files" floating toggle (chat.js).
+ *
+ * Anchored to the right edge of the viewport, vertically centred,
+ * always reachable once at least one file chip exists. Click →
+ * simulates clicking the most-recent chip → Chainlit's element
+ * drawer slides open.
+ * ============================================================ */
+
+#ac-files-toggle {
+    position: fixed;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9998;       /* below the init banner (99999), above chat */
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+    background: color-mix(in oklab, Canvas 90%, currentColor 6%);
+    color: CanvasText;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+#ac-files-toggle:hover {
+    transform: translateY(-50%) translateX(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+#ac-files-toggle:active {
+    transform: translateY(-50%) translateX(0);
+}

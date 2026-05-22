@@ -191,12 +191,87 @@
         });
     }
 
+    // ---------------------------------------------------------------
+    // (6) Persistent "📁 Files" toggle.
+    //
+    // Chainlit's element drawer (the right-side viewer) closes when the
+    // user clicks outside it, and there's no native re-open affordance
+    // — they'd have to scroll up to find the chip that opened it.
+    // We inject a fixed-position button on the right edge of the page
+    // that, when clicked, simulates a click on the most-recent element
+    // chip in the chat, re-opening the drawer with the latest file
+    // set. The button only appears once at least one chip exists.
+    // ---------------------------------------------------------------
+    function _findFileChips() {
+        // Chainlit ≥ 2.x renders elements as clickable nodes with one
+        // of these stable hooks. We try the most specific first and
+        // fall back. Anything starting with "📄" or "📓" is our own
+        // label prefix from web/app.py:_collect_side_files().
+        const selectors = [
+            "[data-element-id]",
+            "[data-element-name]",
+            'a[href*="/element/"]',
+            "button.cl-element",
+        ];
+        const seen = new Set();
+        const chips = [];
+        for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach((el) => {
+                if (seen.has(el)) return;
+                seen.add(el);
+                chips.push(el);
+            });
+        }
+        // Last-resort heuristic — any clickable node whose visible text
+        // starts with our emoji prefix.
+        if (chips.length === 0) {
+            document.querySelectorAll("button, a, [role='button']").forEach((el) => {
+                const t = (el.textContent || "").trim();
+                if (t.startsWith("📄 ") || t.startsWith("📓 ")) chips.push(el);
+            });
+        }
+        return chips;
+    }
+
+    function syncFilesToggle() {
+        // Don't show during init.
+        const isReady = document.body.textContent.includes(READY_PHRASE);
+        const onChatPage = !!document.querySelector("textarea");
+        const chips = _findFileChips();
+        let btn = document.getElementById("ac-files-toggle");
+        if (!onChatPage || !isReady || chips.length === 0) {
+            if (btn) btn.remove();
+            return;
+        }
+        if (!btn) {
+            btn = document.createElement("button");
+            btn.id = "ac-files-toggle";
+            btn.type = "button";
+            btn.setAttribute("aria-label",
+                "Reopen the file viewer (notebook, transcript, specs, …)");
+            btn.title = "Reopen the file viewer";
+            btn.innerHTML = "📁 Files";
+            btn.addEventListener("click", () => {
+                const all = _findFileChips();
+                if (all.length === 0) return;
+                const last = all[all.length - 1];
+                try { last.scrollIntoView({behavior: "auto", block: "center"}); } catch {}
+                try { last.click(); } catch {}
+            });
+            document.body.appendChild(btn);
+        }
+        // Update the count label so users see at a glance how many.
+        const expected = `📁 Files (${chips.length})`;
+        if (btn.innerHTML !== expected) btn.innerHTML = expected;
+    }
+
     function tick() {
         syncInitGate();   // run first so the lock is up before anything else
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
         tagPhaseActions();
+        syncFilesToggle();
     }
 
     // Apply the lock as soon as possible — ideally before React mounts

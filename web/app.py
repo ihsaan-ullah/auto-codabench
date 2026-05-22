@@ -152,6 +152,23 @@ PYTHON_BIN = os.environ.get("AUTOCODABENCH_PYTHON", sys.executable)
 PHASE_PLANNING       = "planning"
 PHASE_IMPLEMENTATION = "implementation"
 
+# 8-stage notebook flow (see notebook_kernel.STAGES). Each stage gets a
+# row in the cl.TaskList that lives at the top of the chat. Stages
+# 1-7 happen during planning (proposal-style work happens here as
+# notebook cells); stage 8 packages the executed notebook into a
+# Codabench bundle. Stage 0 is design-only (no cells, no kernel use).
+STAGE_TITLES: list[tuple[str, str]] = [
+    ("0.roadmap",       "📐 0. Roadmap"),
+    ("1.setup",         "📦 1. Setup"),
+    ("2.data",          "📊 2. Data loader"),
+    ("3.eda",           "🔍 3. EDA"),
+    ("4.metric",        "🎯 4. Metric"),
+    ("5.baseline",      "🤖 5. Baseline model"),
+    ("6.predict_score", "📈 6. Predict + score"),
+    ("7.diagnostics",   "🧪 7. Diagnostics"),
+    ("8.bundle",        "🛠 8. Bundle"),
+]
+
 _PLANNING_TOOLS = [
     "mcp__autocodabench__autocodabench_open_run",
     "mcp__autocodabench__autocodabench_current_run",
@@ -456,6 +473,22 @@ async def on_chat_start():
     await client.connect()
     cl.user_session.set("client", client)
 
+    # 3b. Stage-progress strip. Driven off events.jsonl: the agent
+    # logs `stage_started` / `stage_done` / `stage_approved` via
+    # autocodabench_log_event; _refresh_task_list scans the new
+    # events after each turn and bumps Task statuses accordingly.
+    task_list = cl.TaskList()
+    task_list.status = "Ready"
+    tasks_by_stage: dict[str, cl.Task] = {}
+    for stage, title in STAGE_TITLES:
+        t = cl.Task(title=title, status=cl.TaskStatus.READY)
+        tasks_by_stage[stage] = t
+        await task_list.add_task(t)
+    await task_list.send()
+    cl.user_session.set("task_list", task_list)
+    cl.user_session.set("tasks_by_stage", tasks_by_stage)
+    cl.user_session.set("events_cursor", 0)  # byte offset into events.jsonl
+
     # 4. Greeting — this contains READY_PHRASE ("Tell me a competition
     # idea") which is the signal chat.js watches for to drop the banner
     # and unlock the input. Keep that exact phrase in the first line.
@@ -691,6 +724,8 @@ async def on_message(msg: cl.Message):
     # the file content. Without this, users would have to discover
     # the sidebar via Chainlit's chrome — which is non-obvious.
     await _refresh_side_panel(run_dir, attach_to=response_msg)
+    # Bump the stage-progress strip off any new events.jsonl lines.
+    await _refresh_task_list(run_dir)
 
     # Persist the entire run_dir to a private HF Dataset, async — so a
     # slow network request doesn't block the next user turn. The user
@@ -977,9 +1012,9 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                     is_error=part["is_error"],
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
-    # Same side-panel refresh as the regular on_message path so the
-    # post-kickoff phase-C response also surfaces clickable chips.
+    # Same side-panel + task-list refresh as the regular on_message path.
     await _refresh_side_panel(run_dir, attach_to=response_msg)
+    await _refresh_task_list(run_dir)
     asyncio.create_task(_persist_to_hf(run_dir))
 
 
@@ -1207,6 +1242,93 @@ def _collect_side_files(run_dir: Path) -> list["cl.Text"]:
             except Exception as e:
                 log.warning("read %s for sidebar failed: %s", spec, e)
     return elements
+
+
+async def _refresh_task_list(run_dir: Path) -> None:
+    """Drive the cl.TaskList off the new events in events.jsonl.
+
+    The agent emits events via autocodabench_log_event(kind=...,
+    payload={"stage": "N.name", ...}). We tail events.jsonl from the
+    last byte cursor and bump task statuses:
+
+      stage_started   → RUNNING
+      stage_done      → DONE
+      stage_approved  → DONE (the user clicked Approve)
+      stage_failed    → FAILED
+      session_ended   → no-op here; chat-end persistence handles it
+
+    Idempotent. Cursor-based tail means a long events.jsonl is read
+    once linearly over the session, not re-scanned per turn.
+    """
+    task_list = cl.user_session.get("task_list")
+    tasks_by_stage: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
+    if task_list is None or not tasks_by_stage:
+        return
+    events_path = run_dir / "events.jsonl"
+    if not events_path.is_file():
+        return
+    cursor: int = int(cl.user_session.get("events_cursor") or 0)
+    try:
+        with events_path.open("r", encoding="utf-8") as f:
+            f.seek(cursor)
+            new_text = f.read()
+            new_cursor = f.tell()
+    except Exception as e:
+        log.warning("events.jsonl read failed: %s", e)
+        return
+    cl.user_session.set("events_cursor", new_cursor)
+
+    changed = False
+    any_running = False
+    for line in new_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        kind = ev.get("kind")
+        payload = ev.get("payload") or {}
+        stage = payload.get("stage")
+        if not stage or stage not in tasks_by_stage:
+            continue
+        task = tasks_by_stage[stage]
+        if kind == "stage_started":
+            if task.status != cl.TaskStatus.DONE:
+                task.status = cl.TaskStatus.RUNNING
+                changed = True
+        elif kind in ("stage_done", "stage_approved"):
+            if task.status != cl.TaskStatus.DONE:
+                task.status = cl.TaskStatus.DONE
+                changed = True
+        elif kind == "stage_failed":
+            if task.status != cl.TaskStatus.FAILED:
+                task.status = cl.TaskStatus.FAILED
+                changed = True
+
+    # Reflect overall progress in the strip's title-line status.
+    statuses = {t.status for t in tasks_by_stage.values()}
+    if cl.TaskStatus.FAILED in statuses:
+        new_top = "Stage failed"
+    elif cl.TaskStatus.RUNNING in statuses:
+        new_top = "Running"
+        any_running = True
+    elif statuses == {cl.TaskStatus.DONE}:
+        new_top = "All stages done"
+    elif cl.TaskStatus.DONE in statuses:
+        new_top = "In progress"
+    else:
+        new_top = "Ready"
+    if task_list.status != new_top:
+        task_list.status = new_top
+        changed = True
+
+    if changed:
+        try:
+            await task_list.send()
+        except Exception as e:
+            log.warning("task_list send failed: %s", e)
 
 
 async def _refresh_side_panel(run_dir: Path,
