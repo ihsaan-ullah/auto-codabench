@@ -389,10 +389,16 @@ async def on_chat_start():
     }
     (run_dir / "meta.json").write_text(
         json.dumps(meta, indent=2), encoding="utf-8")
-    (run_dir / "events.jsonl").touch()
+    # Don't pre-touch events.jsonl here — leaving it absent means the
+    # MCP server creates it on first event (when there's actually
+    # activity). Touching it on every page load means every idle
+    # tab-open uploads a 0-byte events.jsonl to the HF Dataset, which
+    # is noise. The MCP server's open_run handles the touch when it
+    # adopts this dir.
     cl.user_session.set("run_dir", str(run_dir))
     cl.user_session.set("session_id", session_id)
     cl.user_session.set("started_at", _utc_now())
+    cl.user_session.set("had_user_message", False)
 
     # 2. Self-test: confirm both MCP server modules import. If broken,
     # surface immediately so the agent doesn't run tool-less. (The
@@ -499,6 +505,12 @@ async def on_message(msg: cl.Message):
     if client is None:
         await cl.Message(content="(no active session; please refresh)").send()
         return
+
+    # Mark this session as "has activity" so on_chat_end's HF upload
+    # actually fires. Without this flag the on_chat_end path skips the
+    # upload, which means idle page loads don't litter the HF Dataset
+    # with empty `meta.json` + `events.jsonl` shells.
+    cl.user_session.set("had_user_message", True)
 
     # Mix in attached file contents (Demo path B: PDF / md drop).
     augmented_text = _augment_user_message(run_dir, msg)
@@ -932,8 +944,11 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
 @cl.on_chat_end
 async def on_chat_end():
     run_dir_str = cl.user_session.get("run_dir")
-    if run_dir_str:
+    had_activity = cl.user_session.get("had_user_message", False)
+    if run_dir_str and had_activity:
         # Final flush — wait for this one (chat is over, latency is fine).
+        # Gated on `had_user_message` so an idle tab-open doesn't push a
+        # near-empty dir (just meta.json) to the HF Dataset.
         try:
             await _persist_to_hf(Path(run_dir_str))
         except Exception as e:
