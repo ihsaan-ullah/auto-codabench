@@ -903,13 +903,36 @@ def _append_transcript(run_dir: Path, *, role: str, text: str) -> None:
     keeps the transcript human-readable as a single linear document
     that renders cleanly in any markdown viewer (GitHub, VS Code,
     Obsidian) — sharable to colleagues without rerunning the chat.
+
+    First-write quirk: a literal `---` near the top of a markdown file
+    is interpreted by most renderers (GitHub, HF Dataset viewer,
+    Obsidian, Pandoc, …) as the opening of YAML frontmatter — the
+    next `---` closes it, and *everything in between is hidden*.
+    Earlier versions of this function led every entry with `\\n---\\n\\n`,
+    which meant the first user prompt + its header were swallowed by
+    the frontmatter detector. Now we emit a title on first write and
+    only use `---` as a *between-entries* separator from the second
+    entry onward.
     """
     role_header = {
         "user": "## 👤 user — ",
         "claude": "## 🤖 autocodabench — ",
     }.get(role, f"## {role} — ")
-    line = f"\n---\n\n{role_header}{_utc_now()}\n\n{text}\n"
-    (run_dir / "transcript.md").open("a", encoding="utf-8").write(line)
+    path = run_dir / "transcript.md"
+    is_first_write = (not path.exists()) or path.stat().st_size == 0
+    if is_first_write:
+        header = (
+            f"# Transcript — {run_dir.name}\n\n"
+            f"_Per-session conversation, written turn-by-turn. Tool calls "
+            f"are embedded inside each assistant block as `<details>` "
+            f"collapsibles. Cost, events, and raw tool snapshots are "
+            f"in sibling files (`cost.jsonl`, `events.jsonl`, "
+            f"`tool_calls/`)._\n\n"
+        )
+        line = f"{header}{role_header}{_utc_now()}\n\n{text}\n"
+    else:
+        line = f"\n---\n\n{role_header}{_utc_now()}\n\n{text}\n"
+    path.open("a", encoding="utf-8").write(line)
 
 
 def _format_tool_call_md(*, op: str, raw_name: str, input_json: dict,
@@ -1084,6 +1107,24 @@ async def _persist_to_hf(run_dir: Path) -> None:
         return  # local dev or operator hasn't configured the secret
     if not run_dir.exists():
         return
+
+    # One-time repair for transcripts written by the older format,
+    # whose leading `---` made markdown renderers eat the first user
+    # prompt as YAML frontmatter. We detect the broken shape and
+    # prepend a title so the renderer stops treating it as frontmatter.
+    try:
+        tpath = run_dir / "transcript.md"
+        if tpath.is_file():
+            body = tpath.read_text(encoding="utf-8")
+            if body.startswith("\n---\n") or body.startswith("---\n"):
+                fix = (
+                    f"# Transcript — {run_dir.name}\n\n"
+                    f"_(repaired: leading `---` was being parsed as YAML "
+                    f"frontmatter and hiding the first user prompt)_\n"
+                )
+                tpath.write_text(fix + body, encoding="utf-8")
+    except Exception as e:
+        log.warning("transcript repair for %s failed: %s", run_dir.name, e)
     try:
         # Late import so the module can be installed at build time without
         # the rest of the app caring whether it's actually used.
