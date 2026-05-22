@@ -165,3 +165,94 @@ textarea.ac-input-locked {
 textarea.ac-input-locked::placeholder {
     font-style: italic;
 }
+
+
+/* ============================================================
+ * Phase-switch action buttons.
+ *
+ * We can't target our cl.Action buttons by a stable class (Chainlit
+ * doesn't expose one), so we match by visible label text — the strings
+ * are fixed server-side in app.py's _on_switch_to_impl / etc. handlers.
+ * `:has()` is supported in every evergreen browser as of 2023.
+ *
+ * Three buttons styled:
+ *   - "START IMPLEMENTATION (irreversible)"  — big, orange/red, pulses.
+ *   - "YES — switch to IMPLEMENTATION"        — large, red, no pulse.
+ *   - "Cancel — keep planning"                — large, calm grey.
+ * ============================================================ */
+
+button:has(span:is(:contains)),
+button[aria-label*="START IMPLEMENTATION" i],
+button:has(*:not(script):not(style)) {
+    /* The :has(:contains) selector isn't standard, so we fall through
+       and rely on the `text starts with` JS tagger in chat.js — see
+       below. The selector above is a no-op safety net for browsers
+       that try to parse it; the real styling targets data attributes. */
+}
+
+/* Tagged by chat.js: a Chainlit action button whose label starts with
+ * "🛠 START IMPLEMENTATION". Pulsing border to drag the eye. */
+button[data-ac-impl-button="primary"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    padding: 14px 28px !important;
+    margin: 12px 0 !important;
+    font-size: 17px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.3px;
+    color: #fff !important;
+    background: linear-gradient(90deg, #d97706 0%, #dc2626 100%) !important;
+    border: 2px solid #fff !important;
+    border-radius: 10px !important;
+    box-shadow:
+        0 0 0 0 rgba(220, 38, 38, 0.6),
+        0 4px 18px rgba(220, 38, 38, 0.35) !important;
+    cursor: pointer !important;
+    animation: ac-pulse-cta 1.6s ease-in-out infinite;
+}
+button[data-ac-impl-button="primary"]:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+}
+@keyframes ac-pulse-cta {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6),
+                          0 4px 18px rgba(220, 38, 38, 0.35); }
+    50%      { box-shadow: 0 0 0 12px rgba(220, 38, 38, 0.0),
+                          0 6px 22px rgba(220, 38, 38, 0.45); }
+}
+
+/* The final-confirm "YES" button — same loud styling, no pulse (user
+ * has already seen the pulse; we want them deliberate now). */
+button[data-ac-impl-button="confirm"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 12px 26px !important;
+    margin: 10px 8px 10px 0 !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    color: #fff !important;
+    background: #dc2626 !important;
+    border: 2px solid #991b1b !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.30) !important;
+    cursor: pointer !important;
+}
+button[data-ac-impl-button="cancel"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 12px 22px !important;
+    margin: 10px 0 !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: CanvasText !important;
+    background: rgba(127, 127, 127, 0.10) !important;
+    border: 2px solid rgba(127, 127, 127, 0.35) !important;
+    border-radius: 8px !important;
+    cursor: pointer !important;
+}

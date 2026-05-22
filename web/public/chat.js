@@ -172,11 +172,31 @@
         });
     }
 
+    // ---------------------------------------------------------------
+    // (5) Tag the phase-switch action buttons by their label text so
+    //     CSS can style them big + pulsing. The labels are stable —
+    //     they come from app.py's cl.Action(label=...) constants.
+    // ---------------------------------------------------------------
+    function tagPhaseActions() {
+        document.querySelectorAll("button").forEach((btn) => {
+            const t = (btn.textContent || "").trim();
+            if (!t || btn.dataset.acImplButton) return;
+            if (t.startsWith("🛠 START IMPLEMENTATION")) {
+                btn.dataset.acImplButton = "primary";
+            } else if (t.startsWith("✅ YES — switch to IMPLEMENTATION")) {
+                btn.dataset.acImplButton = "confirm";
+            } else if (t.startsWith("❌ Cancel — keep planning")) {
+                btn.dataset.acImplButton = "cancel";
+            }
+        });
+    }
+
     function tick() {
         syncInitGate();   // run first so the lock is up before anything else
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
+        tagPhaseActions();
     }
 
     // Apply the lock as soon as possible — ideally before React mounts

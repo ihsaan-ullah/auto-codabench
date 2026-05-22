@@ -143,6 +143,31 @@ DEFAULT_MODEL = os.environ.get("AUTOCODABENCH_DEFAULT_MODEL", "claude-sonnet-4-6
 MAX_USD_PER_SESSION = float(os.environ.get("MAX_USD_PER_SESSION", "2.0"))
 PYTHON_BIN = os.environ.get("AUTOCODABENCH_PYTHON", sys.executable)
 
+# Two phases shown in the UI. Planning is the orchestrator (proposal +
+# implementation specs); Implementation is Phase C of the orchestrator
+# (bundle writes + Codabench upload). On the CLI, Phase C runs in a
+# *fresh* Claude session; on the web UI we don't have that option, so
+# the user clicks a big confirm button and we recreate the SDK client
+# in place — same run_dir, new tool allowlist, new system prompt.
+PHASE_PLANNING       = "planning"
+PHASE_IMPLEMENTATION = "implementation"
+
+_PLANNING_TOOLS = [
+    "mcp__autocodabench__autocodabench_open_run",
+    "mcp__autocodabench__autocodabench_current_run",
+    "mcp__autocodabench__autocodabench_log_event",
+    "mcp__autocodabench__autocodabench_snapshot_spec",
+    "mcp__alex-mcp__*",
+    "Read", "Grep", "Glob",
+]
+_IMPLEMENTATION_TOOLS = [
+    # Bundle-write side of the autocodabench MCP — only unlocked once
+    # the user explicitly steps into the implementation phase.
+    "mcp__autocodabench__*",
+    "mcp__alex-mcp__*",
+    "Read", "Grep", "Glob",
+]
+
 # Per-session run dirs are uploaded to this private HF Dataset repo
 # (cost.jsonl, transcript.md, tool_calls/, specs/, events.jsonl, …).
 # Set HF_TOKEN as a Repository Secret on the Space to enable uploads;
@@ -163,21 +188,62 @@ def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _system_prompt() -> str:
-    """Load the orchestrator skill's body as the system prompt."""
+def _system_prompt(*, phase: str = PHASE_PLANNING) -> str:
+    """Load the orchestrator skill's body, with a phase-aware footer.
+
+    The CLI orchestrator skill assumes Phase C happens in a *fresh*
+    Claude session. The web UI can't do that — there's only one chat —
+    so we append a footer telling the model the user-visible phase
+    switch is button-driven, and what's expected of it in each phase.
+    """
     if not ORCHESTRATOR_SKILL.exists():
-        return (
+        base = (
             "You are an orchestrator that helps researchers design Codabench "
             "competitions. (ORCHESTRATOR_SKILL not found at "
             f"{ORCHESTRATOR_SKILL}; falling back to minimal prompt.)"
         )
-    body = ORCHESTRATOR_SKILL.read_text(encoding="utf-8")
-    # Strip the YAML frontmatter (Anthropic does not need it in the prompt).
-    if body.startswith("---"):
-        end = body.find("\n---", 3)
-        if end != -1:
-            body = body[end + 4:].lstrip()
-    return body
+    else:
+        body = ORCHESTRATOR_SKILL.read_text(encoding="utf-8")
+        # Strip the YAML frontmatter (Anthropic does not need it in the prompt).
+        if body.startswith("---"):
+            end = body.find("\n---", 3)
+            if end != -1:
+                body = body[end + 4:].lstrip()
+        base = body
+
+    if phase == PHASE_PLANNING:
+        footer = (
+            "\n\n---\n\n"
+            "## Web UI runtime note (overrides the CLI Phase-C instructions)\n\n"
+            "You are running inside the AutoCodabench web UI. The user cannot "
+            "open a fresh chat to enter Phase C — instead, the UI shows a big "
+            "**START IMPLEMENTATION** button as soon as `implementation_plan.md` "
+            "is written. When you finish Phase B, do NOT tell the user to "
+            "'open a new chat' — instead say:\n\n"
+            "> ✅ Implementation plan written. A big **START IMPLEMENTATION** "
+            "> button has appeared below this message — click it to begin "
+            "> Phase C in this same session. Switching is irreversible in "
+            "> the current session.\n\n"
+            "Stay in PLANNING mode until that button is clicked."
+        )
+    else:  # PHASE_IMPLEMENTATION
+        footer = (
+            "\n\n---\n\n"
+            "## Web UI runtime note (Phase C — IMPLEMENTATION mode)\n\n"
+            "You are running inside the AutoCodabench web UI in Phase C. The "
+            "user clicked **START IMPLEMENTATION** to get here. Your job:\n\n"
+            "1. Read `<run_dir>/specs/project_proposal.md` and the six specs "
+            "   under `<run_dir>/specs/`. Reading these is the *first* thing "
+            "   you do — do not assume their content from memory.\n"
+            "2. Execute `<run_dir>/implementation_plan.md` step by step. The "
+            "   plan dictates which `autocodabench_*` write tools to call in "
+            "   what order.\n"
+            "3. End by calling `autocodabench_zip_bundle` and, if the user "
+            "   asks, `autocodabench_upload_bundle` to publish to Codabench.\n\n"
+            "There is no Phase D. You will NOT switch back to Phase A/B from "
+            "this session — that's been disabled at the UI level."
+        )
+    return base + footer
 
 
 def _probe_mcp_imports() -> list[str]:
@@ -312,41 +378,41 @@ async def on_chat_start():
             author="autocodabench",
         ).send()
 
-    # 3. Configure the Claude Agent SDK client
-    options = ClaudeAgentOptions(
-        model=DEFAULT_MODEL,
-        system_prompt=_system_prompt(),
-        mcp_servers=_mcp_servers(run_dir),
-        max_budget_usd=MAX_USD_PER_SESSION,
-        permission_mode="bypassPermissions",  # tools run without per-call prompts
-        cwd=str(REPO_ROOT),
-        env={
-            **os.environ,
-            "AUTOCODABENCH_RUN_DIR": str(run_dir),
-        },
-        # Allow Claude to invoke the autocodabench + alex-mcp tools and
-        # standard file-reading tools, but lock out shell / network freely.
-        allowed_tools=[
-            "mcp__autocodabench__*",
-            "mcp__alex-mcp__*",
-            "Read",
-            "Grep",
-            "Glob",
-        ],
-    )
+    # 3. Configure the Claude Agent SDK client for the PLANNING phase.
+    cl.user_session.set("phase", PHASE_PLANNING)
+    cl.user_session.set("switch_offered", False)  # so we don't spam the button
 
-    client = ClaudeSDKClient(options=options)
+    client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_PLANNING))
     await client.connect()
     cl.user_session.set("client", client)
 
     # 4. Greeting — this contains READY_PHRASE ("Tell me a competition
     # idea") which is the signal chat.js watches for to drop the banner
     # and unlock the input. Keep that exact phrase in the first line.
+    # We also lay out the two-phase contract up front so the user knows
+    # the irreversible step is coming.
     await cl.Message(
         content=(
-            "**AutoCodabench — Phase 1A: proposal crystallization**\n\n"
+            "# 🧠 PLANNING phase — proposal crystallization\n\n"
             "Tell me a competition idea — a sentence is enough — and I'll "
-            "explore the design space with you, citing the literature as we go.\n\n"
+            "explore the design space with you, citing the literature as "
+            "we go. You can also drop a PDF / markdown design doc and I'll "
+            "fill in only the gaps.\n\n"
+            "### How this app works\n\n"
+            "Two phases, one session:\n\n"
+            "1. **🧠 PLANNING** *(you are here)* — we draft "
+            "   `project_proposal.md` and six implementation specs. "
+            "   No bundle files are written yet.\n"
+            "2. **🛠 IMPLEMENTATION** — once `implementation_plan.md` "
+            "   exists, a big **START IMPLEMENTATION** button will "
+            "   appear below this chat. Clicking it switches the agent "
+            "   into Phase C: writing the Codabench bundle, validating, "
+            "   zipping, and (optionally) uploading.\n\n"
+            "> **⚠️ Switching is IRREVERSIBLE in this session.** The agent "
+            "> rebuilds with bundle-write tools and a Phase-C system "
+            "> prompt; you cannot return to planning. If you want a "
+            "> different design after that, refresh the page to start a "
+            "> brand-new session.\n\n"
             f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
             f"budget ${MAX_USD_PER_SESSION:.2f}_"
         ),
@@ -354,6 +420,33 @@ async def on_chat_start():
     ).send()
 
     cl.user_session.set("ready", True)
+
+
+# ---------------------------------------------------------------------------
+# SDK options builder (per phase)
+# ---------------------------------------------------------------------------
+
+def _build_options(run_dir: Path, phase: str) -> ClaudeAgentOptions:
+    """Build the ClaudeAgentOptions for the requested phase.
+
+    Planning uses a tight allowlist (no bundle writes). Implementation
+    unlocks the full autocodabench MCP namespace including bundle write
+    + Codabench upload tools.
+    """
+    return ClaudeAgentOptions(
+        model=DEFAULT_MODEL,
+        system_prompt=_system_prompt(phase=phase),
+        mcp_servers=_mcp_servers(run_dir),
+        max_budget_usd=MAX_USD_PER_SESSION,
+        permission_mode="bypassPermissions",
+        cwd=str(REPO_ROOT),
+        env={
+            **os.environ,
+            "AUTOCODABENCH_RUN_DIR": str(run_dir),
+        },
+        allowed_tools=(_PLANNING_TOOLS if phase == PHASE_PLANNING
+                       else _IMPLEMENTATION_TOOLS),
+    )
 
 
 @cl.on_message
@@ -519,6 +612,265 @@ async def on_message(msg: cl.Message):
     # Persist the entire run_dir to a private HF Dataset, async — so a
     # slow network request doesn't block the next user turn. The user
     # closing the tab mid-turn means we lose at most one turn's data.
+    asyncio.create_task(_persist_to_hf(run_dir))
+
+    # If we're still in PLANNING and the orchestrator just produced
+    # `implementation_plan.md`, surface the big phase-switch button.
+    # `switch_offered` is sticky — we don't pester the user after they
+    # see it once; if they want it back they can re-ask the agent.
+    await _maybe_offer_phase_switch(run_dir)
+
+
+# ---------------------------------------------------------------------------
+# Phase-switch UI (planning -> implementation)
+#
+# The orchestrator writes `<run>/implementation_plan.md` at the end of
+# Phase B. We poll for that file at the end of each turn and, the first
+# time we see it while still in planning mode, send a message carrying
+# a big bold cl.Action. Clicking it shows a *second* confirm action;
+# only the second click actually does the irreversible switch (rebuild
+# the SDK client with Phase-C options + kickoff prompt).
+# ---------------------------------------------------------------------------
+
+async def _maybe_offer_phase_switch(run_dir: Path) -> None:
+    if cl.user_session.get("phase") != PHASE_PLANNING:
+        return
+    if cl.user_session.get("switch_offered"):
+        return
+    plan = run_dir / "specs" / "implementation_plan.md"
+    if not plan.exists():
+        # Fallback: some plans live one level up in older runs.
+        plan = run_dir / "implementation_plan.md"
+    if not plan.exists():
+        return
+    cl.user_session.set("switch_offered", True)
+    actions = [
+        cl.Action(
+            name="ac_switch_to_impl",
+            payload={"run_dir": str(run_dir)},
+            label="🛠 START IMPLEMENTATION (irreversible)",
+            tooltip="Rebuilds the agent with bundle-write tools enabled. "
+                    "You cannot return to planning after this in the "
+                    "current session.",
+        ),
+    ]
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            "## ✅ Implementation plan is ready\n\n"
+            "`implementation_plan.md` has been written. From here, two "
+            "options:\n\n"
+            "- **Stay in planning** to refine the proposal or specs. Just "
+            "  keep chatting.\n"
+            "- **Switch to implementation** with the big button below. "
+            "  Once you click and confirm, the agent rebuilds with "
+            "  bundle-write tools and a Phase-C system prompt. **You "
+            "  cannot come back to planning** in this session.\n"
+        ),
+        actions=actions,
+    ).send()
+
+
+@cl.action_callback("ac_switch_to_impl")
+async def _on_switch_to_impl(action: cl.Action):
+    """First click: show the confirmation prompt with two big actions."""
+    confirm_actions = [
+        cl.Action(
+            name="ac_confirm_switch",
+            payload=action.payload or {},
+            label="✅ YES — switch to IMPLEMENTATION",
+            tooltip="Proceed. This is irreversible in this session.",
+        ),
+        cl.Action(
+            name="ac_cancel_switch",
+            payload={},
+            label="❌ Cancel — keep planning",
+        ),
+    ]
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            "## ⚠️ Confirm: this is irreversible in this session\n\n"
+            "Clicking **YES** will:\n\n"
+            "1. Disconnect the current planning client.\n"
+            "2. Recreate the agent with bundle-write tools (`init_bundle`, "
+            "   `write_competition_yaml`, `write_scoring_program`, "
+            "   `attach_data`, `zip_bundle`, `upload_bundle`, …) and a "
+            "   Phase-C system prompt.\n"
+            "3. Kick the agent off on `implementation_plan.md`.\n\n"
+            "You will **NOT** be able to return to planning in this "
+            "session. To do another design, refresh the page for a fresh "
+            "session."
+        ),
+        actions=confirm_actions,
+    ).send()
+
+
+@cl.action_callback("ac_cancel_switch")
+async def _on_cancel_switch(action: cl.Action):
+    cl.user_session.set("switch_offered", False)  # re-offer if asked
+    await cl.Message(
+        author="autocodabench",
+        content="Cancelled. Still in **PLANNING**.",
+    ).send()
+
+
+@cl.action_callback("ac_confirm_switch")
+async def _on_confirm_switch(action: cl.Action):
+    """Irreversibly switch to Phase C: rebuild the client, kick off."""
+    run_dir_str = (action.payload or {}).get("run_dir") or cl.user_session.get("run_dir")
+    if not run_dir_str:
+        await cl.Message(
+            author="autocodabench",
+            content="❌ Couldn't find the run dir to switch on. Refresh and try again.",
+        ).send()
+        return
+    run_dir = Path(run_dir_str)
+
+    # 1. Tear down the planning client.
+    old_client: ClaudeSDKClient | None = cl.user_session.get("client")
+    if old_client is not None:
+        try:
+            await old_client.disconnect()
+        except Exception as e:
+            log.warning("disconnect during phase switch failed: %s", e)
+
+    # 2. Build a fresh Phase-C client. Same run_dir on disk, new tools.
+    cl.user_session.set("phase", PHASE_IMPLEMENTATION)
+    new_client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_IMPLEMENTATION))
+    await new_client.connect()
+    cl.user_session.set("client", new_client)
+
+    # 3. Tell the user, render a clear phase-change marker, then send
+    #    the kickoff prompt to the agent. The agent's first action will
+    #    be to read project_proposal.md + specs and start executing the
+    #    plan.
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            "# 🛠 IMPLEMENTATION phase\n\n"
+            "Switched. The agent has bundle-write tools available and a "
+            "Phase-C system prompt. It will now read the proposal + "
+            "specs + plan and start writing the Codabench bundle. "
+            "Watch the tool chips for `init_bundle`, "
+            "`write_competition_yaml`, `write_scoring_program`, etc."
+        ),
+    ).send()
+
+    _append_transcript(run_dir, role="user",
+                       text="[ui] User clicked START IMPLEMENTATION — switching to Phase C.")
+
+    # Send the kickoff prompt and stream the response.
+    kickoff_text = (
+        f"The user just clicked START IMPLEMENTATION in the web UI. You "
+        f"are now in Phase C. Execute "
+        f"`{run_dir / 'specs' / 'implementation_plan.md'}` step by step. "
+        f"First action: read project_proposal.md and the six specs in "
+        f"`{run_dir / 'specs'}/`, then start calling the bundle-write tools."
+    )
+    await _stream_one_turn(run_dir, kickoff_text)
+
+
+async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
+    """Stream one assistant response to the UI for a *synthetic* user prompt.
+
+    Used by the phase-switch kickoff: we inject a server-side prompt the
+    user didn't type but still want to render and log normally.
+    """
+    client: ClaudeSDKClient | None = cl.user_session.get("client")
+    if client is None:
+        return
+    response_msg = cl.Message(content="", author="autocodabench")
+    await response_msg.send()
+    turn_parts: list[dict] = []
+    open_steps: dict[str, tuple[cl.Step, str]] = {}
+    tool_idx_by_id: dict[str, int] = {}
+
+    try:
+        await client.query(prompt_text)
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        await response_msg.stream_token(block.text)
+                        turn_parts.append({"kind": "text", "text": block.text})
+                    elif isinstance(block, ToolUseBlock):
+                        if block.name in _HIDDEN_TOOLS:
+                            continue
+                        op = _operation_label(block.name, block.input)
+                        step = cl.Step(
+                            name=f"Running {op}",
+                            type="tool",
+                            show_input="json",
+                            parent_id=response_msg.id,
+                        )
+                        step.input = block.input
+                        await step.send()
+                        open_steps[block.id] = (step, op)
+                        turn_parts.append({
+                            "kind": "tool", "id": block.id,
+                            "raw_name": block.name, "op": op,
+                            "input": block.input, "output": "", "is_error": False,
+                        })
+                        tool_idx_by_id[block.id] = len(turn_parts) - 1
+            elif isinstance(message, UserMessage):
+                blocks = message.content if isinstance(message.content, list) else []
+                for block in blocks:
+                    if isinstance(block, ToolResultBlock):
+                        record = open_steps.pop(block.tool_use_id, None)
+                        if record is None:
+                            continue
+                        step, op = record
+                        step.name = op
+                        if isinstance(block.content, list):
+                            parts = []
+                            for c in block.content:
+                                if hasattr(c, "text"):
+                                    parts.append(c.text)
+                                elif isinstance(c, dict) and "text" in c:
+                                    parts.append(c["text"])
+                                else:
+                                    parts.append(str(c))
+                            out_text = "\n".join(parts)
+                        else:
+                            out_text = str(block.content or "")
+                        is_error = bool(getattr(block, "is_error", False))
+                        step.is_error = is_error
+                        step.output = out_text
+                        await step.update()
+                        idx = tool_idx_by_id.get(block.tool_use_id)
+                        if idx is not None:
+                            turn_parts[idx]["output"]   = out_text
+                            turn_parts[idx]["is_error"] = is_error
+            elif isinstance(message, ResultMessage):
+                cost = getattr(message, "total_cost_usd", None) or 0.0
+                cum  = cl.user_session.get("cum_cost_usd", 0.0) + cost
+                cl.user_session.set("cum_cost_usd", cum)
+                if cost:
+                    await response_msg.stream_token(
+                        f"\n\n_turn cost ≈ ${cost:.3f}; session total ≈ "
+                        f"${cum:.2f} / ${MAX_USD_PER_SESSION:.2f}_"
+                    )
+                _log_cost(run_dir, turn_cost=cost, cumulative=cum)
+    except Exception as e:
+        await cl.Message(
+            content=f"**Error during phase switch:** `{type(e).__name__}: {e}`",
+            author="autocodabench",
+        ).send()
+
+    await response_msg.update()
+    if turn_parts:
+        body_chunks = []
+        for part in turn_parts:
+            if part["kind"] == "text":
+                body_chunks.append(part["text"])
+            else:
+                body_chunks.append(_format_tool_call_md(
+                    op=part["op"], raw_name=part["raw_name"],
+                    input_json=part["input"], output_text=part["output"],
+                    is_error=part["is_error"],
+                ))
+        _append_transcript(run_dir, role="claude", text="".join(body_chunks))
     asyncio.create_task(_persist_to_hf(run_dir))
 
 
