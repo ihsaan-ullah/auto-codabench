@@ -356,13 +356,40 @@ async def on_chat_start():
     # bypassed (older browser, ad-blocker, etc.).
     cl.user_session.set("ready", False)
 
-    # 1. Per-session isolated run dir
+    # 1. Per-session isolated run dir + sibling subdirs the MCP server
+    # expects to exist (it creates them on its own when *it* opens a
+    # run, but we're pre-creating so `autocodabench_open_run` adopts
+    # this one instead of carving a parallel `detached_<ts>/` next to it).
     session_id = uuid.uuid4().hex[:12]
     user = cl.user_session.get("user")
     user_id = (user.identifier if user else "anon").replace("/", "_")
     runtime_id = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     run_dir = RUNS_ROOT / f"web_{user_id}_{runtime_id}_{session_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ("tool_calls", "specs", "specs_history", "mcp_stderr"):
+        (run_dir / sub).mkdir(exist_ok=True)
+    # Write meta.json so the autocodabench MCP server *adopts* this dir
+    # when the agent calls `autocodabench_open_run` — the adoption check
+    # in run_log.open_run gates on `<dir>/meta.json` existing. Without
+    # this file the agent would carve a fresh `detached_<ts>/` dir and
+    # write `implementation_plan.md` there, leaving _maybe_offer_phase_switch
+    # polling the wrong path and the START IMPLEMENTATION button never
+    # appearing.
+    meta = {
+        "started_at": _utc_now(),
+        "branch_id":  f"web-{user_id}",
+        "runtime_id": runtime_id,
+        "slug":       f"web_{session_id}",
+        "session_id": session_id,
+        "user":       user_id,
+        "git_sha":    None,
+        "cwd":        str(REPO_ROOT),
+        "pid":        os.getpid(),
+        "created_by": "web/app.py:on_chat_start",
+    }
+    (run_dir / "meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8")
+    (run_dir / "events.jsonl").touch()
     cl.user_session.set("run_dir", str(run_dir))
     cl.user_session.set("session_id", session_id)
     cl.user_session.set("started_at", _utc_now())
@@ -642,12 +669,40 @@ async def _maybe_offer_phase_switch(run_dir: Path) -> None:
         return
     if cl.user_session.get("switch_offered"):
         return
-    plan = run_dir / "specs" / "implementation_plan.md"
-    if not plan.exists():
-        # Fallback: some plans live one level up in older runs.
-        plan = run_dir / "implementation_plan.md"
-    if not plan.exists():
+    # Check the web's run_dir first (the expected path). Then fall back
+    # to runs/LATEST in case the agent somehow opened a sibling dir
+    # despite meta.json adoption — the MCP server always updates the
+    # LATEST symlink to point at whichever run is current. If we adopt
+    # *that* run dir going forward, the action button payload + later
+    # transcript writes also land in the right place.
+    candidates = [
+        run_dir / "specs" / "implementation_plan.md",
+        run_dir / "implementation_plan.md",
+    ]
+    latest = RUNS_ROOT / "LATEST"
+    if latest.exists():
+        try:
+            latest_resolved = latest.resolve()
+        except OSError:
+            latest_resolved = None
+        if latest_resolved and latest_resolved != run_dir.resolve():
+            candidates.extend([
+                latest_resolved / "specs" / "implementation_plan.md",
+                latest_resolved / "implementation_plan.md",
+            ])
+    plan = next((p for p in candidates if p.exists()), None)
+    if plan is None:
         return
+    # If we hit it via LATEST (i.e. the agent worked in a different dir
+    # despite our adoption hint), pivot the session's run_dir to wherever
+    # the plan actually lives — every downstream artifact (transcript,
+    # cost, HF upload) should follow the work, not the empty dir.
+    effective_run_dir = plan.parent if plan.parent.name == "specs" else plan.parent
+    if effective_run_dir.resolve() != run_dir.resolve():
+        log.warning("phase-switch: plan found in %s, pivoting from %s",
+                    effective_run_dir, run_dir)
+        cl.user_session.set("run_dir", str(effective_run_dir))
+        run_dir = effective_run_dir
     cl.user_session.set("switch_offered", True)
     actions = [
         cl.Action(
