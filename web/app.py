@@ -421,9 +421,8 @@ async def on_chat_start():
     # when the agent calls `autocodabench_open_run` — the adoption check
     # in run_log.open_run gates on `<dir>/meta.json` existing. Without
     # this file the agent would carve a fresh `detached_<ts>/` dir and
-    # write `implementation_plan.md` there, leaving _maybe_offer_phase_switch
-    # polling the wrong path and the START IMPLEMENTATION button never
-    # appearing.
+    # write `implementation_plan.md` there, leaving the approval-gate
+    # logic polling the wrong path and no gate ever firing.
     meta = {
         "started_at": _utc_now(),
         "branch_id":  f"web-{user_id}",
@@ -502,20 +501,21 @@ async def on_chat_start():
             "we go. You can also drop a PDF / markdown design doc and I'll "
             "fill in only the gaps.\n\n"
             "### How this app works\n\n"
-            "Two phases, one session:\n\n"
-            "1. **🧠 PLANNING** *(you are here)* — we draft "
-            "   `project_proposal.md` and six implementation specs. "
-            "   No bundle files are written yet.\n"
-            "2. **🛠 IMPLEMENTATION** — once `implementation_plan.md` "
-            "   exists, a big **START IMPLEMENTATION** button will "
-            "   appear below this chat. Clicking it switches the agent "
-            "   into Phase C: writing the Codabench bundle, validating, "
-            "   zipping, and (optionally) uploading.\n\n"
-            "> **⚠️ Switching is IRREVERSIBLE in this session.** The agent "
-            "> rebuilds with bundle-write tools and a Phase-C system "
-            "> prompt; you cannot return to planning. If you want a "
-            "> different design after that, refresh the page to start a "
-            "> brand-new session.\n\n"
+            "Nine stages, one continuous session — strip at the top of "
+            "the chat shows where we are:\n\n"
+            "0. **Roadmap** — name the problem and the dimensions to settle.\n"
+            "1–7. **Setup → Data → EDA → Metric → Baseline → Predict+Score → Diagnostics** — "
+            "    each stage adds cells to `starting_kit.ipynb`, runs them, "
+            "    and shows you the outputs in the `📓` panel on the right. "
+            "    At the end of every stage I'll ask: **Approve & next**, "
+            "    **Revise this stage**, or **Save & exit**.\n"
+            "8. **Bundle** — package the executed notebook into the "
+            "    Codabench bundle + zip + (optional) upload.\n\n"
+            "**Revise is reversible**: it restarts the kernel, drops this "
+            "stage's outputs, re-executes earlier stages, and asks you "
+            "what to refine. You won't lose prior work.\n\n"
+            "The `📁 Files` button on the right re-opens the file viewer "
+            "anytime — notebook, transcript, cost log, generated specs.\n\n"
             f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
             f"budget ${MAX_USD_PER_SESSION:.2f}_"
         ),
@@ -732,35 +732,121 @@ async def on_message(msg: cl.Message):
     # closing the tab mid-turn means we lose at most one turn's data.
     asyncio.create_task(_persist_to_hf(run_dir))
 
-    # If we're still in PLANNING and the orchestrator just produced
-    # `implementation_plan.md`, surface the big phase-switch button.
-    # `switch_offered` is sticky — we don't pester the user after they
-    # see it once; if they want it back they can re-ask the agent.
-    await _maybe_offer_phase_switch(run_dir)
+    # Per-stage approval gates fire from inside _refresh_task_list when
+    # a stage transitions to DONE — see below.
 
 
 # ---------------------------------------------------------------------------
-# Phase-switch UI (planning -> implementation)
+# Per-stage approval gates (replaces the legacy single-button switch)
 #
-# The orchestrator writes `<run>/implementation_plan.md` at the end of
-# Phase B. We poll for that file at the end of each turn and, the first
-# time we see it while still in planning mode, send a message carrying
-# a big bold cl.Action. Clicking it shows a *second* confirm action;
-# only the second click actually does the irreversible switch (rebuild
-# the SDK client with Phase-C options + kickoff prompt).
+# After every stage transitions to DONE (via `stage_done` /
+# `stage_approved` events), we show a small cl.AskActionMessage with
+# three actions: Approve & advance, Revise this stage, Save & exit.
+# Stage 7 (Diagnostics) is special — its Approve action does the
+# planning→implementation phase switch (rebuild SDK client with bundle
+# tools) and kicks off stage 8 (Bundle packaging).
+#
+# Stages 0 (Roadmap) and 8 (Bundle) don't fire gates: stage 0 is
+# design-only with no executable cells; stage 8 is the terminal
+# packaging step and presents a download link directly.
+#
+# Pre-PR4 backstop: if the agent (still on the prose-proposal flow)
+# writes `implementation_plan.md`, we treat that as equivalent to
+# stage 7 being done and offer the same gate path. Once PR4's skill
+# rewrite ships, the agent emits real stage events and this fallback
+# stops firing in practice.
 # ---------------------------------------------------------------------------
 
-async def _maybe_offer_phase_switch(run_dir: Path) -> None:
+# Index for STAGE_TITLES so payloads stay machine-readable.
+_STAGE_BY_ID:   dict[str, int]  = {sid: i for i, (sid, _) in enumerate(STAGE_TITLES)}
+_STAGE_BY_IDX:  dict[int, str]  = {i: sid for i, (sid, _) in enumerate(STAGE_TITLES)}
+_STAGE_TITLE:   dict[str, str]  = {sid: title for sid, title in STAGE_TITLES}
+
+
+def _stage_at(i: int) -> tuple[str, str] | None:
+    if 0 <= i < len(STAGE_TITLES):
+        return STAGE_TITLES[i]
+    return None
+
+
+async def _maybe_offer_stage_gate(run_dir: Path, stage: str) -> None:
+    """Show the per-stage approval gate after a stage transitions to DONE.
+
+    Idempotent on `gates_offered` — once a gate has been shown for a
+    given stage, it doesn't re-fire (Revise clears the bit for that
+    stage and later stages, so the gate can show again post-revision).
+    """
+    if cl.user_session.get("phase") != PHASE_PLANNING:
+        return                                         # gates only fire during planning
+    if stage not in _STAGE_BY_ID:
+        return
+    si = _STAGE_BY_ID[stage]
+    # Stages 0 (Roadmap) and 8 (Bundle) don't have approval gates.
+    # 0 is design-only; 8 is the terminal packaging step which auto-runs
+    # after stage 7's Approve action.
+    if si in (0, 8):
+        return
+    gates: set = cl.user_session.get("gates_offered") or set()
+    if stage in gates:
+        return
+    gates = set(gates)
+    gates.add(stage)
+    cl.user_session.set("gates_offered", gates)
+
+    # Per-stage Approve label/copy.
+    next_pair = _stage_at(si + 1)
+    if si == 7:
+        approve_label = "✅ Approve & build the Codabench bundle"
+        approve_tip   = ("Approves stage 7. Rebuilds the agent with bundle-"
+                         "write tools, then runs stage 8 (packaging).")
+    elif next_pair is not None:
+        _, next_title = next_pair
+        approve_label = f"✅ Approve & advance to {next_title}"
+        approve_tip   = f"Approves {_STAGE_TITLE[stage]} and moves to {next_title}."
+    else:
+        approve_label = "✅ Approve"
+        approve_tip   = "Approves this stage."
+
+    actions = [
+        cl.Action(name="ac_stage_approve",
+                  payload={"stage": stage, "stage_index": si},
+                  label=approve_label,
+                  tooltip=approve_tip),
+        cl.Action(name="ac_stage_revise",
+                  payload={"stage": stage, "stage_index": si},
+                  label=f"✏️ Revise {_STAGE_TITLE[stage]}",
+                  tooltip="Restart the kernel, drop this stage's outputs, "
+                          "and ask the agent what to refine. Earlier "
+                          "stages re-execute automatically."),
+        cl.Action(name="ac_stage_save_exit",
+                  payload={"stage": stage, "stage_index": si},
+                  label="🛑 Save & exit",
+                  tooltip="End the session with current artifacts. "
+                          "Everything is persisted to the run dir + "
+                          "uploaded to the HF Dataset."),
+    ]
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            f"## {_STAGE_TITLE[stage]} — ready for review\n\n"
+            f"Outputs from this stage appear in the `📓 starting_kit.ipynb` "
+            f"chip above (or click the `📁 Files` button on the right). "
+            f"What's next?"
+        ),
+        actions=actions,
+    ).send()
+
+
+async def _refresh_legacy_bundle_gate(run_dir: Path) -> None:
+    """Pre-PR4 fallback: treat implementation_plan.md as stage-7-done.
+
+    Until the orchestrator skill is rewritten to drive the 8-stage
+    notebook flow, the agent still writes `implementation_plan.md` at
+    the end of the prose proposal/specs path. We map that file's
+    existence onto "stage 7 done" so the new gate path still fires.
+    """
     if cl.user_session.get("phase") != PHASE_PLANNING:
         return
-    if cl.user_session.get("switch_offered"):
-        return
-    # Check the web's run_dir first (the expected path). Then fall back
-    # to runs/LATEST in case the agent somehow opened a sibling dir
-    # despite meta.json adoption — the MCP server always updates the
-    # LATEST symlink to point at whichever run is current. If we adopt
-    # *that* run dir going forward, the action button payload + later
-    # transcript writes also land in the right place.
     candidates = [
         run_dir / "specs" / "implementation_plan.md",
         run_dir / "implementation_plan.md",
@@ -776,140 +862,174 @@ async def _maybe_offer_phase_switch(run_dir: Path) -> None:
                 latest_resolved / "specs" / "implementation_plan.md",
                 latest_resolved / "implementation_plan.md",
             ])
-    plan = next((p for p in candidates if p.exists()), None)
+    plan = next((p for p in candidates if p.is_file()), None)
     if plan is None:
         return
-    # If we hit it via LATEST (i.e. the agent worked in a different dir
-    # despite our adoption hint), pivot the session's run_dir to wherever
-    # the plan actually lives — every downstream artifact (transcript,
-    # cost, HF upload) should follow the work, not the empty dir.
-    effective_run_dir = plan.parent if plan.parent.name == "specs" else plan.parent
-    if effective_run_dir.resolve() != run_dir.resolve():
-        log.warning("phase-switch: plan found in %s, pivoting from %s",
-                    effective_run_dir, run_dir)
-        cl.user_session.set("run_dir", str(effective_run_dir))
-        run_dir = effective_run_dir
-    cl.user_session.set("switch_offered", True)
-    actions = [
-        cl.Action(
-            name="ac_switch_to_impl",
-            payload={"run_dir": str(run_dir)},
-            label="🛠 START IMPLEMENTATION (irreversible)",
-            tooltip="Rebuilds the agent with bundle-write tools enabled. "
-                    "You cannot return to planning after this in the "
-                    "current session.",
-        ),
-    ]
-    await cl.Message(
-        author="autocodabench",
-        content=(
-            "## ✅ Implementation plan is ready\n\n"
-            "`implementation_plan.md` has been written. From here, two "
-            "options:\n\n"
-            "- **Stay in planning** to refine the proposal or specs. Just "
-            "  keep chatting.\n"
-            "- **Switch to implementation** with the big button below. "
-            "  Once you click and confirm, the agent rebuilds with "
-            "  bundle-write tools and a Phase-C system prompt. **You "
-            "  cannot come back to planning** in this session.\n"
-        ),
-        actions=actions,
-    ).send()
+    # Pivot to wherever the plan actually lives, same as the old code did.
+    effective = plan.parent if plan.parent.name == "specs" else plan.parent
+    if effective.resolve() != run_dir.resolve():
+        log.warning("legacy bundle gate: plan in %s, pivoting from %s", effective, run_dir)
+        cl.user_session.set("run_dir", str(effective))
+        run_dir = effective
+    await _maybe_offer_stage_gate(run_dir, "7.diagnostics")
 
 
-@cl.action_callback("ac_switch_to_impl")
-async def _on_switch_to_impl(action: cl.Action):
-    """First click: show the confirmation prompt with two big actions."""
-    confirm_actions = [
-        cl.Action(
-            name="ac_confirm_switch",
-            payload=action.payload or {},
-            label="✅ YES — switch to IMPLEMENTATION",
-            tooltip="Proceed. This is irreversible in this session.",
-        ),
-        cl.Action(
-            name="ac_cancel_switch",
-            payload={},
-            label="❌ Cancel — keep planning",
-        ),
-    ]
-    await cl.Message(
-        author="autocodabench",
-        content=(
-            "## ⚠️ Confirm: this is irreversible in this session\n\n"
-            "Clicking **YES** will:\n\n"
-            "1. Disconnect the current planning client.\n"
-            "2. Recreate the agent with bundle-write tools (`init_bundle`, "
-            "   `write_competition_yaml`, `write_scoring_program`, "
-            "   `attach_data`, `zip_bundle`, `upload_bundle`, …) and a "
-            "   Phase-C system prompt.\n"
-            "3. Kick the agent off on `implementation_plan.md`.\n\n"
-            "You will **NOT** be able to return to planning in this "
-            "session. To do another design, refresh the page for a fresh "
-            "session."
-        ),
-        actions=confirm_actions,
-    ).send()
+# ---------------------------------------------------------------------------
+# Stage-action callbacks
+# ---------------------------------------------------------------------------
 
+@cl.action_callback("ac_stage_approve")
+async def _on_stage_approve(action: cl.Action):
+    p = action.payload or {}
+    stage = p.get("stage", "")
+    si    = int(p.get("stage_index", 0))
+    run_dir = Path(cl.user_session.get("run_dir"))
 
-@cl.action_callback("ac_cancel_switch")
-async def _on_cancel_switch(action: cl.Action):
-    cl.user_session.set("switch_offered", False)  # re-offer if asked
-    await cl.Message(
-        author="autocodabench",
-        content="Cancelled. Still in **PLANNING**.",
-    ).send()
+    # Reflect Approve in the TaskList — even if no stage_done event
+    # was logged, the user's click is itself an authoritative signal.
+    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
+    if stage in tasks and tasks[stage].status != cl.TaskStatus.DONE:
+        tasks[stage].status = cl.TaskStatus.DONE
+        tl = cl.user_session.get("task_list")
+        if tl is not None:
+            try:
+                await tl.send()
+            except Exception:
+                pass
 
-
-@cl.action_callback("ac_confirm_switch")
-async def _on_confirm_switch(action: cl.Action):
-    """Irreversibly switch to Phase C: rebuild the client, kick off."""
-    run_dir_str = (action.payload or {}).get("run_dir") or cl.user_session.get("run_dir")
-    if not run_dir_str:
-        await cl.Message(
-            author="autocodabench",
-            content="❌ Couldn't find the run dir to switch on. Refresh and try again.",
-        ).send()
+    if si == 7:
+        # Stage 7 → switch to implementation phase, then kick off stage 8.
+        await _switch_to_implementation_for_bundle(run_dir)
         return
-    run_dir = Path(run_dir_str)
 
-    # 1. Tear down the planning client.
+    next_pair = _stage_at(si + 1)
+    if next_pair is None:
+        return
+    next_stage, next_title = next_pair
+    _append_transcript(run_dir, role="user",
+                       text=f"[ui] Approved {_STAGE_TITLE[stage]}. Advancing to {next_title}.")
+    await _stream_one_turn(
+        run_dir,
+        f"The user approved {_STAGE_TITLE[stage]}. Proceed to {next_title} "
+        f"({next_stage}). Log `stage_started` with payload "
+        f"{{\"stage\":\"{next_stage}\"}} before any work; when the stage "
+        f"is complete, log `stage_done` with the same payload so the "
+        f"approval gate can fire.",
+    )
+
+
+@cl.action_callback("ac_stage_revise")
+async def _on_stage_revise(action: cl.Action):
+    p = action.payload or {}
+    stage = p.get("stage", "")
+    si    = int(p.get("stage_index", 0))
+    run_dir = Path(cl.user_session.get("run_dir"))
+
+    # Allow the gate to re-fire for this stage and any later stage that
+    # had already been approved — those need re-confirmation too.
+    gates: set = cl.user_session.get("gates_offered") or set()
+    gates = {g for g in gates if _STAGE_BY_ID.get(g, 999) < si}
+    cl.user_session.set("gates_offered", gates)
+
+    # TaskList: this stage goes back to RUNNING; later stages back to READY.
+    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
+    if stage in tasks:
+        tasks[stage].status = cl.TaskStatus.RUNNING
+    for s, t in tasks.items():
+        if _STAGE_BY_ID.get(s, -1) > si:
+            t.status = cl.TaskStatus.READY
+    tl = cl.user_session.get("task_list")
+    if tl is not None:
+        try:
+            await tl.send()
+        except Exception:
+            pass
+
+    _append_transcript(run_dir, role="user",
+                       text=f"[ui] Revise {_STAGE_TITLE[stage]} — clicked.")
+    await _stream_one_turn(
+        run_dir,
+        f"The user clicked **Revise {_STAGE_TITLE[stage]}** on stage "
+        f"`{stage}`. Do this NOW, in order: "
+        f"(1) call `autocodabench_nb_reset_to_stage(stage='{stage}')` to "
+        f"restart the kernel and re-execute earlier stages, "
+        f"(2) ask the user — in one short paragraph — what specifically "
+        f"they want different about this stage. Don't rewrite cells yet; "
+        f"wait for the user's reply.",
+    )
+
+
+@cl.action_callback("ac_stage_save_exit")
+async def _on_stage_save_exit(action: cl.Action):
+    p = action.payload or {}
+    stage = p.get("stage", "")
+    si    = int(p.get("stage_index", 0))
+    run_dir = Path(cl.user_session.get("run_dir"))
+    cl.user_session.set("ended", True)
+    _append_transcript(run_dir, role="user",
+                       text=f"[ui] Save & exit after {_STAGE_TITLE.get(stage, stage)} (stage {si}).")
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            f"## 🛑 Session saved at {_STAGE_TITLE.get(stage, stage)}\n\n"
+            f"All artifacts up to this point are in `{run_dir}/` and have "
+            f"been (or are about to be) uploaded to the private HF "
+            f"Dataset. Refresh the page to start a fresh session.\n\n"
+            f"This session's run dir name: `{run_dir.name}` — keep it "
+            f"around for the dataset path."
+        ),
+    ).send()
+    # Final flush — synchronous so we don't lose the last upload to a
+    # tab-close race.
+    try:
+        await _persist_to_hf(run_dir)
+    except Exception as e:
+        log.warning("save&exit HF persist failed: %s", e)
+
+
+async def _switch_to_implementation_for_bundle(run_dir: Path) -> None:
+    """Stage 7 → 8: rebuild client with bundle tools, kick off stage 8."""
+    cl.user_session.set("gates_offered",
+                        (cl.user_session.get("gates_offered") or set()) | {"7.diagnostics"})
+
     old_client: ClaudeSDKClient | None = cl.user_session.get("client")
     if old_client is not None:
         try:
             await old_client.disconnect()
         except Exception as e:
-            log.warning("disconnect during phase switch failed: %s", e)
+            log.warning("disconnect during stage 7→8 switch failed: %s", e)
 
-    # 2. Build a fresh Phase-C client. Same run_dir on disk, new tools.
     cl.user_session.set("phase", PHASE_IMPLEMENTATION)
     new_client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_IMPLEMENTATION))
     await new_client.connect()
     cl.user_session.set("client", new_client)
 
-    # 3. Tell the user, render a clear phase-change marker, then send
-    #    the kickoff prompt to the agent. The agent's first action will
-    #    be to read project_proposal.md + specs and start executing the
-    #    plan.
+    # TaskList: stage 8 starts now.
+    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
+    if "8.bundle" in tasks:
+        tasks["8.bundle"].status = cl.TaskStatus.RUNNING
+        tl = cl.user_session.get("task_list")
+        if tl is not None:
+            try:
+                await tl.send()
+            except Exception:
+                pass
+
     await cl.Message(
         author="autocodabench",
         content=(
-            "# 🛠 IMPLEMENTATION phase\n\n"
-            "Switched. The agent has bundle-write tools available and a "
-            "Phase-C system prompt. It will now read the proposal + "
-            "specs + plan and start writing the Codabench bundle. "
-            "Watch the tool chips for `init_bundle`, "
-            "`write_competition_yaml`, `write_scoring_program`, etc."
+            "# 🛠 Stage 8 — Bundle packaging\n\n"
+            "Stage 7 approved. The agent has bundle-write tools available "
+            "and a Phase-C system prompt. It will now read the run dir "
+            "and produce the Codabench bundle (`competition.yaml`, "
+            "`scoring_program/`, `solution/`, `pages/`, etc.) and zip "
+            "it. Watch the chips for `init_bundle`, "
+            "`write_competition_yaml`, `write_scoring_program`, …"
         ),
     ).send()
-
     _append_transcript(run_dir, role="user",
-                       text="[ui] User clicked START IMPLEMENTATION — switching to Phase C.")
-
-    # The system prompt is already the autocodabench-implement skill,
-    # which tells the agent exactly what to do. A one-word kickoff is
-    # all we need — the skill handles the rest.
-    await _stream_one_turn(run_dir, "Begin.")
+                       text="[ui] Approved stage 7 — switching to Phase-C, starting stage 8 (Bundle).")
+    await _stream_one_turn(run_dir, "Begin stage 8: bundle packaging.")
 
 
 async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
@@ -1329,6 +1449,19 @@ async def _refresh_task_list(run_dir: Path) -> None:
             await task_list.send()
         except Exception as e:
             log.warning("task_list send failed: %s", e)
+
+    # Per-stage approval gates: any stage now marked DONE that hasn't
+    # had its gate fire yet → show the gate. Idempotent via
+    # `gates_offered` set in cl.user_session.
+    for stage_id, task in tasks_by_stage.items():
+        if task.status == cl.TaskStatus.DONE:
+            await _maybe_offer_stage_gate(run_dir, stage_id)
+
+    # Pre-PR4 fallback: until the orchestrator skill is rewritten to
+    # emit stage events, the old prose flow writes implementation_plan.md
+    # at the end. Treat that file's existence as "stage 7 done" so the
+    # new gate path still fires for legacy sessions. Idempotent.
+    await _refresh_legacy_bundle_gate(run_dir)
 
 
 async def _refresh_side_panel(run_dir: Path,
