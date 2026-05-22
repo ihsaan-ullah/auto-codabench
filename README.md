@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 license: mit
-short_description: A scientific-friend chat assistant for designing Codabench competitions.
+short_description: Chat assistant for designing Codabench competitions.
 ---
 
 # AutoCodabench
