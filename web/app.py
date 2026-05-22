@@ -356,6 +356,30 @@ def auth_callback(username: str, password: str):
 
 @cl.on_chat_start
 async def on_chat_start():
+    # Guard against duplicate firings of on_chat_start for the SAME
+    # underlying Chainlit session. This happens in two situations:
+    #   1. The websocket reconnects (laptop sleep, network blip,
+    #      browser putting the tab to sleep). Chainlit's default is to
+    #      re-fire on_chat_start; we'd otherwise mint a NEW run dir +
+    #      spawn a NEW SDK client + send a NEW greeting on top of the
+    #      existing one — visible to the user as the greeting "appearing
+    #      again" mid-conversation.
+    #   2. The user has two tabs / windows open on the same authenticated
+    #      session — depending on Chainlit + browser behaviour, opening
+    #      the second tab can fire on_chat_start in the *first* tab as
+    #      well.
+    # `cl.user_session` is scoped per Chainlit session; if we've already
+    # set session_id, we're a re-fire. Bail without sending the greeting.
+    if cl.user_session.get("session_id"):
+        log.info(
+            "on_chat_start re-fired for existing session %s — skipping re-init",
+            cl.user_session.get("session_id"),
+        )
+        # Make sure the input is unlocked even on a re-fire, in case the
+        # client expects the READY_PHRASE to land again.
+        cl.user_session.set("ready", True)
+        return
+
     # Lock the chat input until init finishes. The visual is provided by
     # chat.js — it shows a top-of-page banner the moment the chat page
     # is rendered (before this handler has even fired) and only removes
