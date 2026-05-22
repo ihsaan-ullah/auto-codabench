@@ -11,7 +11,10 @@ requires-python = ">=3.10"
 authors = [{ name = "Khuong T.G. Hieu" }]
 license = "MIT"
 dependencies = [
-    "fastmcp>=2.0.0,<3.0.0",
+    # 2.14.7 specifically — looser constraints like `>=2.0.0,<3.0.0` let
+    # pip's solver pick a buggy 2.x release on HF where the OAuth-proxy
+    # submodule imports a name that doesn't exist in `auth.auth`.
+    "fastmcp==2.14.7",
     "PyYAML>=6.0",
     "python-dotenv>=1.0.0",
 ]

@@ -2,10 +2,17 @@
 chainlit>=2.0,<3.0
 claude-agent-sdk>=0.2.83,<1.0
 python-dotenv>=1.0
-# Pin these to match the rest of the repo's MCP-server stack
-fastmcp>=2.0.0,<3.0.0
+# Pin these to match the rest of the repo's MCP-server stack.
+# fastmcp is pinned to an exact release that's known to import cleanly —
+# looser `>=2.0.0,<3.0.0` previously let pip's solver land on a 2.x
+# release where the OAuth-proxy submodule imports a name that doesn't
+# exist in `auth.auth`, breaking every MCP server at startup.
+fastmcp==2.14.7
 PyYAML>=6.0
 httpx>=0.28.1
 pydantic>=2.7.2
 pyalex==0.18
 aiohttp>=3.8.0
+# Used by web/app.py to upload each session's run_dir to a private HF
+# Dataset repo at the end of every turn (see _persist_to_hf).
+huggingface_hub>=0.24,<1.0

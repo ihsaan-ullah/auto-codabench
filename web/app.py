@@ -40,7 +40,9 @@ ENV expected at runtime:
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -48,6 +50,8 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger("autocodabench.web")
 
 import chainlit as cl
 from claude_agent_sdk import (
@@ -138,6 +142,13 @@ SHARED_PASSWORD = os.environ.get("SHARED_PASSWORD", "")
 DEFAULT_MODEL = os.environ.get("AUTOCODABENCH_DEFAULT_MODEL", "claude-sonnet-4-6")
 MAX_USD_PER_SESSION = float(os.environ.get("MAX_USD_PER_SESSION", "2.0"))
 PYTHON_BIN = os.environ.get("AUTOCODABENCH_PYTHON", sys.executable)
+
+# Per-session run dirs are uploaded to this private HF Dataset repo
+# (cost.jsonl, transcript.md, tool_calls/, specs/, events.jsonl, …).
+# Set HF_TOKEN as a Repository Secret on the Space to enable uploads;
+# when missing (local dev), uploads are silently skipped.
+HF_RUNS_REPO = os.environ.get("AUTOCODABENCH_RUNS_REPO", "ktgiahieu/autocodabench-runs")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 SKILLS_ROOT = REPO_ROOT / "auto_codabench" / "skills"
 ORCHESTRATOR_SKILL = SKILLS_ROOT / "autocodabench-orchestrator" / "SKILL.md"
@@ -403,6 +414,9 @@ async def on_message(msg: cl.Message):
                         f"\n\n_turn cost ≈ ${cost:.3f}; session total ≈ ${cum:.2f} / "
                         f"${MAX_USD_PER_SESSION:.2f}_"
                     )
+                # Persist a per-turn cost line so we can audit spend
+                # offline (one JSON object per line, easy to aggregate).
+                _log_cost(run_dir, turn_cost=cost, cumulative=cum)
             elif isinstance(message, SystemMessage):
                 # Surface SDK system events (rate limit, budget hit) in chat.
                 subtype = getattr(message, "subtype", "")
@@ -423,9 +437,21 @@ async def on_message(msg: cl.Message):
     if response_msg.content:
         _append_transcript(run_dir, role="claude", text=response_msg.content)
 
+    # Persist the entire run_dir to a private HF Dataset, async — so a
+    # slow network request doesn't block the next user turn. The user
+    # closing the tab mid-turn means we lose at most one turn's data.
+    asyncio.create_task(_persist_to_hf(run_dir))
+
 
 @cl.on_chat_end
 async def on_chat_end():
+    run_dir_str = cl.user_session.get("run_dir")
+    if run_dir_str:
+        # Final flush — wait for this one (chat is over, latency is fine).
+        try:
+            await _persist_to_hf(Path(run_dir_str))
+        except Exception as e:
+            log.warning("final HF persist failed: %s", e)
     client: ClaudeSDKClient | None = cl.user_session.get("client")
     if client is not None:
         try:
@@ -446,3 +472,82 @@ def _append_transcript(run_dir: Path, *, role: str, text: str) -> None:
     }.get(role, f"## {role} — ")
     line = f"\n{role_header}{_utc_now()}\n\n{text}\n"
     (run_dir / "transcript.md").open("a", encoding="utf-8").write(line)
+
+
+def _log_cost(run_dir: Path, *, turn_cost: float, cumulative: float) -> None:
+    """Append one JSON line to <run_dir>/cost.jsonl per assistant turn.
+
+    Aggregated offline by joining all sessions' cost.jsonl files — gives
+    a quick per-collaborator / per-session / per-model cost breakdown.
+    """
+    line = json.dumps({
+        "at":         _utc_now(),
+        "turn_cost":  round(turn_cost, 6),
+        "cumulative": round(cumulative, 6),
+        "model":      DEFAULT_MODEL,
+        "session":    cl.user_session.get("session_id"),
+        "user":       (cl.user_session.get("user").identifier
+                       if cl.user_session.get("user") else "anon"),
+    })
+    (run_dir / "cost.jsonl").open("a", encoding="utf-8").write(line + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Per-session persistence: upload run_dir to a private HF Dataset repo.
+#
+# Why HF Dataset (vs. push to a git branch): the Space already speaks HF
+# natively and the upload API is just one HTTP call per file — no git
+# config, no commits, no merge-conflict risk under concurrent sessions.
+# Each session lives under its own folder so multiple collaborators can
+# write at once without stepping on each other.
+#
+# Setup checklist (once, on the Space owner's account):
+#   1. https://huggingface.co/new-dataset  -> name `autocodabench-runs`, set Private.
+#   2. https://huggingface.co/settings/tokens -> new token with `write` scope.
+#   3. On the Space: Settings -> Variables and secrets -> add Secret HF_TOKEN
+#      with the token's value. (Optional Variable AUTOCODABENCH_RUNS_REPO to
+#      point at a non-default repo id.)
+# ---------------------------------------------------------------------------
+
+async def _persist_to_hf(run_dir: Path) -> None:
+    """Best-effort upload of run_dir to the private HF Dataset repo.
+
+    No-ops cleanly if HF_TOKEN isn't set (local dev) or if the network is
+    unreachable — we never want analytics shipping to break a live chat.
+    """
+    if not HF_TOKEN:
+        return  # local dev or operator hasn't configured the secret
+    if not run_dir.exists():
+        return
+    try:
+        # Late import so the module can be installed at build time without
+        # the rest of the app caring whether it's actually used.
+        from huggingface_hub import HfApi
+
+        def _do_upload() -> None:
+            api = HfApi(token=HF_TOKEN)
+            # Create the repo lazily — idempotent thanks to exist_ok.
+            api.create_repo(
+                repo_id=HF_RUNS_REPO,
+                repo_type="dataset",
+                private=True,
+                exist_ok=True,
+            )
+            api.upload_folder(
+                folder_path=str(run_dir),
+                repo_id=HF_RUNS_REPO,
+                repo_type="dataset",
+                path_in_repo=run_dir.name,
+                commit_message=f"sync {run_dir.name}",
+                # Avoid hammering HF with binary artifacts in case anything
+                # ever ends up here that doesn't belong. We're shipping
+                # text-only data (markdown, json, jsonl, py, yaml).
+                allow_patterns=["*.md", "*.jsonl", "*.json", "*.txt",
+                                "*.py", "*.yaml", "*.yml", "*.log"],
+            )
+
+        # Run blocking HF I/O off the event loop.
+        await asyncio.to_thread(_do_upload)
+    except Exception as e:
+        # Network blip, token rotated, repo deleted — log and move on.
+        log.warning("HF persist for %s failed: %s", run_dir.name, e)
