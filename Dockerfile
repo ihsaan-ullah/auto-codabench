@@ -38,22 +38,35 @@ COPY --chown=user:user . /app
 #     got corrupted; we install directly from GitHub now — it's not on PyPI).
 #   - auto_codabench: editable from the repo (our own code).
 RUN pip install --upgrade pip && \
+    # Install fastmcp FIRST at the exact version we need. If we wait until
+    # alex-mcp's `fastmcp>=2.8.1` resolves, pip's solver pulls 3.3.1 — and
+    # the subsequent downgrade to 2.14.7 leaves stale 3.3.1 files behind
+    # (specifically the `server/auth/oauth_proxy/` subpackage, which then
+    # shadows 2.14.7's single-file `oauth_proxy.py` and breaks every MCP
+    # server with `ImportError: PrivateKeyJWTClientAuthenticator`).
+    pip install fastmcp==2.14.7 && \
     pip install 'git+https://github.com/drAbreu/alex-mcp.git@v4.8.2' && \
     pip install -e . && \
     pip install -r web/requirements.txt && \
     chown -R user:user /app
 
-# Belt-and-suspenders: force the exact fastmcp version that imports cleanly,
-# *after* every other install that might have pulled a transitive copy. The
-# pin in pyproject.toml + requirements.txt should already do this, but HF
-# layer-caching has bitten us before — and a stale subpackage layout in
-# `fastmcp.server.auth.oauth_proxy` makes every MCP server fail to start.
-# Echo the resolved version so it lands in the build log.
-RUN pip install --no-cache-dir --force-reinstall --no-deps fastmcp==2.14.7 && \
+# Belt-and-suspenders: even with the install order fixed, scorch the
+# fastmcp directory and reinstall once more. `--force-reinstall` alone
+# only removes files listed in pip's RECORD — pip occasionally misses
+# nested files, and an `oauth_proxy/__init__.py` left behind makes
+# Python prefer the (stale) package over the (correct) single .py file.
+RUN python -c "import fastmcp, pathlib, shutil; \
+p = pathlib.Path(fastmcp.__file__).parent; \
+print('wiping', p); \
+shutil.rmtree(p)" && \
+    pip install --no-cache-dir --force-reinstall --no-deps fastmcp==2.14.7 && \
     python -c "import fastmcp, pathlib; \
+p = pathlib.Path(fastmcp.__file__).parent; \
 print('fastmcp at build time:', fastmcp.__version__, '@', fastmcp.__file__); \
-print('oauth_proxy is:', pathlib.Path(fastmcp.__file__).parent / 'server/auth/oauth_proxy.py'); \
-print('  exists as file?', (pathlib.Path(fastmcp.__file__).parent / 'server/auth/oauth_proxy.py').is_file())"
+print('oauth_proxy as file:', (p / 'server/auth/oauth_proxy.py').is_file()); \
+print('oauth_proxy as pkg: ', (p / 'server/auth/oauth_proxy/__init__.py').is_file()); \
+import fastmcp.server.auth.oauth_proxy; \
+print('import OK ->', fastmcp.server.auth.oauth_proxy.__file__)"
 
 USER user
 ENV HOME=/home/user
