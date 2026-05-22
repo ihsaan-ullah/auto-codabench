@@ -275,8 +275,20 @@ def auth_callback(username: str, password: str):
 # Per-session lifecycle
 # ---------------------------------------------------------------------------
 
+# A distinctive phrase that chat.js scans for to lock/unlock the input
+# while we run the heavy init work. Update both ends together if you
+# change this string.
+_INIT_LOCK_PHRASE = "🔒 Initializing AutoCodabench"
+
+
 @cl.on_chat_start
 async def on_chat_start():
+    # Lock the chat input until init finishes — chat.js disables the
+    # textarea while the loading message (with the lock phrase) is on
+    # screen; on_message also rejects messages while `ready` is False
+    # as a Python-side belt-and-suspenders.
+    cl.user_session.set("ready", False)
+
     # 1. Per-session isolated run dir
     session_id = uuid.uuid4().hex[:12]
     user = cl.user_session.get("user")
@@ -288,10 +300,22 @@ async def on_chat_start():
     cl.user_session.set("session_id", session_id)
     cl.user_session.set("started_at", _utc_now())
 
-    # 1b. Self-test: confirm both MCP server modules import in the same
-    # interpreter the SDK will spawn. If not, surface the traceback to the
-    # user immediately — the agent would otherwise see an empty tool list
-    # and produce confusingly tool-less replies.
+    # 2. Loading message — sent FIRST so the user sees something happen
+    # immediately. The lock phrase is what chat.js looks for to disable
+    # input. Once init is done we update the same message in place to
+    # show the greeting (the phrase disappears -> input re-enables).
+    loading_msg = cl.Message(
+        content=(
+            f"{_INIT_LOCK_PHRASE} — please wait, this takes up to 30s "
+            "(spinning up MCP tool servers and the literature index). "
+            "Chat input is locked until I'm ready."
+        ),
+        author="autocodabench",
+    )
+    await loading_msg.send()
+
+    # 3. Self-test: confirm both MCP server modules import. If broken,
+    # surface immediately so the agent doesn't run tool-less.
     mcp_failures = _probe_mcp_imports()
     if mcp_failures:
         await cl.Message(
@@ -304,7 +328,7 @@ async def on_chat_start():
             author="autocodabench",
         ).send()
 
-    # 2. Configure the Claude Agent SDK client
+    # 4. Configure the Claude Agent SDK client
     options = ClaudeAgentOptions(
         model=DEFAULT_MODEL,
         system_prompt=_system_prompt(),
@@ -331,21 +355,32 @@ async def on_chat_start():
     await client.connect()
     cl.user_session.set("client", client)
 
-    # 3. Greeting — minimal. No how-to-read; the top-right toggle button
-    # (injected via web/public/chat.js) carries that, only when the user
-    # actively expands it.
-    greeting = (
+    # 5. Replace the loading message with the greeting (drops the lock
+    # phrase -> chat.js re-enables the input on its next observer tick).
+    loading_msg.content = (
         "**AutoCodabench — Phase 1A: proposal crystallization**\n\n"
         "Tell me a competition idea — a sentence is enough — and I'll "
         "explore the design space with you, citing the literature as we go.\n\n"
         f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
         f"budget ${MAX_USD_PER_SESSION:.2f}_"
     )
-    await cl.Message(content=greeting, author="autocodabench").send()
+    await loading_msg.update()
+
+    cl.user_session.set("ready", True)
 
 
 @cl.on_message
 async def on_message(msg: cl.Message):
+    # If init is still in flight, gently reject. chat.js should have the
+    # input disabled in this state anyway — this is a backstop in case
+    # the user got around the JS lock (e.g. older browser, ad-blocker).
+    if not cl.user_session.get("ready"):
+        await cl.Message(
+            content="_Still initializing — give me a few more seconds._",
+            author="autocodabench",
+        ).send()
+        return
+
     client: ClaudeSDKClient | None = cl.user_session.get("client")
     run_dir = Path(cl.user_session.get("run_dir"))
 

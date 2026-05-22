@@ -101,3 +101,20 @@ form:has(input[type="password"]) > *:has(> button[type="submit"]) {
     color: CanvasText;
 }
 .ac-help-inline b { color: CanvasText; }
+
+
+/* (3) ----- input lock during session init -----------------------
+ *
+ * chat.js adds `.ac-input-locked` to the textarea while the loading
+ * message ("🔒 Initializing AutoCodabench…") is on screen. We grey
+ * the textarea visually so it's obvious the input is dead, even on
+ * browsers that don't render the disabled state strongly.
+ */
+textarea.ac-input-locked {
+    opacity: 0.55;
+    cursor: progress;
+    background: rgba(127, 127, 127, 0.10);
+}
+textarea.ac-input-locked::placeholder {
+    font-style: italic;
+}

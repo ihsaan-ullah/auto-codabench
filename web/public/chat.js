@@ -1,6 +1,6 @@
 /* AutoCodabench chat UI tweaks (loaded as custom_js in chainlit config).
  *
- * Two responsibilities, both DOM-side only:
+ * Three responsibilities, all DOM-side only:
  *
  * 1. Inline help inside expanded tool-step panels.
  *    The agent emits each MCP call as a cl.Step. Chainlit renders it as a
@@ -15,11 +15,22 @@
  *    starts with `Running `, we append three pulsing dots. When the prefix
  *    is gone, we remove them.
  *
+ * 3. Input lock during session init.
+ *    on_chat_start can take 5–30s (MCP probe + SDK connect). app.py sends
+ *    a loading message containing INIT_LOCK_PHRASE while it works, then
+ *    updates that same message in place to the greeting (no phrase).
+ *    Here we scan for the phrase; while it's present, disable the chat
+ *    textarea + send button so the user can't fire a message into a
+ *    session that isn't ready.
+ *
  * Chainlit re-renders aggressively, so everything below is idempotent —
  * safe to call from a MutationObserver on every DOM mutation.
  */
 (function () {
     "use strict";
+
+    // Must match _INIT_LOCK_PHRASE in web/app.py.
+    const INIT_LOCK_PHRASE = "🔒 Initializing AutoCodabench";
 
     // Short, tool-agnostic legend inserted into each expanded step. Kept
     // compact on purpose: the user expands a tool to see the JSON, not to
@@ -113,10 +124,49 @@
         });
     }
 
+    // ---------------------------------------------------------------
+    // (4) Lock the chat input while the loading message is on screen.
+    //
+    // We look for the lock phrase anywhere in the page body's text.
+    // If it's there, the assistant is still initializing — disable
+    // the textarea, swap the placeholder for a "please wait" line,
+    // and mark the send button as disabled. When the loading message
+    // gets replaced by the greeting the phrase disappears, and we
+    // restore the previous state on the next observer tick.
+    // ---------------------------------------------------------------
+    function syncInputLock() {
+        const locked = document.body.textContent.includes(INIT_LOCK_PHRASE);
+        document.querySelectorAll("textarea").forEach((el) => {
+            if (el.disabled === locked) return;  // already in the right state
+            el.disabled = locked;
+            if (locked) {
+                if (el.dataset.acPrevPlaceholder === undefined) {
+                    el.dataset.acPrevPlaceholder = el.placeholder || "";
+                }
+                el.placeholder = "Initializing — please wait (up to 30s)…";
+                el.classList.add("ac-input-locked");
+            } else if (el.dataset.acPrevPlaceholder !== undefined) {
+                el.placeholder = el.dataset.acPrevPlaceholder;
+                delete el.dataset.acPrevPlaceholder;
+                el.classList.remove("ac-input-locked");
+            }
+        });
+        // Send / submit buttons — Chainlit doesn't expose a stable class,
+        // so target by role/aria. Be conservative: only flip state if it
+        // matches our intent.
+        document.querySelectorAll(
+            "button[type='submit'], button[aria-label*='Send' i]"
+        ).forEach((el) => {
+            if (el.disabled === locked) return;
+            el.disabled = locked;
+        });
+    }
+
     function tick() {
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
+        syncInputLock();
     }
 
     if (document.readyState === "loading") {
