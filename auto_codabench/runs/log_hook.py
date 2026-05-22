@@ -114,9 +114,39 @@ _ROLE_HEADER = {
 }
 
 
+def _run_started_at(run_dir: Path) -> str | None:
+    """Read meta.json::started_at so we can drop pre-run history from the mirror.
+
+    Claude Code sessions persist across many `/autocodabench-orchestrator`
+    invocations within the same project — the JSONL contains *everything*
+    since `claude` was launched. To make the transcript a shareable demo
+    of one run, filter messages whose timestamp predates the run's open.
+    """
+    try:
+        return json.loads((run_dir / "meta.json").read_text())["started_at"]
+    except Exception:
+        return None
+
+
+def _ts_for_turn(turn: dict) -> str | None:
+    """Best-effort timestamp string for a session-jsonl row."""
+    return (
+        turn.get("timestamp")
+        or turn.get("ts")
+        or (turn.get("message") or {}).get("timestamp")
+    )
+
+
 def _render_markdown(jsonl_path: Path, run_dir: Path) -> None:
-    """Read session JSONL and write transcript.md / transcript.jsonl."""
-    lines = jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    """Read session JSONL and write transcript.md / transcript.jsonl.
+
+    The full session JSONL is mirrored verbatim as `transcript.jsonl` for
+    auditing. `transcript.md` is filtered to only this run — turns whose
+    timestamp is at or after meta.json::started_at — so the markdown file
+    reads as a self-contained demo of *this* conversation.
+    """
+    raw_text = jsonl_path.read_text(encoding="utf-8", errors="replace")
+    lines = raw_text.splitlines()
     turns = []
     for ln in lines:
         ln = ln.strip()
@@ -127,32 +157,42 @@ def _render_markdown(jsonl_path: Path, run_dir: Path) -> None:
         except json.JSONDecodeError:
             continue
 
-    # Always mirror the raw JSONL — it's the ground truth.
-    (run_dir / "transcript.jsonl").write_text(jsonl_path.read_text(encoding="utf-8"), encoding="utf-8")
+    # Always mirror the raw JSONL — ground truth, full session.
+    (run_dir / "transcript.jsonl").write_text(raw_text, encoding="utf-8")
+
+    started_at = _run_started_at(run_dir)
+    total_count = sum(
+        1 for t in turns if t.get("type") in ("user", "assistant")
+    )
 
     md: list[str] = [
         f"# Transcript — {run_dir.name}",
         "",
         f"_Last refreshed: {_utc_now()}_",
         "",
-        f"_Source: `{jsonl_path}`_",
+        f"_Run started: {started_at or 'unknown'}_  "
+        f"_·  Source: `{jsonl_path.name}` (filtered to this run)_",
         "",
         "Each turn is rendered below. Tool calls and results are folded into "
         "`<details>` blocks. The `transcript.jsonl` next to this file is the "
-        "exact, ground-truth Claude Code session log — use it for any "
-        "programmatic analysis.",
+        "*full*, unfiltered Claude Code session log — use it for programmatic "
+        "analysis. This markdown is the share-friendly per-run view.",
         "",
         "---",
         "",
     ]
 
+    kept = 0
     for turn in turns:
         ttype = turn.get("type")
         if ttype not in ("user", "assistant"):
             continue
+        ts = _ts_for_turn(turn) or ""
+        # Drop pre-run history if we have a reliable run start time.
+        if started_at and ts and ts < started_at:
+            continue
         msg = turn.get("message") or {}
         role = msg.get("role") or ttype
-        ts = turn.get("timestamp") or turn.get("ts") or ""
         header = _ROLE_HEADER.get(role, f"## {role} — ")
         body = _extract_text(msg.get("content") or turn.get("content") or "")
         if not body.strip():
@@ -161,6 +201,15 @@ def _render_markdown(jsonl_path: Path, run_dir: Path) -> None:
         md.append("")
         md.append(body)
         md.append("")
+        kept += 1
+
+    md.append("")
+    md.append("---")
+    md.append("")
+    md.append(
+        f"_Rendered {kept} turn(s) for this run; full session JSONL has "
+        f"{total_count} user/assistant turn(s) total._"
+    )
 
     (run_dir / "transcript.md").write_text("\n".join(md), encoding="utf-8")
 
