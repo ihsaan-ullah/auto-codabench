@@ -23,3 +23,4 @@ alex-mcp/*.gif
 alex-mcp/*.webp
 
 .chainlit/
+test_pdf_folder/

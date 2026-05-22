@@ -90,7 +90,7 @@ a side.
 <2–3 framings the user can pick from, each with a clickable citation,
 OR a single open-ended question.>
 
-[book]: https://link.springer.com/book/10.1007/978-3-031-56599-9
+[book]: https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf
 ```
 
 After this turn, call `autocodabench_log_event(kind="roadmap_shown",
@@ -147,7 +147,7 @@ Every turn from you has roughly this shape:
                  cite, **as a clickable markdown link** the user can
                  open in one click:
                    - book chapter (preferred form):
-                     `[Pavão et al., Ch. X §Y](https://link.springer.com/book/10.1007/978-3-031-56599-9)`
+                     `[Pavão et al., Ch. X §Y](https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf)`
                      — the link goes to the book front matter; readers
                      find the chapter from there.
                    - paper from OpenAlex (preferred form):
@@ -210,7 +210,7 @@ marked **SUGGESTED** before we lock the proposal.
 | # | Dimension | Decision | Source |
 |---|-----------|----------|--------|
 | 1 | Task formulation         | Cross-domain post-hoc detection; γ code-submission. | your call (turn 3) |
-| 2 | Data & splits            | RAID train + held-out generator family in final phase. **SUGGESTED:** CC-BY-NC-SA license. | your call + [Pavão Ch. 3 §3.2](https://link.springer.com/…) |
+| 2 | Data & splits            | RAID train + held-out generator family in final phase. **SUGGESTED:** CC-BY-NC-SA license. | your call + [Pavão Ch. 3 §3.2](https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf) |
 | 3 | Primary metric           | TPR@1%FPR. | your call (turn 5) |
 | 4 | Baseline & starting kit  | **SUGGESTED:** logistic-regression on TF-IDF + DistilBERT fine-tune; both shipped in starting kit. | [Pavão Ch. 6](…) |
 | 5 | Rules & anti-cheating    | **SUGGESTED:** 5 subs/day; mandatory winner-code release for the prize. | [Pavão Ch. 5 §5.7](…) |
@@ -447,7 +447,7 @@ the source in one click:
 - Bare-id form (fallback when no author):
   `[oa:W4382349837](https://openalex.org/W4382349837)`
 - Pavão chapter:
-  `[Pavão et al., Ch. 4 §4.1](https://link.springer.com/book/10.1007/978-3-031-56599-9)`
+  `[Pavão et al., Ch. 4 §4.1](https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf)`
 
 A bare `[oa:Wxxxxx]` token without a URL is **forbidden** — it doesn't
 render as a link, so the user can't check the source.
@@ -819,7 +819,7 @@ exactly as §1.0 requires**:
 >
 > Where would you like to start?
 >
-> [book]: https://link.springer.com/book/10.1007/978-3-031-56599-9
+> [book]: https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf
 
 Notice what this turn does:
 

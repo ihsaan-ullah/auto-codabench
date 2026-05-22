@@ -35,11 +35,11 @@ servers:
 
 You have **two conversations** with Claude:
 
-| Session / Phase | What happens | What gets written | When it ends |
-|-----------------|-------------|-------------------|--------------|
-| **1A — Proposal crystallization** | Open-ended scientific conversation. Claude asks mind-opening questions, surfaces controversies in the literature, cites paper IDs to read. The goal is a NeurIPS-track-style competition proposal. | `auto_codabench/runs/<branch_id>_<runtime_id>/specs/project_proposal.md` (5–15 pages of structured markdown). Plus the run's transcript, events, and tool-call logs. | You say *"the proposal looks sharp"* / *"lock the proposal"* / *"draft the proposal"*. |
-| **1B — Implementation skeleton** (optional, gated) | Claude translates the accepted proposal into 6 implementation specs + an implementation plan. No new design decisions — just translation. | `<run>/specs/01-…06-*.md` and `<run>/implementation_plan.md`. | You say *"ready to implement"* / *"start the specs"*. If you only wanted the proposal, you skip this phase entirely. |
-| **2 — Execution** | A *fresh* chat. Subagents spawned from `implementation_plan.md` write data, scoring program, pages, assemble the bundle, validate, zip. | `auto_codabench/bundles/<slug>.zip` + per-subagent outputs under the same `<run>/artifacts/`. | The packager subagent produces a validated zip; meta-reviewer audits. |
+| Session / Phase                                           | What happens                                                                                                                                                                                       | What gets written                                                                                                                                                       | When it ends                                                                                                            |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **1A — Proposal crystallization**                  | Open-ended scientific conversation. Claude asks mind-opening questions, surfaces controversies in the literature, cites paper IDs to read. The goal is a NeurIPS-track-style competition proposal. | `auto_codabench/runs/<branch_id>_<runtime_id>/specs/project_proposal.md` (5–15 pages of structured markdown). Plus the run's transcript, events, and tool-call logs. | You say*"the proposal looks sharp"* / *"lock the proposal"* / *"draft the proposal"*.                             |
+| **1B — Implementation skeleton** (optional, gated) | Claude translates the accepted proposal into 6 implementation specs + an implementation plan. No new design decisions — just translation.                                                         | `<run>/specs/01-…06-*.md` and `<run>/implementation_plan.md`.                                                                                                      | You say*"ready to implement"* / *"start the specs"*. If you only wanted the proposal, you skip this phase entirely. |
+| **2 — Execution**                                  | A*fresh* chat. Subagents spawned from `implementation_plan.md` write data, scoring program, pages, assemble the bundle, validate, zip.                                                         | `auto_codabench/bundles/<slug>.zip` + per-subagent outputs under the same `<run>/artifacts/`.                                                                       | The packager subagent produces a validated zip; meta-reviewer audits.                                                   |
 
 That separation is the most important rule in this whole repo. If Claude
 ever starts writing bundle files during Session 1, stop it and remind it of
@@ -225,7 +225,8 @@ all of them.
 mkdir -p ~/.claude/skills
 ln -s "$(pwd)/auto_codabench/skills/competition-design"          ~/.claude/skills/competition-design
 ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"            ~/.claude/skills/codabench-bundle
-ln -s "$(pwd)/auto_codabench/skills/autocodabench-orchestrator"  ~/.claude/skills/autocodabench-orchestrator
+ln -s "$(pwd)/auto_codabench/skills/orchestrator"  ~/.claude/skills/autocodabench-orchestrator
+ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement"  ~/.claude/skills/autocodabench-implement
 ```
 
 ### B. Project-scoped (only inside this repo)
@@ -235,6 +236,7 @@ mkdir -p .claude/skills
 ln -s "$(pwd)/auto_codabench/skills/competition-design"          .claude/skills/competition-design
 ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"            .claude/skills/codabench-bundle
 ln -s "$(pwd)/auto_codabench/skills/orchestrator"  .claude/skills/autocodabench-orchestrator
+ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement"  .claude/skills/autocodabench-implement
 ```
 
 Restart Claude (Desktop) or relaunch `claude` (Code). Type `/skills` —
@@ -519,6 +521,7 @@ Tunable env vars for SS (when re-enabled):
 `SEMANTIC_SCHOLAR_UNAUTH_RATE` (40 / 5 min),
 `SEMANTIC_SCHOLAR_DISABLE_CACHE=1`,
 `SEMANTIC_SCHOLAR_CACHE_TTL_SECONDS` (600).
+
 - The API occasionally has cold starts. If a search returns nothing,
   ask Claude to retry once.
 
@@ -566,21 +569,21 @@ Every run dir also writes its own `README.md` at session-open time that
 mirrors this table and includes context-specific `jq` snippets — that
 README is the most up-to-date reference for any given run.
 
-| File / dir | What it tells you |
-|------------|-------------------|
-| **`README.md`** | Auto-written cheatsheet for THIS run. Same info as the table below, plus `jq` recipes pre-filled with the run's name. **Read this first.** |
-| **`transcript.md`** | The full natural-language Claude ↔ user conversation, rendered with role headers (👤 user / 🤖 claude). Tool calls and results are folded into `<details>` blocks so the prose stays readable. Mirrored after every assistant turn by the Claude Code `Stop` hook. |
-| **`transcript.jsonl`** | Raw Claude Code session log (one JSON object per turn). Ground truth for programmatic analysis. |
-| `meta.json` | When the run started, what git branch + SHA, conda env, pid, slug |
-| `events.jsonl` | Structured timeline. One JSON object per line. `kind` = `run_opened`, `tool_call_started`, `hook_fired`, `question_asked`, `ss_searched`, `proposal_made`, `spec_written`, `iter1_done`, etc. (see orchestrator skill §11) |
-| `tool_calls/NNNN_<tool>.json` | Full request + response of every MCP tool call, in order. Includes args, return value, duration_ms, error if any. |
-| **`specs/project_proposal.md`** | The Phase 1A artifact — a NeurIPS-track-style competition proposal (5–15 pages). This is the source of truth for the whole rest of the workflow. |
-| `specs/01-…06-*.md` | Phase 1B artifacts (only if you triggered Phase 1B). Implementation specs derived FROM the proposal. |
-| `specs_history/` | Every rewrite of every spec / proposal, timestamp-suffixed. `diff` adjacent ones to see what Claude changed. |
-| `implementation_plan.md` | The Session-2 input (only if you triggered Phase 1B). Lists subagents and what each will do. |
-| `mcp_stderr/autocodabench.log` | Stderr from the autocodabench MCP server — useful when a tool errored silently. |
-| `mcp_stderr/hook_errors.log` | (Only if non-empty) Errors from the transcript-mirroring hook. |
-| `artifacts/<subagent>/` | Session-2 output: model checkpoints, plots, the meta-reviewer's report. |
+| File / dir                              | What it tells you                                                                                                                                                                                                                                                       |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`README.md`**                 | Auto-written cheatsheet for THIS run. Same info as the table below, plus `jq` recipes pre-filled with the run's name. **Read this first.**                                                                                                                      |
+| **`transcript.md`**             | The full natural-language Claude ↔ user conversation, rendered with role headers (👤 user / 🤖 claude). Tool calls and results are folded into `<details>` blocks so the prose stays readable. Mirrored after every assistant turn by the Claude Code `Stop` hook. |
+| **`transcript.jsonl`**          | Raw Claude Code session log (one JSON object per turn). Ground truth for programmatic analysis.                                                                                                                                                                         |
+| `meta.json`                           | When the run started, what git branch + SHA, conda env, pid, slug                                                                                                                                                                                                       |
+| `events.jsonl`                        | Structured timeline. One JSON object per line.`kind` = `run_opened`, `tool_call_started`, `hook_fired`, `question_asked`, `ss_searched`, `proposal_made`, `spec_written`, `iter1_done`, etc. (see orchestrator skill §11)                            |
+| `tool_calls/NNNN_<tool>.json`         | Full request + response of every MCP tool call, in order. Includes args, return value, duration_ms, error if any.                                                                                                                                                       |
+| **`specs/project_proposal.md`** | The Phase 1A artifact — a NeurIPS-track-style competition proposal (5–15 pages). This is the source of truth for the whole rest of the workflow.                                                                                                                      |
+| `specs/01-…06-*.md`                  | Phase 1B artifacts (only if you triggered Phase 1B). Implementation specs derived FROM the proposal.                                                                                                                                                                    |
+| `specs_history/`                      | Every rewrite of every spec / proposal, timestamp-suffixed.`diff` adjacent ones to see what Claude changed.                                                                                                                                                           |
+| `implementation_plan.md`              | The Session-2 input (only if you triggered Phase 1B). Lists subagents and what each will do.                                                                                                                                                                            |
+| `mcp_stderr/autocodabench.log`        | Stderr from the autocodabench MCP server — useful when a tool errored silently.                                                                                                                                                                                        |
+| `mcp_stderr/hook_errors.log`          | (Only if non-empty) Errors from the transcript-mirroring hook.                                                                                                                                                                                                          |
+| `artifacts/<subagent>/`               | Session-2 output: model checkpoints, plots, the meta-reviewer's report.                                                                                                                                                                                                 |
 
 ### Useful commands
 
@@ -638,27 +641,27 @@ explicitly at the start of the next conversation.
 
 ### Paths you'll touch
 
-| Path                                                                | What                          |
-| ------------------------------------------------------------------- | ----------------------------- |
-| `~/.claude/skills/` (or `.claude/skills/`)                      | Skill symlinks                |
-| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config            |
-| `.mcp.json` (repo root)                                           | Claude Code MCP config (managed via `claude mcp add`) |
-| `.env` (repo root)                                                | API keys, gitignored          |
+| Path                                                                | What                                                                       |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `~/.claude/skills/` (or `.claude/skills/`)                      | Skill symlinks                                                             |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config                                                         |
+| `.mcp.json` (repo root)                                           | Claude Code MCP config (managed via `claude mcp add`)                    |
+| `.env` (repo root)                                                | API keys, gitignored                                                       |
 | `auto_codabench/runs/<branch_id>_<runtime_id>/`                   | All artifacts of one session (gitignored): specs, plan, events, tool calls |
-| `auto_codabench/runs/LATEST`                                      | Symlink to the most recent run |
-| `auto_codabench/bundles/<slug>/`                                  | Generated bundle (gitignored) |
-| `auto_codabench/bundles/<slug>.zip`                               | What you upload               |
+| `auto_codabench/runs/LATEST`                                      | Symlink to the most recent run                                             |
+| `auto_codabench/bundles/<slug>/`                                  | Generated bundle (gitignored)                                              |
+| `auto_codabench/bundles/<slug>.zip`                               | What you upload                                                            |
 
 ### The 13 autocodabench tools (so you can read Claude's tool calls)
 
 **Runs (Session 1 and Session 2 — manage the run dir):**
 
-| Tool                              | When it runs                                                 |
-| --------------------------------- | ------------------------------------------------------------ |
-| `autocodabench_open_run`        | First MCP call of every session — opens the run dir         |
-| `autocodabench_current_run`     | Sanity-check that a run is open                              |
-| `autocodabench_log_event`       | Each milestone (question asked, SS searched, proposal made, …) |
-| `autocodabench_snapshot_spec`   | Every spec write (also keeps a versioned copy)               |
+| Tool                            | When it runs                                                    |
+| ------------------------------- | --------------------------------------------------------------- |
+| `autocodabench_open_run`      | First MCP call of every session — opens the run dir            |
+| `autocodabench_current_run`   | Sanity-check that a run is open                                 |
+| `autocodabench_log_event`     | Each milestone (question asked, SS searched, proposal made, …) |
+| `autocodabench_snapshot_spec` | Every spec write (also keeps a versioned copy)                  |
 
 **Bundle (Session 2 only):**
 
@@ -716,6 +719,7 @@ PY
      /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m alex_mcp.server
    claude mcp list   # both should print ✓ Connected
    ```
+
    (Or, for Claude Desktop: edit `claude_desktop_config.json` per §4 and restart.)
 4. Symlink the three skills into `~/.claude/skills/` (§5).
 5. New Claude chat: `/autocodabench-orchestrator` + your one-sentence idea.
