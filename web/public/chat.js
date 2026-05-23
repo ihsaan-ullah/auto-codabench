@@ -273,16 +273,22 @@
     }
 
     function _setPanelCollapsed(panel, collapsed) {
+        // Use data-state as the primary hook (resistant to React
+        // re-renders that may strip our classes); class is also set
+        // for older CSS rules that target it.
+        panel.setAttribute("data-state", collapsed ? "collapsed" : "open");
         panel.classList.toggle("ac-collapsed", collapsed);
-        // Only reserve right-side body padding when the panel is open;
-        // otherwise the chat takes the full viewport width.
+        panel.setAttribute("aria-expanded", String(!collapsed));
+        // Only reserve right-side body padding when the panel is OPEN.
+        // Collapsed sliver is small enough to overlay the chat edge.
         document.body.classList.toggle("ac-side-active", !collapsed);
         const btn = panel.querySelector("#ac-side-collapse");
         if (btn) {
             btn.innerHTML = collapsed ? "📁 Workspace" : "›";
             btn.title = collapsed
-                ? "Open the workspace panel (notebook, transcript, …)"
+                ? "Open workspace (notebook, transcript, …)"
                 : "Collapse the workspace panel";
+            btn.setAttribute("aria-label", btn.title);
         }
     }
 
@@ -293,14 +299,20 @@
         if (!document.querySelector("textarea")) return; // login screen
         const panel = document.createElement("aside");
         panel.id = "ac-side-panel";
+        // Pre-set data-state in the HTML so first paint reflects the
+        // collapsed sizing before JS runs again.
+        panel.setAttribute("data-state", "collapsed");
+        panel.setAttribute("aria-expanded", "false");
         panel.innerHTML = `
             <header class="ac-side-header">
                 <span class="ac-side-title">📁 Workspace</span>
                 <div class="ac-side-actions">
                     <button id="ac-side-refresh" type="button"
-                            title="Reload the active file">↻</button>
+                            title="Reload the active file"
+                            aria-label="Reload">↻</button>
                     <button id="ac-side-collapse" type="button"
-                            title="Collapse the panel">›</button>
+                            title="Open workspace"
+                            aria-label="Open workspace">📁 Workspace</button>
                 </div>
             </header>
             <div class="ac-tabs"></div>
@@ -309,27 +321,52 @@
                     sandbox="allow-same-origin"></iframe>
         `;
         document.body.appendChild(panel);
-
-        // Start collapsed — chat takes the whole page. User opens the
-        // panel when they want to see the notebook / transcript / etc.
+        // Sync class/state after the panel is in the DOM (we set
+        // data-state in HTML for first-paint, but need to set the
+        // class + body state too).
         _setPanelCollapsed(panel, true);
 
         const iframe = panel.querySelector("#ac-side-iframe");
-        panel.querySelector("#ac-side-refresh").addEventListener("click", () => {
+
+        // -----  Click model  -----
+        //
+        // (1) Whole panel: clicks open it when collapsed. This makes
+        //     the 44px sliver fully clickable rather than requiring
+        //     a tiny button hit. We early-return when not collapsed
+        //     so iframe / tab clicks in the open state aren't hijacked.
+        panel.addEventListener("click", (e) => {
+            if (panel.getAttribute("data-state") !== "collapsed") return;
+            // Open.
+            _setPanelCollapsed(panel, false);
+            // Pull a fresh manifest right away so the user sees current
+            // content immediately, not stale or empty placeholders.
+            _refreshSidePanelFromManifest();
+        });
+
+        // (2) Refresh button in the OPEN-state header.
+        panel.querySelector("#ac-side-refresh").addEventListener("click", (e) => {
+            e.stopPropagation();  // don't bubble to the panel listener
             const active = panel.querySelector(".ac-tab-active");
             if (active) iframe.src = active.dataset.url + `?t=${Date.now()}`;
         });
-        panel.querySelector("#ac-side-collapse").addEventListener("click", () => {
-            const becomingCollapsed = !panel.classList.contains("ac-collapsed");
-            _setPanelCollapsed(panel, becomingCollapsed);
-            // When opening, immediately fetch the latest manifest so
-            // the user doesn't see stale content.
-            if (!becomingCollapsed) _refreshSidePanelFromManifest();
+
+        // (3) Collapse / open toggle button. Stops propagation so the
+        //     panel-level "open on any click" doesn't immediately
+        //     re-open after we just closed.
+        panel.querySelector("#ac-side-collapse").addEventListener("click", (e) => {
+            e.stopPropagation();
+            const isCollapsedNow = panel.getAttribute("data-state") === "collapsed";
+            _setPanelCollapsed(panel, !isCollapsedNow);
+            if (isCollapsedNow) _refreshSidePanelFromManifest();
         });
 
-        // First fetch + then periodic refresh every 3.5 s. We
-        // intentionally don't poll the file URL directly — the
-        // manifest tells us when there's something new.
+        // (4) Tab strip — also stop propagation when clicking tab buttons.
+        panel.querySelector(".ac-tabs").addEventListener("click", (e) => {
+            e.stopPropagation();
+        });
+
+        // First fetch + then periodic refresh every 3.5 s, but only
+        // while the panel is OPEN (see _refreshSidePanelFromManifest).
         _refreshSidePanelFromManifest();
         setInterval(_refreshSidePanelFromManifest, 3500);
     }
