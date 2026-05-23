@@ -115,7 +115,19 @@ covered.
 
 ## 2. Stage 1 — Generate the full starting kit in one pass
 
-This is THE main move. Call once:
+This is THE main move. Before any tool calls, **explicitly announce
+the transition** in one short sentence to the user — something like:
+
+> Starting kit development in progress — I'll write all 7 sections in
+> one pass; you'll see the progress checklist update below and the
+> notebook fill in on the right panel.
+
+That phrasing matters: the web UI surfaces an in-chat **"Starting Kit
+development progress"** checklist that updates as your `stage_done`
+events land. Telling the user what's happening anchors the
+checklist visually.
+
+Then call once:
 
 ```
 autocodabench_nb_init()

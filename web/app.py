@@ -476,14 +476,14 @@ async def on_chat_start():
     await client.connect()
     cl.user_session.set("client", client)
 
-    # 3b. Stage-progress strip is created LAZILY — only when the
-    # agent actually starts writing the notebook. During the roadmap
-    # conversation there's nothing to show progress for; making the
-    # strip visible from session start clutters the UI. See
-    # `_refresh_task_list` for the on-demand creation logic.
-    cl.user_session.set("task_list", None)
-    cl.user_session.set("tasks_by_stage", {})
-    cl.user_session.set("events_cursor", 0)  # byte offset into events.jsonl
+    # 3b. Stage-progress is displayed as an in-chat message ("Starting
+    # Kit development progress"), not the right-side cl.TaskList. The
+    # right sidebar was confusing — users didn't know the rows meant
+    # notebook sections. Progress lives in the conversation flow now.
+    # Created lazily on the first build event (see _refresh_progress).
+    cl.user_session.set("progress_msg", None)
+    cl.user_session.set("section_status", {})       # stage_id -> "ready|running|done|failed"
+    cl.user_session.set("events_cursor", 0)         # byte offset into events.jsonl
     cl.user_session.set("show_progress", False)
 
     # 4. Greeting — this contains READY_PHRASE ("Tell me a competition
@@ -727,12 +727,12 @@ async def on_message(msg: cl.Message):
     # transcript + cost + specs as HTML, plus a manifest.json). The
     # always-visible right panel injected by chat.js fetches these
     # from `/public/sessions/<sid>/...` — the workspace panel is the
-    # ONLY file viewer. We deliberately don't push inline element
-    # chips or populate Chainlit's ElementSidebar anymore: they were
-    # noise on top of the workspace panel.
+    # ONLY file viewer.
     _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
-    # Bump the stage-progress strip off any new events.jsonl lines.
+    # Update the in-chat "Starting Kit development progress" message.
     await _refresh_task_list(run_dir)
+    # If stage 8 just produced a bundle, offer download + upload once.
+    await _maybe_offer_bundle_actions()
 
     # Persist the entire run_dir to a private HF Dataset, async — so a
     # slow network request doesn't block the next user turn. The user
@@ -935,6 +935,93 @@ async def _refresh_legacy_bundle_gate(run_dir: Path) -> None:
 # Stage-action callbacks
 # ---------------------------------------------------------------------------
 
+async def _maybe_offer_bundle_actions() -> None:
+    """Surface a 'Download / Upload' message once stage 8's zip exists.
+
+    Fires at most once per session — `bundle_actions_offered` flag.
+    The bundle's location is `auto_codabench/bundles/<slug>/<slug>.zip`
+    (the agent's zip_bundle tool puts it there); we mirror it to the
+    per-session public dir from _write_public_artifacts. Download =
+    direct link to that public file. Upload = cl.Action triggering
+    `autocodabench_upload_bundle`.
+    """
+    if cl.user_session.get("bundle_actions_offered"):
+        return
+    run_dir = Path(cl.user_session.get("run_dir") or ".")
+    session_id = cl.user_session.get("session_id") or ""
+    if not session_id:
+        return
+    public_zip = _PUBLIC_SESSIONS / session_id / "bundle.zip"
+    if not public_zip.is_file():
+        return
+    cl.user_session.set("bundle_actions_offered", True)
+
+    size_mb = public_zip.stat().st_size / (1024 * 1024)
+    download_url = f"/public/sessions/{session_id}/bundle.zip"
+    actions = [
+        cl.Action(name="ac_upload_codabench",
+                  payload={"zip_path": str(public_zip)},
+                  label="⬆️ Upload to Codabench",
+                  tooltip="Publishes the bundle to Codabench using "
+                          "CODABENCH_USERNAME / CODABENCH_PASSWORD "
+                          "from the Space's Repository Secrets. "
+                          "Returns the competition URL when finished."),
+    ]
+    await cl.Message(
+        author="autocodabench",
+        content=(
+            f"## 📦 Bundle ready ({size_mb:.1f} MB)\n\n"
+            f"**[📥 Download bundle.zip]({download_url})** — click to "
+            f"save it locally; the same link is in the workspace "
+            f"panel's `📦 bundle.zip` tab.\n\n"
+            f"Or click below to publish it directly to Codabench. "
+            f"You'll see the competition URL when the upload finishes."
+        ),
+        actions=actions,
+    ).send()
+
+
+@cl.action_callback("ac_upload_codabench")
+async def _on_upload_codabench(action: cl.Action):
+    """Run autocodabench_upload_bundle through the agent and show progress."""
+    p = action.payload or {}
+    run_dir = Path(cl.user_session.get("run_dir") or ".")
+    # Find the slug — the bundle dir name under auto_codabench/bundles/.
+    bundle_src = _find_bundle_zip(run_dir)
+    slug = bundle_src.parent.name if bundle_src else None
+    if not slug:
+        await cl.Message(
+            author="autocodabench",
+            content="❌ Couldn't find the bundle slug. Re-run stage 8 first.",
+        ).send()
+        return
+    # Surface a status step so the user can watch.
+    step = cl.Step(name=f"Uploading {slug} to Codabench…", type="tool",
+                   show_input="json")
+    step.input = {"slug": slug}
+    await step.send()
+    _append_transcript(run_dir, role="user",
+                       text=f"[ui] Upload bundle '{slug}' to Codabench.")
+    # The agent (in PHASE_IMPLEMENTATION) has the upload tool;
+    # synthesise a turn asking it to run upload_bundle and surface
+    # the competition URL.
+    await _stream_one_turn(
+        run_dir,
+        f"The user clicked **Upload to Codabench**. Call "
+        f"`autocodabench_upload_bundle(slug='{slug}')` NOW. When it "
+        f"returns, surface the `competition_url` as a clickable "
+        f"markdown link, prominently. If the call fails (bad "
+        f"credentials, network), report the error verbatim and "
+        f"suggest the user verify CODABENCH_USERNAME / "
+        f"CODABENCH_PASSWORD in the Space's Repository Secrets.",
+    )
+    try:
+        step.output = "Upload kicked off — watch the tool chips above for the URL."
+        await step.update()
+    except Exception:
+        pass
+
+
 @cl.action_callback("ac_section_refine")
 async def _on_section_refine(action: cl.Action):
     """User picked a section to refine — open a new writing pass."""
@@ -949,18 +1036,18 @@ async def _on_section_refine(action: cl.Action):
     cl.user_session.set("gate_pass_id",
                         int(cl.user_session.get("gate_pass_id", 0)) + 1)
 
-    # Mark this section as RUNNING; later-section task states left alone
-    # (in the new model, all sections coexist; refining one doesn't
-    # invalidate the others).
-    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
-    if section in tasks:
-        tasks[section].status = cl.TaskStatus.RUNNING
-        tl = cl.user_session.get("task_list")
-        if tl is not None:
-            try:
-                await tl.send()
-            except Exception:
-                pass
+    # Bump this section back to "running" in the in-chat progress.
+    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
+    if section in section_status:
+        section_status[section] = "running"
+    cl.user_session.set("section_status", section_status)
+    progress_msg = cl.user_session.get("progress_msg")
+    if progress_msg is not None:
+        progress_msg.content = _render_progress_markdown(section_status)
+        try:
+            await progress_msg.update()
+        except Exception:
+            pass
 
     title = _STAGE_TITLE.get(section, section)
     _append_transcript(run_dir, role="user",
@@ -985,19 +1072,19 @@ async def _on_section_refine(action: cl.Action):
 async def _on_build_bundle(action: cl.Action):
     """User approved the whole notebook — switch to implementation + run stage 8."""
     run_dir = Path(cl.user_session.get("run_dir"))
-    # Mark all 7 design sections as DONE (the user just approved them
-    # collectively); 8.bundle goes RUNNING.
-    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
+    # Mark all 7 design sections DONE in the in-chat progress; bundle
+    # goes RUNNING.
+    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
     for sid in ("1.task", "2.data", "3.metric", "4.baseline_kit",
                 "5.rules", "6.ethics", "7.schedule"):
-        if sid in tasks:
-            tasks[sid].status = cl.TaskStatus.DONE
-    if "8.bundle" in tasks:
-        tasks["8.bundle"].status = cl.TaskStatus.RUNNING
-    tl = cl.user_session.get("task_list")
-    if tl is not None:
+        section_status[sid] = "done"
+    section_status["8.bundle"] = "running"
+    cl.user_session.set("section_status", section_status)
+    progress_msg = cl.user_session.get("progress_msg")
+    if progress_msg is not None:
+        progress_msg.content = _render_progress_markdown(section_status)
         try:
-            await tl.send()
+            await progress_msg.update()
         except Exception:
             pass
     await _switch_to_implementation_for_bundle(run_dir)
@@ -1049,16 +1136,17 @@ async def _switch_to_implementation_for_bundle(run_dir: Path) -> None:
     await new_client.connect()
     cl.user_session.set("client", new_client)
 
-    # TaskList: stage 8 starts now.
-    tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
-    if "8.bundle" in tasks:
-        tasks["8.bundle"].status = cl.TaskStatus.RUNNING
-        tl = cl.user_session.get("task_list")
-        if tl is not None:
-            try:
-                await tl.send()
-            except Exception:
-                pass
+    # In-chat progress: bundle stage → RUNNING.
+    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
+    section_status["8.bundle"] = "running"
+    cl.user_session.set("section_status", section_status)
+    progress_msg = cl.user_session.get("progress_msg")
+    if progress_msg is not None:
+        progress_msg.content = _render_progress_markdown(section_status)
+        try:
+            await progress_msg.update()
+        except Exception:
+            pass
 
     await cl.Message(
         author="autocodabench",
@@ -1177,10 +1265,10 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                     is_error=part["is_error"],
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
-    # Same panel + task-list refresh as the regular on_message path.
-    # No inline-chip drawer — the workspace panel is the file viewer.
+    # Same panel + progress refresh as the regular on_message path.
     _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
     await _refresh_task_list(run_dir)
+    await _maybe_offer_bundle_actions()
     asyncio.create_task(_persist_to_hf(run_dir))
 
 
@@ -1344,10 +1432,15 @@ def _extract_attachment_text(element) -> tuple[str, str] | None:
 # ---------------------------------------------------------------------------
 
 def _render_notebook_html(run_dir: Path) -> str | None:
-    """Read <run>/starting_kit.ipynb and produce sanitised HTML.
+    """Read <run>/starting_kit.ipynb and produce GitHub-style HTML.
 
-    Returns None if the file doesn't exist yet (no cells written), so
-    the caller can skip the sidebar update on early turns.
+    Uses nbconvert's `classic` template — full Jupyter-classic CSS:
+    cell borders, In[]/Out[] prompts, Pygments syntax highlighting,
+    monospace code, indented outputs. The `basic` template we used
+    before was a structural skeleton only and looked like plain text.
+
+    Returns None if the file doesn't exist yet (no cells written),
+    so the caller can skip the sidebar update on early turns.
     """
     nb_path = run_dir / "starting_kit.ipynb"
     if not nb_path.is_file():
@@ -1358,7 +1451,11 @@ def _render_notebook_html(run_dir: Path) -> str | None:
         nb = nbformat.read(nb_path, as_version=4)
         if not nb.cells:
             return None
-        exporter = HTMLExporter(template_name="basic")
+        # `classic` ships with stock nbconvert and embeds enough CSS
+        # (cell wrappers, Pygments) for the output to look like a
+        # rendered Jupyter notebook on GitHub. No external scripts
+        # required, which keeps the sandboxed iframe happy.
+        exporter = HTMLExporter(template_name="classic")
         body, _ = exporter.from_notebook_node(nb)
         return body
     except Exception as e:
@@ -1377,6 +1474,22 @@ def _public_session_dir(session_id: str) -> Path:
     p = _PUBLIC_SESSIONS / session_id
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _find_bundle_zip(run_dir: Path) -> Path | None:
+    """Locate the most-recent .zip the agent's stage-8 packaging wrote.
+
+    Bundles live under `auto_codabench/bundles/<slug>/<slug>.zip` (the
+    bundle-write tools default), not inside the run dir. We pick the
+    most-recently-modified one — there's normally one slug per run.
+    """
+    bundles_root = REPO_ROOT / "auto_codabench" / "bundles"
+    if not bundles_root.is_dir():
+        return None
+    candidates = list(bundles_root.glob("*/*.zip"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
@@ -1481,6 +1594,15 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 encoding="utf-8",
             )
 
+        # --- bundle.zip: copy to public dir so it's downloadable ---
+        bundle_src = _find_bundle_zip(run_dir)
+        bundle_pub = out / "bundle.zip"
+        if bundle_src is not None:
+            try:
+                shutil.copyfile(bundle_src, bundle_pub)
+            except Exception as e:
+                log.warning("bundle copy failed: %s", e)
+
         # --- manifest.json: drives the panel's tab strip ---
         manifest = {
             "session_id": session_id,
@@ -1494,6 +1616,13 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 },
             ],
         }
+        if bundle_pub.is_file():
+            manifest["files"].append({
+                "name": "📦 bundle.zip (download)",
+                "url":  f"/public/sessions/{session_id}/bundle.zip",
+                "kind": "bundle",
+                "ready": True,
+            })
         if (out / "transcript.html").is_file():
             manifest["files"].append({
                 "name": "📄 transcript.md",
@@ -1522,21 +1651,46 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
         log.warning("public artifacts write failed: %s", e)
 
 
+_PROGRESS_ICONS = {
+    "ready":   "⏵",
+    "running": "🟡",
+    "done":    "✅",
+    "failed":  "❌",
+}
+
+
+def _render_progress_markdown(section_status: dict[str, str]) -> str:
+    """Render the 'Starting Kit development progress' message body."""
+    overall_done = all(s == "done" for s in section_status.values() if s)
+    any_running  = any(s == "running" for s in section_status.values())
+    any_failed   = any(s == "failed"  for s in section_status.values())
+    if any_failed:
+        headline = "**🛠 Starting Kit development progress — ⚠️ stage failed**"
+    elif overall_done and section_status:
+        headline = "**🛠 Starting Kit development progress — ✅ complete**"
+    elif any_running:
+        headline = "**🛠 Starting Kit development progress — in progress**"
+    else:
+        headline = "**🛠 Starting Kit development progress**"
+    lines = [headline, ""]
+    for stage, title in STAGE_TITLES:
+        if stage == "0.roadmap":
+            continue
+        st = section_status.get(stage, "ready")
+        icon = _PROGRESS_ICONS.get(st, "⏵")
+        suffix = " — *running*" if st == "running" else ""
+        lines.append(f"{icon} {title}{suffix}")
+    return "\n".join(lines)
+
+
 async def _refresh_task_list(run_dir: Path) -> None:
-    """Drive the cl.TaskList off events.jsonl — LAZY-create it on first build event.
+    """Drive the in-chat 'Starting Kit development progress' message.
 
-    The TaskList is created only when the agent actually starts
-    writing notebook sections (first `stage_started` event for any
-    of `1.task` through `7.schedule`). During the roadmap
-    conversation there's no progress to show, and showing the strip
-    clutters the UI.
-
-    Cursor-based tail: scans only events since the last call. Stage
-    status transitions:
-      stage_started   → RUNNING
-      stage_done      → DONE
-      stage_approved  → DONE (user clicked Approve)
-      stage_failed    → FAILED
+    Previously this rendered a cl.TaskList in the right sidebar — that
+    UI was confusing (rows looked like generic 'Tasks'). Progress is
+    now a single, in-chat message that we keep updating as section
+    statuses change. Lazy-created on the first build event for any of
+    `1.task` ... `8.bundle`.
     """
     events_path = run_dir / "events.jsonl"
     if not events_path.is_file():
@@ -1565,7 +1719,7 @@ async def _refresh_task_list(run_dir: Path) -> None:
         except Exception:
             continue
 
-    # --- Trigger "show progress" on the first build-event we see ---
+    # --- Detect "should we show progress yet?" on first build event ---
     show_progress = bool(cl.user_session.get("show_progress") or False)
     if not show_progress:
         for ev in parsed:
@@ -1573,86 +1727,60 @@ async def _refresh_task_list(run_dir: Path) -> None:
             stage = payload.get("stage")
             if stage and stage in _STAGE_BY_ID:
                 si = _STAGE_BY_ID[stage]
-                if ev.get("kind") in ("stage_started", "stage_done", "stage_approved",
-                                      "stage_failed") and 1 <= si <= 8:
+                if ev.get("kind") in ("stage_started", "stage_done",
+                                      "stage_approved", "stage_failed") and 1 <= si <= 8:
                     show_progress = True
                     cl.user_session.set("show_progress", True)
                     break
 
-    # If we still haven't started building, no TaskList work needed.
     if not show_progress:
-        # ...but the legacy implementation_plan.md gate can still fire
-        # for old sessions; check that.
+        # Pre-PR4 legacy fallback still applies for old sessions.
         await _refresh_legacy_bundle_gate(run_dir)
         return
 
-    # --- Lazy-create TaskList on first build event ---
-    task_list = cl.user_session.get("task_list")
-    tasks_by_stage: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
-    if task_list is None:
-        task_list = cl.TaskList()
-        task_list.status = "Building starting kit"
-        tasks_by_stage = {}
-        for stage, title in STAGE_TITLES:
+    # --- Apply event status changes to the section_status dict ---
+    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
+    if not section_status:
+        # Initialize all design sections as "ready" the first time we
+        # decide to render progress.
+        for stage, _ in STAGE_TITLES:
             if stage == "0.roadmap":
-                continue  # Roadmap is conversation, not "progress"
-            t = cl.Task(title=title, status=cl.TaskStatus.READY)
-            tasks_by_stage[stage] = t
-            await task_list.add_task(t)
-        try:
-            await task_list.send()
-        except Exception as e:
-            log.warning("task_list send failed: %s", e)
-        cl.user_session.set("task_list", task_list)
-        cl.user_session.set("tasks_by_stage", tasks_by_stage)
+                continue
+            section_status[stage] = "ready"
 
-    # --- Apply status changes from the just-parsed events ---
     changed = False
     for ev in parsed:
         kind = ev.get("kind")
         payload = ev.get("payload") or {}
         stage = payload.get("stage")
-        if not stage or stage not in tasks_by_stage:
+        if not stage or stage not in section_status:
             continue
-        task = tasks_by_stage[stage]
-        if kind == "stage_started":
-            if task.status != cl.TaskStatus.DONE:
-                task.status = cl.TaskStatus.RUNNING
-                changed = True
+        old = section_status[stage]
+        if kind == "stage_started" and old != "done":
+            section_status[stage] = "running"; changed = True
         elif kind in ("stage_done", "stage_approved"):
-            if task.status != cl.TaskStatus.DONE:
-                task.status = cl.TaskStatus.DONE
-                changed = True
+            section_status[stage] = "done"; changed = True
         elif kind == "stage_failed":
-            if task.status != cl.TaskStatus.FAILED:
-                task.status = cl.TaskStatus.FAILED
-                changed = True
+            section_status[stage] = "failed"; changed = True
+    cl.user_session.set("section_status", section_status)
 
-    # --- Update title-line status ---
-    statuses = {t.status for t in tasks_by_stage.values()}
-    if cl.TaskStatus.FAILED in statuses:
-        new_top = "Stage failed"
-    elif cl.TaskStatus.RUNNING in statuses:
-        new_top = "Building starting kit"
-    elif statuses == {cl.TaskStatus.DONE}:
-        new_top = "All sections done"
-    elif cl.TaskStatus.DONE in statuses:
-        new_top = "In progress"
-    else:
-        new_top = "Ready"
-    if task_list.status != new_top:
-        task_list.status = new_top
-        changed = True
-
-    if changed:
+    # --- Send / update the progress message ---
+    progress_msg = cl.user_session.get("progress_msg")
+    body = _render_progress_markdown(section_status)
+    if progress_msg is None:
+        progress_msg = cl.Message(content=body, author="autocodabench")
+        await progress_msg.send()
+        cl.user_session.set("progress_msg", progress_msg)
+    elif changed:
+        progress_msg.content = body
         try:
-            await task_list.send()
+            await progress_msg.update()
         except Exception as e:
-            log.warning("task_list send failed: %s", e)
+            log.warning("progress msg update failed: %s", e)
 
-    # Section-picker gate trigger.
-    for stage_id, task in tasks_by_stage.items():
-        if task.status == cl.TaskStatus.DONE:
+    # Section-picker gate trigger on any DONE.
+    for stage_id, st in section_status.items():
+        if st == "done":
             await _maybe_offer_stage_gate(run_dir, stage_id)
 
     await _refresh_legacy_bundle_gate(run_dir)
