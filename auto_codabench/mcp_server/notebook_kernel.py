@@ -40,15 +40,20 @@ CELL_TIMEOUT_S = 60
 # Stage names — must stay in sync with web/app.py's TaskList nodes and
 # the orchestrator skill's stage table.
 STAGES = [
-    "0.roadmap",      # design-only, no cells
-    "1.setup",
-    "2.data",
-    "3.eda",
-    "4.metric",
-    "5.baseline",
-    "6.predict_score",
-    "7.diagnostics",
-    "8.bundle",       # packaging — runs autocodabench bundle-write tools
+    # The user's original 7-row competition-design checklist mapped onto
+    # notebook sections. After the roadmap conversation (0), the agent
+    # writes the ENTIRE starting kit in one pass — every section is
+    # present in version-1 with demo code that runs end-to-end.
+    # Iteration happens by re-running individual sections.
+    "0.roadmap",        # design conversation, no cells
+    "1.task",           # Task formulation     — markdown + the task-shape boilerplate
+    "2.data",           # Data & splits        — read_data(), train/test split, sample
+    "3.metric",         # Metric               — score() + random-baseline sanity test
+    "4.baseline_kit",   # Baseline & starting kit — model class, training, predict, score
+    "5.rules",          # Rules                — submission protocol, caps, anti-cheating
+    "6.ethics",         # Ethics & dual-use    — datasheet bullets, dual-use note
+    "7.schedule",       # Schedule & sustainability — phase lengths, DOI, license
+    "8.bundle",         # Codabench .zip packaging (runs autocodabench bundle-write tools)
 ]
 
 

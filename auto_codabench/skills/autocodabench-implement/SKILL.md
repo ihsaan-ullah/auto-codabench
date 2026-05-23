@@ -17,7 +17,10 @@ You arrive here in one of two ways:
 
 In both cases the *design* is locked: it lives in the executed
 `starting_kit.ipynb` and the `events.jsonl` events the orchestrator
-logged. **Your job is to package, not to redesign.**
+logged. The notebook has seven design sections, each tagged with
+`autocodabench_stage` metadata: `1.task`, `2.data`, `3.metric`,
+`4.baseline_kit`, `5.rules`, `6.ethics`, `7.schedule`. **Your job is
+to package, not to redesign.**
 
 ---
 

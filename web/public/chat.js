@@ -192,6 +192,129 @@
     }
 
     // ---------------------------------------------------------------
+    // (7) Persistent right panel — sci-space style.
+    //
+    // Fixed-position aside on the right of the viewport. Always
+    // visible once the chat page is ready and we know the session
+    // id. Contains:
+    //   - a tab strip at the top (notebook / transcript / cost / specs);
+    //   - an iframe whose src points at the current tab's URL under
+    //     /public/sessions/<sid>/... — files written by the server's
+    //     _write_public_artifacts() after every turn.
+    //
+    // The panel does NOT replace Chainlit's element drawer (we keep
+    // the inline chips too) — it just augments the chat with a
+    // workspace pane that never disappears unless the user collapses
+    // it with the chevron.
+    // ---------------------------------------------------------------
+
+    function _currentSessionId() {
+        // Greeting includes `_session \`<12-char hex>\` · model …`.
+        // Pull it from the page text on first sight, then cache.
+        if (window.__acSessionId) return window.__acSessionId;
+        const text = document.body.textContent || "";
+        const m = text.match(/session\s+`?([a-f0-9]{8,16})`?/);
+        if (m) {
+            window.__acSessionId = m[1];
+            return m[1];
+        }
+        return null;
+    }
+
+    let _lastManifestSig = "";
+    async function _refreshSidePanelFromManifest() {
+        const sid = _currentSessionId();
+        const panel = document.getElementById("ac-side-panel");
+        if (!sid || !panel) return;
+        try {
+            const r = await fetch(
+                `/public/sessions/${sid}/manifest.json?t=${Date.now()}`,
+                {cache: "no-cache"},
+            );
+            if (!r.ok) return;
+            const m = await r.json();
+            const sig = JSON.stringify(m.files || []);
+            const tabsHost = panel.querySelector(".ac-tabs");
+            const iframe   = panel.querySelector("#ac-side-iframe");
+            if (sig !== _lastManifestSig) {
+                _lastManifestSig = sig;
+                tabsHost.innerHTML = "";
+                (m.files || []).forEach((f, i) => {
+                    const b = document.createElement("button");
+                    b.type = "button";
+                    b.className = "ac-tab" + (i === 0 ? " ac-tab-active" : "");
+                    b.dataset.url = f.url;
+                    b.textContent = f.name;
+                    b.addEventListener("click", () => {
+                        tabsHost.querySelectorAll(".ac-tab").forEach(
+                            (x) => x.classList.remove("ac-tab-active"));
+                        b.classList.add("ac-tab-active");
+                        iframe.src = f.url + `?t=${Date.now()}`;
+                    });
+                    tabsHost.appendChild(b);
+                });
+                if ((m.files || []).length > 0 && !iframe.dataset.acPinned) {
+                    iframe.src = m.files[0].url + `?t=${Date.now()}`;
+                }
+            } else {
+                // Same file set but content may have changed (notebook
+                // got more cells). Reload the iframe of the active tab.
+                const active = tabsHost.querySelector(".ac-tab-active");
+                if (active && !iframe.dataset.acPinned) {
+                    iframe.src = active.dataset.url + `?t=${Date.now()}`;
+                }
+            }
+        } catch (e) {
+            // Network blip / not-yet-written → silent.
+        }
+    }
+
+    function _injectSidePanel() {
+        if (document.getElementById("ac-side-panel")) return;
+        const sid = _currentSessionId();
+        if (!sid) return;
+        if (!document.querySelector("textarea")) return; // login screen
+        const panel = document.createElement("aside");
+        panel.id = "ac-side-panel";
+        panel.innerHTML = `
+            <header class="ac-side-header">
+                <span class="ac-side-title">📁 Workspace</span>
+                <div class="ac-side-actions">
+                    <button id="ac-side-refresh" type="button"
+                            title="Reload the active file">↻</button>
+                    <button id="ac-side-collapse" type="button"
+                            title="Collapse the panel">›</button>
+                </div>
+            </header>
+            <div class="ac-tabs"></div>
+            <iframe id="ac-side-iframe"
+                    src="about:blank"
+                    sandbox="allow-same-origin"></iframe>
+        `;
+        document.body.appendChild(panel);
+        document.body.classList.add("ac-side-active");
+
+        const iframe = panel.querySelector("#ac-side-iframe");
+        panel.querySelector("#ac-side-refresh").addEventListener("click", () => {
+            const active = panel.querySelector(".ac-tab-active");
+            if (active) iframe.src = active.dataset.url + `?t=${Date.now()}`;
+        });
+        panel.querySelector("#ac-side-collapse").addEventListener("click", () => {
+            const collapsed = panel.classList.toggle("ac-collapsed");
+            document.body.classList.toggle("ac-side-active", !collapsed);
+            panel.querySelector("#ac-side-collapse").innerHTML =
+                collapsed ? "‹" : "›";
+        });
+
+        // First fetch + then periodic refresh every 3.5 s. We
+        // intentionally don't poll the file URL directly — the
+        // manifest tells us when there's something new.
+        _refreshSidePanelFromManifest();
+        setInterval(_refreshSidePanelFromManifest, 3500);
+    }
+
+
+    // ---------------------------------------------------------------
     // (6) Persistent "📁 Files" toggle.
     //
     // Chainlit's element drawer (the right-side viewer) closes when the
@@ -267,11 +390,20 @@
 
     function tick() {
         syncInitGate();   // run first so the lock is up before anything else
+        _injectSidePanel();  // sci-space-style persistent workspace panel
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
         tagPhaseActions();
-        syncFilesToggle();
+        // syncFilesToggle is now redundant — the persistent panel is
+        // the primary file viewer. Keep the function around for the
+        // edge case where the panel can't materialise (no session id).
+        if (!document.getElementById("ac-side-panel")) {
+            syncFilesToggle();
+        } else {
+            const stale = document.getElementById("ac-files-toggle");
+            if (stale) stale.remove();
+        }
     }
 
     // Apply the lock as soon as possible — ideally before React mounts

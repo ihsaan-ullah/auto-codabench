@@ -158,15 +158,19 @@ PHASE_IMPLEMENTATION = "implementation"
 # notebook cells); stage 8 packages the executed notebook into a
 # Codabench bundle. Stage 0 is design-only (no cells, no kernel use).
 STAGE_TITLES: list[tuple[str, str]] = [
-    ("0.roadmap",       "📐 0. Roadmap"),
-    ("1.setup",         "📦 1. Setup"),
-    ("2.data",          "📊 2. Data loader"),
-    ("3.eda",           "🔍 3. EDA"),
-    ("4.metric",        "🎯 4. Metric"),
-    ("5.baseline",      "🤖 5. Baseline model"),
-    ("6.predict_score", "📈 6. Predict + score"),
-    ("7.diagnostics",   "🧪 7. Diagnostics"),
-    ("8.bundle",        "🛠 8. Bundle"),
+    # The original 7-row competition-design checklist. Each row maps to
+    # one section of the starting_kit.ipynb. Version 1 of the notebook
+    # contains ALL of these (generated in one pass with demo code); the
+    # user then iterates on any section.
+    ("0.roadmap",      "📐 0. Roadmap"),
+    ("1.task",         "🎯 1. Task formulation"),
+    ("2.data",         "📊 2. Data & splits"),
+    ("3.metric",       "📏 3. Metric"),
+    ("4.baseline_kit", "🤖 4. Baseline & starting kit"),
+    ("5.rules",        "📋 5. Rules"),
+    ("6.ethics",       "⚖️ 6. Ethics & dual-use"),
+    ("7.schedule",     "📅 7. Schedule & sustainability"),
+    ("8.bundle",       "🛠 8. Bundle"),
 ]
 
 _PLANNING_TOOLS = [
@@ -495,27 +499,29 @@ async def on_chat_start():
     # the irreversible step is coming.
     await cl.Message(
         content=(
-            "# 🧠 PLANNING phase — proposal crystallization\n\n"
+            "# 🧠 AutoCodabench — design a Codabench competition\n\n"
             "Tell me a competition idea — a sentence is enough — and I'll "
             "explore the design space with you, citing the literature as "
             "we go. You can also drop a PDF / markdown design doc and I'll "
             "fill in only the gaps.\n\n"
             "### How this app works\n\n"
-            "Nine stages, one continuous session — strip at the top of "
-            "the chat shows where we are:\n\n"
-            "0. **Roadmap** — name the problem and the dimensions to settle.\n"
-            "1–7. **Setup → Data → EDA → Metric → Baseline → Predict+Score → Diagnostics** — "
-            "    each stage adds cells to `starting_kit.ipynb`, runs them, "
-            "    and shows you the outputs in the `📓` panel on the right. "
-            "    At the end of every stage I'll ask: **Approve & next**, "
-            "    **Revise this stage**, or **Save & exit**.\n"
-            "8. **Bundle** — package the executed notebook into the "
-            "    Codabench bundle + zip + (optional) upload.\n\n"
-            "**Revise is reversible**: it restarts the kernel, drops this "
-            "stage's outputs, re-executes earlier stages, and asks you "
-            "what to refine. You won't lose prior work.\n\n"
-            "The `📁 Files` button on the right re-opens the file viewer "
-            "anytime — notebook, transcript, cost log, generated specs.\n\n"
+            "1. **Roadmap conversation** — we agree on the high-level "
+            "shape (task, data, metric). Quick.\n"
+            "2. **One-pass starting kit generation** — I write the FULL "
+            "`starting_kit.ipynb` with all 7 design sections "
+            "(Task formulation, Data & splits, Metric, Baseline & "
+            "starting kit, Rules, Ethics & dual-use, Schedule & "
+            "sustainability) + demo code that runs end-to-end. You'll "
+            "watch it materialise in the panel on the right.\n"
+            "3. **Per-section refinement** — when the v1 notebook lands, "
+            "you'll see a button row: refine any of the 7 sections, "
+            "or **Approve all & build the Codabench bundle**. Refine "
+            "is reversible.\n"
+            "4. **Bundle** — once you approve, the agent packages the "
+            "executed notebook into a Codabench `.zip`.\n\n"
+            "The panel on the right holds the live notebook (and "
+            "transcript / cost / specs tabs). It stays open the whole "
+            "session — no closing-and-can't-reopen.\n\n"
             f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
             f"budget ${MAX_USD_PER_SESSION:.2f}_"
         ),
@@ -523,6 +529,11 @@ async def on_chat_start():
     ).send()
 
     cl.user_session.set("ready", True)
+
+    # Pre-write a placeholder notebook.html + manifest.json so the
+    # right panel has something to load on first render — even before
+    # the user's first message arrives.
+    _write_public_artifacts(run_dir, session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -718,11 +729,14 @@ async def on_message(msg: cl.Message):
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
 
-    # Refresh the side panel: notebook HTML + any spec/log files.
-    # We pass response_msg so the file chips render *inline under the
-    # response*; clicking a chip slides the right drawer open with
-    # the file content. Without this, users would have to discover
-    # the sidebar via Chainlit's chrome — which is non-obvious.
+    # Write the per-session public artifacts (notebook HTML +
+    # transcript + cost + specs as HTML, plus a manifest.json). The
+    # always-visible right panel injected by chat.js fetches these
+    # from `/public/sessions/<sid>/...` so the user can see files
+    # without ever opening a drawer.
+    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
+    # Also keep the inline-chip drawer for backwards compatibility
+    # and as a per-message anchor; users who like the drawer keep it.
     await _refresh_side_panel(run_dir, attach_to=response_msg)
     # Bump the stage-progress strip off any new events.jsonl lines.
     await _refresh_task_list(run_dir)
@@ -770,80 +784,130 @@ def _stage_at(i: int) -> tuple[str, str] | None:
 
 
 async def _maybe_offer_stage_gate(run_dir: Path, stage: str) -> None:
-    """Show the per-stage approval gate after a stage transitions to DONE.
+    """Open a single section-picker gate once the notebook has v1 of all 7 sections.
 
-    Idempotent on `gates_offered` — once a gate has been shown for a
-    given stage, it doesn't re-fire (Revise clears the bit for that
-    stage and later stages, so the gate can show again post-revision).
+    The new flow (per user direction 2026-05-23): the agent generates
+    the FULL starting_kit.ipynb — all 7 design sections + demo code —
+    in one pass during stage 1 (and progressively logs `stage_done`
+    for each section as it goes). When the LAST design section
+    (`7.schedule`) lands, we surface ONE gate with:
+
+      - 7 [Refine <section>] buttons (one per design section)
+      - 1 [✅ Build the Codabench bundle] button
+      - 1 [🛑 Save & exit] button
+
+    No per-section Approve/Revise treadmill — the user picks what to
+    refine, or accepts the whole thing and builds the bundle.
+
+    Sub-iterations re-open the same gate when the refined section's
+    `stage_done` fires; the `gates_offered` set is keyed by a marker
+    rather than per-stage so the gate can re-appear after each
+    refinement.
     """
     if cl.user_session.get("phase") != PHASE_PLANNING:
-        return                                         # gates only fire during planning
-    if stage not in _STAGE_BY_ID:
         return
-    si = _STAGE_BY_ID[stage]
-    # Stages 0 (Roadmap) and 8 (Bundle) don't have approval gates.
-    # 0 is design-only; 8 is the terminal packaging step which auto-runs
-    # after stage 7's Approve action.
-    if si in (0, 8):
+
+    # Don't gate on `0.roadmap` (design talk only) or `8.bundle`
+    # (terminal packaging) — but ANY of 1-7 going DONE is a signal
+    # that the notebook now has content worth offering choices over.
+    si = _STAGE_BY_ID.get(stage, -1)
+    if si < 1 or si > 7:
         return
+
+    # The gate is offered once per "writing pass" — keyed by a
+    # session-incremented marker rather than per-stage. Each pass
+    # of agent-writes-things ends with the user choosing the next
+    # step; refining a section starts a new pass.
+    pass_id = cl.user_session.get("gate_pass_id", 0)
     gates: set = cl.user_session.get("gates_offered") or set()
-    if stage in gates:
+    marker = f"pass:{pass_id}"
+    if marker in gates:
         return
     gates = set(gates)
-    gates.add(stage)
+    gates.add(marker)
     cl.user_session.set("gates_offered", gates)
 
-    # Per-stage Approve label/copy.
-    next_pair = _stage_at(si + 1)
-    if si == 7:
-        approve_label = "✅ Approve & build the Codabench bundle"
-        approve_tip   = ("Approves stage 7. Rebuilds the agent with bundle-"
-                         "write tools, then runs stage 8 (packaging).")
-    elif next_pair is not None:
-        _, next_title = next_pair
-        approve_label = f"✅ Approve & advance to {next_title}"
-        approve_tip   = f"Approves {_STAGE_TITLE[stage]} and moves to {next_title}."
-    else:
-        approve_label = "✅ Approve"
-        approve_tip   = "Approves this stage."
+    actions: list[cl.Action] = []
+    # One Refine button per design section that has any cells in the
+    # notebook. We look at the notebook on disk so we don't list
+    # buttons for sections the agent hasn't written yet.
+    nb_path = run_dir / "starting_kit.ipynb"
+    sections_present: set[str] = set()
+    if nb_path.is_file():
+        try:
+            import nbformat
+            nb = nbformat.read(nb_path, as_version=4)
+            for c in nb.cells:
+                s = (c.get("metadata") or {}).get("autocodabench_stage")
+                if s:
+                    sections_present.add(s)
+        except Exception:
+            pass
+    for sid, title in STAGE_TITLES:
+        si2 = _STAGE_BY_ID[sid]
+        if si2 < 1 or si2 > 7:
+            continue
+        if sid not in sections_present:
+            continue
+        actions.append(cl.Action(
+            name="ac_section_refine",
+            payload={"section": sid},
+            label=f"✏️ Refine {title}",
+            tooltip=f"Restart the kernel, reset {title}'s cells, ask "
+                    f"the agent what to refine.",
+        ))
 
-    actions = [
-        cl.Action(name="ac_stage_approve",
-                  payload={"stage": stage, "stage_index": si},
-                  label=approve_label,
-                  tooltip=approve_tip),
-        cl.Action(name="ac_stage_revise",
-                  payload={"stage": stage, "stage_index": si},
-                  label=f"✏️ Revise {_STAGE_TITLE[stage]}",
-                  tooltip="Restart the kernel, drop this stage's outputs, "
-                          "and ask the agent what to refine. Earlier "
-                          "stages re-execute automatically."),
-        cl.Action(name="ac_stage_save_exit",
-                  payload={"stage": stage, "stage_index": si},
-                  label="🛑 Save & exit",
-                  tooltip="End the session with current artifacts. "
-                          "Everything is persisted to the run dir + "
-                          "uploaded to the HF Dataset."),
-    ]
+    actions.append(cl.Action(
+        name="ac_build_bundle",
+        payload={},
+        label="✅ Approve all & build the Codabench bundle",
+        tooltip="Run stage 8: package the executed notebook into a "
+                "Codabench .zip. Other sections can still be revisited "
+                "if you refresh, but for this session bundle-mode is "
+                "next.",
+    ))
+    actions.append(cl.Action(
+        name="ac_stage_save_exit",
+        payload={"stage": stage, "stage_index": si},
+        label="🛑 Save & exit",
+        tooltip="End the session, keep the run dir + HF Dataset upload.",
+    ))
+
+    if sections_present == {"1.task", "2.data", "3.metric", "4.baseline_kit",
+                            "5.rules", "6.ethics", "7.schedule"}:
+        headline = ("## ✅ Notebook v1 — all 7 sections drafted\n\n"
+                    "Look at the panel on the right: the executed "
+                    "`starting_kit.ipynb` has all 7 design sections "
+                    "with demo code that ran end-to-end. From here:")
+    else:
+        nice = ", ".join(sorted(sections_present))
+        headline = (f"## ⏵ Drafted sections: {nice}\n\n"
+                    f"The agent paused after writing some sections. "
+                    f"Pick what to do next:")
+
     await cl.Message(
         author="autocodabench",
         content=(
-            f"## {_STAGE_TITLE[stage]} — ready for review\n\n"
-            f"Outputs from this stage appear in the `📓 starting_kit.ipynb` "
-            f"chip above (or click the `📁 Files` button on the right). "
-            f"What's next?"
+            f"{headline}\n\n"
+            f"- **Refine a section** — restart its kernel state and "
+            f"  rewrite cells; the rest of the notebook stays put.\n"
+            f"- **Approve all & build the Codabench bundle** — package "
+            f"  what's in the notebook now into a `.zip`. Stage 8 runs "
+            f"  automatically and adds the bundle to the file panel.\n"
+            f"- **Save & exit** — keep everything as-is, upload to the "
+            f"  HF Dataset, end the session.\n"
         ),
         actions=actions,
     ).send()
 
 
 async def _refresh_legacy_bundle_gate(run_dir: Path) -> None:
-    """Pre-PR4 fallback: treat implementation_plan.md as stage-7-done.
+    """Pre-PR4 fallback: treat implementation_plan.md as section-7-done.
 
-    Until the orchestrator skill is rewritten to drive the 8-stage
-    notebook flow, the agent still writes `implementation_plan.md` at
-    the end of the prose proposal/specs path. We map that file's
-    existence onto "stage 7 done" so the new gate path still fires.
+    Older sessions (built against the prose proposal/specs flow) write
+    `implementation_plan.md` at the end. We map that onto the new
+    section-picker gate so legacy sessions still expose the build-bundle
+    affordance.
     """
     if cl.user_session.get("phase") != PHASE_PLANNING:
         return
@@ -865,31 +929,39 @@ async def _refresh_legacy_bundle_gate(run_dir: Path) -> None:
     plan = next((p for p in candidates if p.is_file()), None)
     if plan is None:
         return
-    # Pivot to wherever the plan actually lives, same as the old code did.
     effective = plan.parent if plan.parent.name == "specs" else plan.parent
     if effective.resolve() != run_dir.resolve():
         log.warning("legacy bundle gate: plan in %s, pivoting from %s", effective, run_dir)
         cl.user_session.set("run_dir", str(effective))
         run_dir = effective
-    await _maybe_offer_stage_gate(run_dir, "7.diagnostics")
+    # Use the most-meaningful design section as the trigger for the gate.
+    await _maybe_offer_stage_gate(run_dir, "7.schedule")
 
 
 # ---------------------------------------------------------------------------
 # Stage-action callbacks
 # ---------------------------------------------------------------------------
 
-@cl.action_callback("ac_stage_approve")
-async def _on_stage_approve(action: cl.Action):
+@cl.action_callback("ac_section_refine")
+async def _on_section_refine(action: cl.Action):
+    """User picked a section to refine — open a new writing pass."""
     p = action.payload or {}
-    stage = p.get("stage", "")
-    si    = int(p.get("stage_index", 0))
+    section = p.get("section", "")
     run_dir = Path(cl.user_session.get("run_dir"))
+    si = _STAGE_BY_ID.get(section, -1)
+    if si < 1 or si > 7:
+        return
 
-    # Reflect Approve in the TaskList — even if no stage_done event
-    # was logged, the user's click is itself an authoritative signal.
+    # Open a new "pass" so the next stage_done fires a fresh gate.
+    cl.user_session.set("gate_pass_id",
+                        int(cl.user_session.get("gate_pass_id", 0)) + 1)
+
+    # Mark this section as RUNNING; later-section task states left alone
+    # (in the new model, all sections coexist; refining one doesn't
+    # invalidate the others).
     tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
-    if stage in tasks and tasks[stage].status != cl.TaskStatus.DONE:
-        tasks[stage].status = cl.TaskStatus.DONE
+    if section in tasks:
+        tasks[section].status = cl.TaskStatus.RUNNING
         tl = cl.user_session.get("task_list")
         if tl is not None:
             try:
@@ -897,66 +969,45 @@ async def _on_stage_approve(action: cl.Action):
             except Exception:
                 pass
 
-    if si == 7:
-        # Stage 7 → switch to implementation phase, then kick off stage 8.
-        await _switch_to_implementation_for_bundle(run_dir)
-        return
-
-    next_pair = _stage_at(si + 1)
-    if next_pair is None:
-        return
-    next_stage, next_title = next_pair
+    title = _STAGE_TITLE.get(section, section)
     _append_transcript(run_dir, role="user",
-                       text=f"[ui] Approved {_STAGE_TITLE[stage]}. Advancing to {next_title}.")
+                       text=f"[ui] Refine {title}.")
     await _stream_one_turn(
         run_dir,
-        f"The user approved {_STAGE_TITLE[stage]}. Proceed to {next_title} "
-        f"({next_stage}). Log `stage_started` with payload "
-        f"{{\"stage\":\"{next_stage}\"}} before any work; when the stage "
-        f"is complete, log `stage_done` with the same payload so the "
-        f"approval gate can fire.",
+        f"The user clicked **Refine {title}** (section `{section}`). "
+        f"Do this NOW, in order: "
+        f"(1) call `autocodabench_nb_reset_to_stage(stage='{section}')` "
+        f"to restart the kernel and re-execute earlier sections, "
+        f"(2) ask the user in ONE short paragraph what specifically "
+        f"they want different about this section — don't rewrite "
+        f"cells until they reply, "
+        f"(3) when they answer, rewrite the cells for `{section}` "
+        f"and `nb_run_stage('{section}')`, "
+        f"(4) log `stage_done` with payload {{\"stage\":\"{section}\"}} "
+        f"so the section-picker gate re-opens.",
     )
 
 
-@cl.action_callback("ac_stage_revise")
-async def _on_stage_revise(action: cl.Action):
-    p = action.payload or {}
-    stage = p.get("stage", "")
-    si    = int(p.get("stage_index", 0))
+@cl.action_callback("ac_build_bundle")
+async def _on_build_bundle(action: cl.Action):
+    """User approved the whole notebook — switch to implementation + run stage 8."""
     run_dir = Path(cl.user_session.get("run_dir"))
-
-    # Allow the gate to re-fire for this stage and any later stage that
-    # had already been approved — those need re-confirmation too.
-    gates: set = cl.user_session.get("gates_offered") or set()
-    gates = {g for g in gates if _STAGE_BY_ID.get(g, 999) < si}
-    cl.user_session.set("gates_offered", gates)
-
-    # TaskList: this stage goes back to RUNNING; later stages back to READY.
+    # Mark all 7 design sections as DONE (the user just approved them
+    # collectively); 8.bundle goes RUNNING.
     tasks: dict[str, cl.Task] = cl.user_session.get("tasks_by_stage") or {}
-    if stage in tasks:
-        tasks[stage].status = cl.TaskStatus.RUNNING
-    for s, t in tasks.items():
-        if _STAGE_BY_ID.get(s, -1) > si:
-            t.status = cl.TaskStatus.READY
+    for sid in ("1.task", "2.data", "3.metric", "4.baseline_kit",
+                "5.rules", "6.ethics", "7.schedule"):
+        if sid in tasks:
+            tasks[sid].status = cl.TaskStatus.DONE
+    if "8.bundle" in tasks:
+        tasks["8.bundle"].status = cl.TaskStatus.RUNNING
     tl = cl.user_session.get("task_list")
     if tl is not None:
         try:
             await tl.send()
         except Exception:
             pass
-
-    _append_transcript(run_dir, role="user",
-                       text=f"[ui] Revise {_STAGE_TITLE[stage]} — clicked.")
-    await _stream_one_turn(
-        run_dir,
-        f"The user clicked **Revise {_STAGE_TITLE[stage]}** on stage "
-        f"`{stage}`. Do this NOW, in order: "
-        f"(1) call `autocodabench_nb_reset_to_stage(stage='{stage}')` to "
-        f"restart the kernel and re-execute earlier stages, "
-        f"(2) ask the user — in one short paragraph — what specifically "
-        f"they want different about this stage. Don't rewrite cells yet; "
-        f"wait for the user's reply.",
-    )
+    await _switch_to_implementation_for_bundle(run_dir)
 
 
 @cl.action_callback("ac_stage_save_exit")
@@ -988,9 +1039,10 @@ async def _on_stage_save_exit(action: cl.Action):
 
 
 async def _switch_to_implementation_for_bundle(run_dir: Path) -> None:
-    """Stage 7 → 8: rebuild client with bundle tools, kick off stage 8."""
-    cl.user_session.set("gates_offered",
-                        (cl.user_session.get("gates_offered") or set()) | {"7.diagnostics"})
+    """User approved all sections → rebuild client with bundle tools, run stage 8."""
+    # Pin the gate-pass so a stale stage_done doesn't re-show the picker.
+    cl.user_session.set("gate_pass_id",
+                        int(cl.user_session.get("gate_pass_id", 0)) + 1)
 
     old_client: ClaudeSDKClient | None = cl.user_session.get("client")
     if old_client is not None:
@@ -1132,7 +1184,8 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                     is_error=part["is_error"],
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
-    # Same side-panel + task-list refresh as the regular on_message path.
+    # Same panel + task-list refresh as the regular on_message path.
+    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
     await _refresh_side_panel(run_dir, attach_to=response_msg)
     await _refresh_task_list(run_dir)
     asyncio.create_task(_persist_to_hf(run_dir))
@@ -1318,6 +1371,162 @@ def _render_notebook_html(run_dir: Path) -> str | None:
     except Exception as e:
         log.warning("notebook render failed: %s", e)
         return None
+
+
+# Where chat.js fetches per-session files from. The iframe in the
+# persistent right panel points at `<PUBLIC_SESSIONS>/<sid>/notebook.html`
+# (Chainlit serves `web/public/` as static `/public/`).
+_PUBLIC_DIR = Path(__file__).resolve().parent / "public"
+_PUBLIC_SESSIONS = _PUBLIC_DIR / "sessions"
+
+
+def _public_session_dir(session_id: str) -> Path:
+    p = _PUBLIC_SESSIONS / session_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
+    """Drop the notebook HTML + a small file-manifest into web/public/.
+
+    The persistent right panel (injected by chat.js) reads these via
+    plain HTTP GET against `/public/sessions/<sid>/...`, so it never
+    relies on Chainlit's drawer/element machinery.
+
+    Files written:
+      - notebook.html       — full nbconvert HTML of starting_kit.ipynb,
+                              or a small placeholder before any cells.
+      - manifest.json       — list of additional files (transcript.md,
+                              cost.jsonl, specs/*.md) with their relative
+                              public URLs.
+      - transcript.html     — sanitised render of transcript.md, opened
+                              from the manifest's chip.
+      - cost.html           — same, for cost.jsonl.
+      - specs/<name>.html   — one per spec file.
+    """
+    try:
+        out = _public_session_dir(session_id)
+
+        # --- notebook ---
+        nb_html = _render_notebook_html(run_dir)
+        if nb_html is None:
+            nb_html = (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                "<style>body{font:14px/1.5 -apple-system,sans-serif;"
+                "padding:24px;color:#555}em{color:#888}</style>"
+                "</head><body><h2>📓 starting_kit.ipynb</h2>"
+                "<p><em>The notebook will appear here as the agent writes "
+                "and executes cells. Right now it's empty.</em></p>"
+                "</body></html>"
+            )
+        (out / "notebook.html").write_text(nb_html, encoding="utf-8")
+
+        # --- transcript ---
+        transcript = run_dir / "transcript.md"
+        if transcript.is_file() and transcript.stat().st_size > 0:
+            try:
+                import markdown as _md_lib  # type: ignore
+                rendered = _md_lib.markdown(
+                    transcript.read_text(encoding="utf-8", errors="replace"),
+                    extensions=["fenced_code", "tables"],
+                )
+            except Exception:
+                rendered = (
+                    "<pre style='white-space:pre-wrap'>"
+                    + transcript.read_text(encoding="utf-8", errors="replace")
+                    + "</pre>"
+                )
+            (out / "transcript.html").write_text(
+                "<!doctype html><meta charset='utf-8'>"
+                "<style>body{font:14px/1.5 -apple-system,sans-serif;"
+                "padding:18px;color:#222;max-width:80ch;margin:0 auto}"
+                "pre{background:#f6f8fa;padding:12px;border-radius:6px;"
+                "overflow:auto}code{font-family:ui-monospace,Menlo,Consolas;"
+                "font-size:12.5px}h1,h2,h3{margin-top:1.5em}</style>"
+                "<title>transcript.md</title>" + rendered,
+                encoding="utf-8",
+            )
+
+        # --- cost.jsonl ---
+        cost = run_dir / "cost.jsonl"
+        if cost.is_file() and cost.stat().st_size > 0:
+            (out / "cost.html").write_text(
+                "<!doctype html><meta charset='utf-8'>"
+                "<style>body{font:13px/1.4 ui-monospace,Menlo;"
+                "padding:18px;background:#0d1117;color:#c9d1d9}</style>"
+                "<title>cost.jsonl</title><pre>"
+                + cost.read_text(encoding="utf-8", errors="replace")
+                + "</pre>",
+                encoding="utf-8",
+            )
+
+        # --- specs/*.md ---
+        specs_in = run_dir / "specs"
+        specs_out = out / "specs"
+        specs_out.mkdir(exist_ok=True)
+        for spec_md in (specs_in.glob("*.md") if specs_in.is_dir() else []):
+            try:
+                import markdown as _md_lib  # type: ignore
+                rendered = _md_lib.markdown(
+                    spec_md.read_text(encoding="utf-8", errors="replace"),
+                    extensions=["fenced_code", "tables"],
+                )
+            except Exception:
+                rendered = (
+                    "<pre style='white-space:pre-wrap'>"
+                    + spec_md.read_text(encoding="utf-8", errors="replace")
+                    + "</pre>"
+                )
+            (specs_out / (spec_md.stem + ".html")).write_text(
+                "<!doctype html><meta charset='utf-8'>"
+                "<style>body{font:14px/1.5 -apple-system,sans-serif;"
+                "padding:18px;color:#222;max-width:80ch;margin:0 auto}"
+                "pre{background:#f6f8fa;padding:12px;border-radius:6px;"
+                "overflow:auto}code{font-family:ui-monospace,Menlo,Consolas;"
+                "font-size:12.5px}h1,h2,h3{margin-top:1.5em}</style>"
+                f"<title>{spec_md.name}</title>" + rendered,
+                encoding="utf-8",
+            )
+
+        # --- manifest.json: drives the panel's tab strip ---
+        manifest = {
+            "session_id": session_id,
+            "updated_at": _utc_now(),
+            "files": [
+                {
+                    "name":  "📓 starting_kit.ipynb",
+                    "url":   f"/public/sessions/{session_id}/notebook.html",
+                    "kind":  "notebook",
+                    "ready": nb_html is not None and "empty" not in nb_html[:200],
+                },
+            ],
+        }
+        if (out / "transcript.html").is_file():
+            manifest["files"].append({
+                "name": "📄 transcript.md",
+                "url":  f"/public/sessions/{session_id}/transcript.html",
+                "kind": "transcript",
+                "ready": True,
+            })
+        if (out / "cost.html").is_file():
+            manifest["files"].append({
+                "name": "💰 cost.jsonl",
+                "url":  f"/public/sessions/{session_id}/cost.html",
+                "kind": "cost",
+                "ready": True,
+            })
+        for spec_html in sorted(specs_out.glob("*.html")):
+            manifest["files"].append({
+                "name": f"📄 specs/{spec_html.stem}.md",
+                "url":  f"/public/sessions/{session_id}/specs/{spec_html.name}",
+                "kind": "spec",
+                "ready": True,
+            })
+        (out / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        log.warning("public artifacts write failed: %s", e)
 
 
 def _collect_side_files(run_dir: Path) -> list["cl.Text"]:

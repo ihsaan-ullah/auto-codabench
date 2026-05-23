@@ -294,3 +294,127 @@ button[data-ac-impl-button="cancel"] {
 #ac-files-toggle:active {
     transform: translateY(-50%) translateX(0);
 }
+
+
+/* ============================================================
+ * Persistent right workspace panel (sci-space style).
+ *
+ * Always visible during a chat. Top tab strip switches between
+ * notebook / transcript / cost / specs. Body of the chat is
+ * pushed left via padding-right so the panel doesn't overlap.
+ * ============================================================ */
+
+#ac-side-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 44vw;
+    min-width: 380px;
+    max-width: 720px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    background: color-mix(in oklab, Canvas 96%, currentColor 2%);
+    border-left: 1px solid color-mix(in oklab, currentColor 18%, transparent);
+    box-shadow: -6px 0 22px rgba(0, 0, 0, 0.10);
+    transition: transform 0.18s ease-out;
+}
+#ac-side-panel.ac-collapsed {
+    transform: translateX(calc(100% - 44px));
+}
+#ac-side-panel.ac-collapsed .ac-tabs,
+#ac-side-panel.ac-collapsed #ac-side-iframe,
+#ac-side-panel.ac-collapsed .ac-side-title,
+#ac-side-panel.ac-collapsed #ac-side-refresh {
+    display: none;
+}
+
+.ac-side-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%);
+}
+.ac-side-title {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: CanvasText;
+}
+.ac-side-actions {
+    display: flex;
+    gap: 6px;
+}
+.ac-side-actions button {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+    background: Canvas;
+    color: CanvasText;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+.ac-side-actions button:hover {
+    background: color-mix(in oklab, Canvas 85%, currentColor 6%);
+}
+
+.ac-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 10px;
+    border-bottom: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+    overflow-x: auto;
+    background: color-mix(in oklab, Canvas 98%, currentColor 1%);
+}
+.ac-tab {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: CanvasText;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ac-tab:hover {
+    background: color-mix(in oklab, Canvas 88%, currentColor 4%);
+}
+.ac-tab-active {
+    background: color-mix(in oklab, Canvas 80%, currentColor 8%) !important;
+    border-color: color-mix(in oklab, currentColor 20%, transparent);
+    font-weight: 700;
+}
+
+#ac-side-iframe {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: Canvas;
+}
+
+/* Reserve room on the right of the page so chat content isn't
+ * underneath the panel. Toggle is added/removed by chat.js. */
+body.ac-side-active {
+    padding-right: 44vw;
+}
+@media (max-width: 900px) {
+    body.ac-side-active { padding-right: 0; }
+    #ac-side-panel {
+        width: 100vw;
+        max-width: none;
+        height: 50vh;
+        top: auto;
+        bottom: 0;
+        border-top: 1px solid color-mix(in oklab, currentColor 18%, transparent);
+        border-left: none;
+    }
+}
