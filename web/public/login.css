@@ -1,7 +1,10 @@
-/* AutoCodabench: reorder the login form so Password appears above
-   the optional Your-name field. We pin Submit to the bottom of the
-   flex order so the form ends up:
+/* AutoCodabench: reorder the LOGIN form so Password appears above
+   the optional Your-name field. Scope: anything matching is also
+   `:not(.ac-pub-form)` so this rule never bleeds into the in-workspace
+   Codabench publish form (which uses the natural username-above-password
+   ordering people expect outside of a login context).
 
+   Final order on the login form:
      [Password]          <- order 1
      [Your name (opt.)]  <- order 2
      [Sign In]           <- order 3
@@ -11,20 +14,20 @@
    to DOM order (name first, then password) — still functional.
 */
 
-form:has(input[type="password"]) {
+form:has(input[type="password"]):not(.ac-pub-form) {
     display: flex;
     flex-direction: column;
 }
-form:has(input[type="password"]) > *:has(input[name="email"]),
-form:has(input[type="password"]) > *:has(input[type="email"]),
-form:has(input[type="password"]) > *:has(input[type="text"][autocomplete="username"]) {
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[name="email"]),
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="email"]),
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="text"][autocomplete="username"]) {
     order: 2;
 }
-form:has(input[type="password"]) > *:has(input[type="password"]) {
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="password"]) {
     order: 1;
 }
-form:has(input[type="password"]) > button,
-form:has(input[type="password"]) > *:has(> button[type="submit"]) {
+form:has(input[type="password"]):not(.ac-pub-form) > button,
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(> button[type="submit"]) {
     order: 3;
 }
 
@@ -659,12 +662,29 @@ button[data-ac-phase-nav] {
     border-color: color-mix(in oklab, currentColor 34%, transparent);
     transform: translateY(-0.5px);
 }
-.ac-dl-btn[data-kind="bundle"] {
+.ac-dl-btn[data-kind="bundle"]:not(.ac-dl-disabled) {
     border-color: #0969da;
     background: color-mix(in oklab, #0969da 8%, Canvas);
 }
-.ac-dl-btn[data-kind="bundle"]:hover {
+.ac-dl-btn[data-kind="bundle"]:not(.ac-dl-disabled):hover {
     background: color-mix(in oklab, #0969da 16%, Canvas);
+}
+
+/* Disabled (not-ready) state — rendered as <div> not <a>, so it's
+ * non-interactive by construction. Visually grayed but the row keeps
+ * its slot so the user sees the "competition bundle (.zip)" button
+ * exists and what it'll look like once Phase 2 finishes. */
+.ac-dl-btn.ac-dl-disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%) !important;
+    border-color: color-mix(in oklab, currentColor 18%, transparent) !important;
+    color: color-mix(in oklab, CanvasText 60%, transparent) !important;
+}
+.ac-dl-btn.ac-dl-disabled:hover {
+    transform: none !important;
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%) !important;
+    border-color: color-mix(in oklab, currentColor 18%, transparent) !important;
 }
 .ac-dl-btn .ac-dl-label { flex: 1; min-width: 0; }
 .ac-dl-btn .ac-dl-size {

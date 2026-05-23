@@ -442,41 +442,63 @@ def _register_upload_route() -> None:
 
         Body (JSON): {"session_id": str, "username": str, "password": str}.
         Returns:      {"ok": bool, "competition_url"?: str, "error"?: str}.
+
+        Contract: every non-success path returns BOTH `ok: False` AND a
+        non-empty `error` string. The UI's "unknown error" fallback
+        message only fires when this contract is broken, so any time
+        you see it the bug is here, not in the UI.
         """
         try:
             body = await request.json()
-        except Exception:
+        except Exception as e:
+            log.warning("upload-codabench: malformed JSON body: %s", e)
             return JSONResponse(
-                {"ok": False, "error": "invalid JSON body"}, status_code=400)
+                {"ok": False, "error": f"invalid JSON body: {e!s}"},
+                status_code=400)
 
         sid      = str(body.get("session_id") or "").strip()
         username = str(body.get("username")   or "").strip()
         password =     body.get("password")   or ""
-        # `or` on password keeps it as the original type (don't strip
-        # whitespace — passwords can legitimately have leading spaces).
+        # Don't strip the password — passwords can legitimately have
+        # leading/trailing whitespace (some password managers add it).
 
-        if not sid or not username or not password:
+        if not sid:
             return JSONResponse(
-                {"ok": False,
-                 "error": "session_id, username, and password are required"},
+                {"ok": False, "error": "session_id is required"},
+                status_code=400)
+        if not username:
+            return JSONResponse(
+                {"ok": False, "error": "username is required"},
+                status_code=400)
+        if not password:
+            return JSONResponse(
+                {"ok": False, "error": "password is required"},
                 status_code=400)
 
         run_dir = _resolve_session_run_dir(sid)
         if run_dir is None:
+            log.warning("upload-codabench: no run dir for sid=%s "
+                        "(globbed pattern: web_*_%s under %s)",
+                        sid, sid, RUNS_ROOT)
             return JSONResponse(
                 {"ok": False,
-                 "error": f"no run dir for session {sid}"},
+                 "error": (f"no run dir found for session {sid} under "
+                           f"{RUNS_ROOT}.")},
                 status_code=404)
 
         bundle_zip = _find_bundle_zip(run_dir)
         if bundle_zip is None or not bundle_zip.is_file():
+            log.warning("upload-codabench: bundle.zip missing sid=%s "
+                        "run_dir=%s", sid, run_dir)
             return JSONResponse(
                 {"ok": False,
-                 "error": "bundle.zip not found — finish Phase 2 first"},
+                 "error": (f"bundle.zip not found for this session. "
+                           f"Searched {run_dir}/bundles/ and the global "
+                           f"fallback. Did Phase 2 finish?")},
                 status_code=409)
 
-        log.info("upload-codabench start sid=%s user=%s zip=%s",
-                 sid, username, bundle_zip)
+        log.info("upload-codabench START sid=%s user=%s zip=%s (%d bytes)",
+                 sid, username, bundle_zip, bundle_zip.stat().st_size)
 
         try:
             from auto_codabench.mcp_server.tools.upload import upload_zip
@@ -487,18 +509,42 @@ def _register_upload_route() -> None:
                 password=password,
             )
         except Exception as e:
+            log.exception("upload-codabench: upload_zip raised")
             return JSONResponse(
                 {"ok": False,
-                 "error": f"upload raised: {type(e).__name__}: {e}"},
+                 "error": f"upload raised: {type(e).__name__}: {e!s}"},
                 status_code=500)
 
-        if "error" in result:
+        log.info("upload-codabench RESULT sid=%s keys=%s",
+                 sid,
+                 sorted(result.keys()) if isinstance(result, dict)
+                 else type(result).__name__)
+
+        if not isinstance(result, dict):
             return JSONResponse(
-                {"ok": False, "error": result["error"]},
+                {"ok": False,
+                 "error": (f"upload_zip returned non-dict "
+                           f"{type(result).__name__}: {result!r}")},
+                status_code=500)
+        if "error" in result and result["error"]:
+            return JSONResponse(
+                {"ok": False, "error": str(result["error"])},
+                status_code=502)
+        if "error" in result and not result["error"]:
+            return JSONResponse(
+                {"ok": False,
+                 "error": ("upload_zip returned an empty error field "
+                           "(probable bug — check Space logs)")},
                 status_code=502)
 
         comp_url = result.get("competition_url")
         comp_id  = result.get("competition_id")
+        if not comp_url:
+            return JSONResponse(
+                {"ok": False,
+                 "error": (f"upload finished but no competition_url "
+                           f"returned. Raw keys: {sorted(result.keys())}")},
+                status_code=502)
 
         # Append a transcript entry so the upload event survives the
         # session even though no chat message was produced.
@@ -514,6 +560,8 @@ def _register_upload_route() -> None:
         except Exception as e:
             log.warning("transcript append after upload failed: %s", e)
 
+        log.info("upload-codabench OK sid=%s url=%s id=%s",
+                 sid, comp_url, comp_id)
         return JSONResponse(
             {"ok": True,
              "competition_id":  comp_id,
@@ -1538,20 +1586,44 @@ def _public_session_dir(session_id: str) -> Path:
 def _find_bundle_zip(run_dir: Path) -> Path | None:
     """Locate the .zip that THIS session's Phase 2 produced.
 
-    Bundles now live under `<run>/bundles/<slug>/<slug>.zip` thanks to
-    the per-session `resolve_bundle_dir` change (MCP config.py). Two
-    concurrent web sessions therefore can't collide. We still pick the
-    most-recently-modified zip *within this session* in case the user
-    reverted and re-advanced — there's almost always one slug per
-    session, but the deduping keeps things deterministic.
+    Resolution order:
+      1. `<run>/bundles/*/*.zip`  — the canonical per-session location
+         set by `resolve_bundle_dir` when AUTOCODABENCH_RUN_DIR is in env.
+      2. `auto_codabench/bundles/*/*.zip` filtered to bundles whose mtime
+         is later than the session's start time — defensive fallback for
+         the case where the MCP subprocess somehow lost AUTOCODABENCH_RUN_DIR
+         and wrote to the global default. We pick the most-recent within
+         that window so one stale concurrent session can't fool us.
+
+    Always returns the most-recently-modified candidate (handles
+    revert + readvance, where the user has multiple bundle versions).
     """
+    # Path 1: per-session.
     session_bundles = run_dir / "bundles"
-    if not session_bundles.is_dir():
+    if session_bundles.is_dir():
+        candidates = list(session_bundles.glob("*/*.zip"))
+        if candidates:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    # Path 2: global fallback. Only trust zips newer than the session's
+    # meta.json creation time — that lower bound ensures we don't pick
+    # up a zip from a previous concurrent session that finished BEFORE
+    # this session started.
+    meta = run_dir / "meta.json"
+    if not meta.is_file():
         return None
-    candidates = list(session_bundles.glob("*/*.zip"))
-    if not candidates:
+    session_start = meta.stat().st_mtime
+    global_root = REPO_ROOT / "auto_codabench" / "bundles"
+    if not global_root.is_dir():
         return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    fresh = [p for p in global_root.glob("*/*.zip")
+             if p.stat().st_mtime >= session_start]
+    if not fresh:
+        return None
+    found = max(fresh, key=lambda p: p.stat().st_mtime)
+    log.warning("bundle found in GLOBAL fallback path (env var lost?): "
+                "session_dir=%s, found=%s", run_dir, found)
+    return found
 
 
 _MD_DOC_CSS = (
@@ -1768,20 +1840,27 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "tag":  _tag(spec_html),
             })
 
-        downloads: list[dict] = []
-        if bundle_pub.is_file():
-            downloads.append({
-                "name":     "📦 bundle.zip",
+        # Bundle: ALWAYS present in the manifest so the UI can render a
+        # placeholder grayed-out button before Phase 2 finishes. The
+        # `ready` field tells chat.js whether to make it clickable.
+        bundle_ready = bundle_pub.is_file()
+        downloads: list[dict] = [
+            {
+                "name":     "📦 competition bundle (.zip)",
                 "filename": "bundle.zip",
                 "url":      f"/public/sessions/{session_id}/bundle.zip",
                 "kind":     "bundle",
-                "size":     bundle_pub.stat().st_size,
-                "tag":      _tag(bundle_pub),
-            })
+                "ready":    bundle_ready,
+                "size":     bundle_pub.stat().st_size if bundle_ready else 0,
+                "tag":      _tag(bundle_pub) if bundle_ready else "missing",
+            }
+        ]
 
         # workspace.zip — everything in the panel as a single download.
-        # Built last so it includes the bundle + the freshly-rendered HTML
-        # pages. Excludes itself + the manifest (which would race).
+        # Built last so it includes the bundle + the freshly-rendered
+        # HTML pages. Excludes itself + the manifest (which would race).
+        # Always built (even pre-Phase-2 it has the plan + transcript +
+        # cost), and always shown in the manifest.
         workspace_zip = out / "workspace.zip"
         try:
             import zipfile
@@ -1797,15 +1876,16 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
             tmp_zip.replace(workspace_zip)
         except Exception as e:
             log.warning("workspace.zip build failed: %s", e)
-        if workspace_zip.is_file():
-            downloads.append({
-                "name":     "📦 workspace.zip (all artifacts)",
-                "filename": "workspace.zip",
-                "url":      f"/public/sessions/{session_id}/workspace.zip",
-                "kind":     "workspace",
-                "size":     workspace_zip.stat().st_size,
-                "tag":      _tag(workspace_zip),
-            })
+        ws_ready = workspace_zip.is_file()
+        downloads.append({
+            "name":     "📦 workspace.zip (all artifacts)",
+            "filename": "workspace.zip",
+            "url":      f"/public/sessions/{session_id}/workspace.zip",
+            "kind":     "workspace",
+            "ready":    ws_ready,
+            "size":     workspace_zip.stat().st_size if ws_ready else 0,
+            "tag":      _tag(workspace_zip) if ws_ready else "missing",
+        })
 
         manifest = {
             "session_id": session_id,

@@ -564,28 +564,44 @@
             const dlHost  = footer?.querySelector(".ac-dl-buttons");
             const pubSec  = footer?.querySelector(".ac-pub-section");
             if (footer && dlHost) {
-                const hasDownloads = downloads.length > 0;
+                // The footer always has at least workspace.zip in the
+                // downloads list (built every turn). Keep it visible
+                // throughout so the user always knows where to look.
                 footer.setAttribute("data-state",
-                    hasDownloads ? "shown" : "hidden");
-                const bundleReady = downloads.some(
+                    downloads.length > 0 ? "shown" : "hidden");
+                const bundleEntry = downloads.find(
                     (d) => d.kind === "bundle");
+                const bundleReady = !!(bundleEntry && bundleEntry.ready);
                 pubSec?.setAttribute("data-bundle-ready",
                     bundleReady ? "yes" : "no");
 
                 const dlSig = JSON.stringify(downloads.map(
-                    (d) => [d.url, d.tag, d.size]));
+                    (d) => [d.url, d.tag, d.size, !!d.ready]));
                 if (dlSig !== _lastDownloadsSig) {
                     _lastDownloadsSig = dlSig;
                     dlHost.innerHTML = "";
                     downloads.forEach((d) => {
-                        const a = document.createElement("a");
-                        a.className = "ac-dl-btn";
-                        a.href = d.url;
-                        a.setAttribute("download", d.filename || "");
-                        a.dataset.kind = d.kind;
-                        a.innerHTML = `<span class="ac-dl-label">${d.name}</span>`
-                            + `<span class="ac-dl-size">${_formatBytes(d.size)}</span>`;
-                        dlHost.appendChild(a);
+                        const ready = d.ready !== false;
+                        const tag   = ready ? "a" : "div";
+                        const el    = document.createElement(tag);
+                        el.className = "ac-dl-btn" + (ready ? "" : " ac-dl-disabled");
+                        if (ready) {
+                            el.href = d.url;
+                            el.setAttribute("download", d.filename || "");
+                        }
+                        el.dataset.kind = d.kind;
+                        el.title = ready
+                            ? `Download ${d.filename || ""}`
+                            : (d.kind === "bundle"
+                                ? "Available after Phase 2 finishes"
+                                : "Not ready yet");
+                        const sizeHTML = ready
+                            ? `<span class="ac-dl-size">${_formatBytes(d.size)}</span>`
+                            : `<span class="ac-dl-size">— not ready</span>`;
+                        el.innerHTML =
+                            `<span class="ac-dl-label">${d.name}</span>`
+                            + sizeHTML;
+                        dlHost.appendChild(el);
                     });
                 }
             }
@@ -650,23 +666,45 @@
                         username, password,
                     }),
                 });
-                const out = await r.json().catch(() => ({
-                    ok: false, error: `bad JSON from server (HTTP ${r.status})`,
-                }));
-                if (!out.ok) {
+                // Read the body ONCE as text so we can surface it raw
+                // when JSON parsing fails or the server returns an
+                // unexpected shape. Previously the bare `out.error` ||
+                // "unknown error" fallback hid the real failure mode.
+                const raw  = await r.text();
+                const safe = (s) => String(s)
+                    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+                let out = null;
+                try { out = raw ? JSON.parse(raw) : null; }
+                catch { out = null; }
+
+                if (!out) {
                     status.innerHTML =
-                        "<span class='ac-pub-err'>❌ " +
-                        (out.error || "unknown error") + "</span>";
-                } else {
-                    const url = out.competition_url || "#";
-                    status.innerHTML =
-                        "<span class='ac-pub-ok'>✅ Published!</span><br>" +
-                        `<a class="ac-pub-link" href="${url}" `
-                        + `target="_blank" rel="noopener">${url}</a>`;
-                    // Clear password but keep username so the user can
-                    // retry / re-publish without retyping it.
-                    form.querySelector("input[name='password']").value = "";
+                        `<span class='ac-pub-err'>❌ server returned `
+                        + `HTTP ${r.status} non-JSON</span>`
+                        + `<details><summary>response body</summary>`
+                        + `<pre>${safe(raw).slice(0, 1500)}</pre></details>`;
+                    return;
                 }
+                if (!out.ok) {
+                    const msg = out.error
+                        || `HTTP ${r.status} with no error field`;
+                    status.innerHTML =
+                        `<span class='ac-pub-err'>❌ ${safe(msg)}</span>`
+                        + `<details><summary>full response (HTTP `
+                        + `${r.status})</summary>`
+                        + `<pre>${safe(JSON.stringify(out, null, 2))}</pre>`
+                        + `</details>`;
+                    return;
+                }
+                const url = out.competition_url || "#";
+                status.innerHTML =
+                    "<span class='ac-pub-ok'>✅ Published!</span><br>" +
+                    `<a class="ac-pub-link" href="${url}" `
+                    + `target="_blank" rel="noopener">${safe(url)}</a>`;
+                // Clear password but keep username so the user can
+                // retry / re-publish without retyping it.
+                form.querySelector("input[name='password']").value = "";
             } catch (err) {
                 status.innerHTML =
                     "<span class='ac-pub-err'>❌ network error: "
