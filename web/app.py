@@ -726,12 +726,11 @@ async def on_message(msg: cl.Message):
     # Write the per-session public artifacts (notebook HTML +
     # transcript + cost + specs as HTML, plus a manifest.json). The
     # always-visible right panel injected by chat.js fetches these
-    # from `/public/sessions/<sid>/...` so the user can see files
-    # without ever opening a drawer.
+    # from `/public/sessions/<sid>/...` — the workspace panel is the
+    # ONLY file viewer. We deliberately don't push inline element
+    # chips or populate Chainlit's ElementSidebar anymore: they were
+    # noise on top of the workspace panel.
     _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
-    # Also keep the inline-chip drawer for backwards compatibility
-    # and as a per-message anchor; users who like the drawer keep it.
-    await _refresh_side_panel(run_dir, attach_to=response_msg)
     # Bump the stage-progress strip off any new events.jsonl lines.
     await _refresh_task_list(run_dir)
 
@@ -1179,8 +1178,8 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
     # Same panel + task-list refresh as the regular on_message path.
+    # No inline-chip drawer — the workspace panel is the file viewer.
     _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
-    await _refresh_side_panel(run_dir, attach_to=response_msg)
     await _refresh_task_list(run_dir)
     asyncio.create_task(_persist_to_hf(run_dir))
 
@@ -1523,50 +1522,6 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
         log.warning("public artifacts write failed: %s", e)
 
 
-def _collect_side_files(run_dir: Path) -> list["cl.Text"]:
-    """Build the per-turn list of files for cl.ElementSidebar.
-
-    Surfaces (in this order, when present): the executed notebook,
-    transcript.md, cost.jsonl, every spec under specs/. Each is a
-    cl.Text whose `display='side'` makes it open the right drawer
-    when its chip is clicked from chat.
-    """
-    elements: list[cl.Text] = []
-    nb_html = _render_notebook_html(run_dir)
-    if nb_html is not None:
-        elements.append(cl.Text(
-            name="📓 starting_kit.ipynb",
-            content=nb_html,
-            display="side",
-            language="html",
-        ))
-    for name in ("transcript.md", "cost.jsonl"):
-        p = run_dir / name
-        if p.is_file() and p.stat().st_size > 0:
-            try:
-                elements.append(cl.Text(
-                    name=f"📄 {name}",
-                    content=p.read_text(encoding="utf-8", errors="replace"),
-                    display="side",
-                    language="markdown" if name.endswith(".md") else "json",
-                ))
-            except Exception as e:
-                log.warning("read %s for sidebar failed: %s", p, e)
-    specs_dir = run_dir / "specs"
-    if specs_dir.is_dir():
-        for spec in sorted(specs_dir.glob("*.md")):
-            try:
-                elements.append(cl.Text(
-                    name=f"📄 specs/{spec.name}",
-                    content=spec.read_text(encoding="utf-8", errors="replace"),
-                    display="side",
-                    language="markdown",
-                ))
-            except Exception as e:
-                log.warning("read %s for sidebar failed: %s", spec, e)
-    return elements
-
-
 async def _refresh_task_list(run_dir: Path) -> None:
     """Drive the cl.TaskList off events.jsonl — LAZY-create it on first build event.
 
@@ -1701,49 +1656,6 @@ async def _refresh_task_list(run_dir: Path) -> None:
             await _maybe_offer_stage_gate(run_dir, stage_id)
 
     await _refresh_legacy_bundle_gate(run_dir)
-
-
-async def _refresh_side_panel(run_dir: Path,
-                              attach_to: "cl.Message | None" = None) -> None:
-    """Push the current file set into the UI.
-
-    Two-channel rendering so users always see the files:
-
-      1. **Inline chips on `attach_to`** (a recently-sent assistant
-         message). With Chainlit's `display="side"`, each `cl.Text`
-         renders as a clickable chip in that message — click it,
-         right-side drawer opens with the rendered file. This is the
-         visible signal that artifacts are accumulating.
-
-      2. **cl.ElementSidebar.set_elements** as a backup global view —
-         in Chainlit 2.11 the sidebar has a chrome-level toggle, but
-         it isn't always obvious; the inline chips are the primary
-         affordance.
-
-    Idempotent — safe to call after every turn.
-    """
-    try:
-        elements = _collect_side_files(run_dir)
-        if not elements:
-            return
-        # Channel 1 — attach to a freshly-sent assistant message so the
-        # chips appear *under* the response. Chainlit only renders
-        # element chips when the host message is updated after the
-        # elements are attached.
-        if attach_to is not None:
-            try:
-                attach_to.elements = elements
-                await attach_to.update()
-            except Exception as e:
-                log.warning("attach elements to message failed: %s", e)
-        # Channel 2 — populate the persistent ElementSidebar.
-        try:
-            await cl.ElementSidebar.set_title("📁 Session files")
-            await cl.ElementSidebar.set_elements(elements)
-        except Exception as e:
-            log.warning("ElementSidebar set failed: %s", e)
-    except Exception as e:
-        log.warning("side panel refresh failed: %s", e)
 
 
 def _augment_user_message(run_dir: Path, msg: "cl.Message") -> str:
