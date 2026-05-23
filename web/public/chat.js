@@ -383,18 +383,40 @@
                     pill.title = "Click to revise " + ph.title +
                         " (discards everything after this phase)";
                     pill.addEventListener("click", () => {
+                        const curName = (state.phases || []).find(
+                            (x) => x.id === state.current)?.title
+                            || state.current;
                         const ok = confirm(
-                            "Go back to " + ph.title + "?\n\n" +
-                            "Everything in later phases will be discarded " +
-                            "(the bundle zip will be wiped and regenerated " +
-                            "when you advance again). The " + ph.title +
-                            " artifact itself is preserved so you can edit it.");
+                            "« BACK to " + ph.title + "\n\n" +
+                            "This will REOPEN " + ph.title + " for editing " +
+                            "and DISCARD the " + curName + " artifact " +
+                            "(it will be regenerated next time you " +
+                            "advance forward). The " + ph.title +
+                            " content itself is preserved so you can " +
+                            "edit it in place.\n\n" +
+                            "Continue?");
                         if (!ok) return;
                         _clickHiddenPhaseNav("revert", ph.id);
                     });
                 } else if (isAdvanceTarget) {
                     pill.title = "Click to advance to " + ph.title;
                     pill.addEventListener("click", () => {
+                        const curName = (state.phases || []).find(
+                            (x) => x.id === state.current)?.title
+                            || state.current;
+                        const ok = confirm(
+                            "▶ ADVANCE to " + ph.title + "\n\n" +
+                            "This will LOCK " + curName + " (its artifact " +
+                            "becomes read-only at this phase's agent) and " +
+                            "start " + ph.title + " with a FRESH agent " +
+                            "that has NO memory of this conversation — " +
+                            "only the locked artifact carries forward.\n\n" +
+                            "You can come back later by clicking the 🔒 " +
+                            curName + " pill, but doing so will discard " +
+                            "any " + ph.title + " output and start over " +
+                            "when you re-advance.\n\n" +
+                            "Continue?");
+                        if (!ok) return;
                         _clickHiddenPhaseNav("advance", ph.id);
                     });
                 } else {
