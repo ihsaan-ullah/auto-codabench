@@ -392,6 +392,138 @@ def _mcp_servers(run_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Direct-to-Codabench upload route.
+#
+# This is the workspace-form upload path — credentials come from the user
+# typing them into the right-side panel, NOT from env vars, and NOT
+# routed through the LLM. We mount it on Chainlit's underlying FastAPI
+# app so the request comes in over the same origin as the chat itself,
+# which means no CORS / cookie hassles.
+# ---------------------------------------------------------------------------
+
+def _resolve_session_run_dir(session_id: str) -> Path | None:
+    """Locate the run dir for a session_id by globbing meta.json files.
+
+    Sessions are named `web_<user>_<runtime>_<session_id>/` (see
+    on_chat_start) — the session_id is the trailing component, so a
+    simple suffix match is sufficient and avoids re-reading every
+    meta.json on disk.
+    """
+    if not session_id:
+        return None
+    for candidate in RUNS_ROOT.glob(f"web_*_{session_id}"):
+        if (candidate / "meta.json").is_file():
+            return candidate
+    return None
+
+
+def _register_upload_route() -> None:
+    """Mount POST /ac/upload-codabench on Chainlit's FastAPI app.
+
+    Idempotent — safe to call multiple times (we tag the app once it's
+    been registered so module re-imports don't double-register).
+    """
+    try:
+        from chainlit.server import app as cl_app
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+    except Exception as e:
+        log.warning("Chainlit FastAPI app unavailable; "
+                    "upload route not mounted: %s", e)
+        return
+
+    if getattr(cl_app, "_ac_upload_route_registered", False):
+        return
+    cl_app._ac_upload_route_registered = True  # type: ignore[attr-defined]
+
+    @cl_app.post("/ac/upload-codabench")
+    async def _ac_upload_codabench(request: Request) -> JSONResponse:
+        """Upload a session's bundle.zip to Codabench using user-supplied creds.
+
+        Body (JSON): {"session_id": str, "username": str, "password": str}.
+        Returns:      {"ok": bool, "competition_url"?: str, "error"?: str}.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "error": "invalid JSON body"}, status_code=400)
+
+        sid      = str(body.get("session_id") or "").strip()
+        username = str(body.get("username")   or "").strip()
+        password =     body.get("password")   or ""
+        # `or` on password keeps it as the original type (don't strip
+        # whitespace — passwords can legitimately have leading spaces).
+
+        if not sid or not username or not password:
+            return JSONResponse(
+                {"ok": False,
+                 "error": "session_id, username, and password are required"},
+                status_code=400)
+
+        run_dir = _resolve_session_run_dir(sid)
+        if run_dir is None:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"no run dir for session {sid}"},
+                status_code=404)
+
+        bundle_zip = _find_bundle_zip(run_dir)
+        if bundle_zip is None or not bundle_zip.is_file():
+            return JSONResponse(
+                {"ok": False,
+                 "error": "bundle.zip not found — finish Phase 2 first"},
+                status_code=409)
+
+        log.info("upload-codabench start sid=%s user=%s zip=%s",
+                 sid, username, bundle_zip)
+
+        try:
+            from auto_codabench.mcp_server.tools.upload import upload_zip
+            result = await asyncio.to_thread(
+                upload_zip,
+                bundle_zip,
+                username=username,
+                password=password,
+            )
+        except Exception as e:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"upload raised: {type(e).__name__}: {e}"},
+                status_code=500)
+
+        if "error" in result:
+            return JSONResponse(
+                {"ok": False, "error": result["error"]},
+                status_code=502)
+
+        comp_url = result.get("competition_url")
+        comp_id  = result.get("competition_id")
+
+        # Append a transcript entry so the upload event survives the
+        # session even though no chat message was produced.
+        try:
+            _append_transcript(
+                run_dir, role="user",
+                text=f"[ui] Uploaded bundle to Codabench as `{username}`.")
+            _append_transcript(
+                run_dir, role="claude",
+                text=(f"🚀 **Bundle published to Codabench.**\n\n"
+                      f"competition: [{comp_url}]({comp_url}) "
+                      f"(id `{comp_id}`)."))
+        except Exception as e:
+            log.warning("transcript append after upload failed: %s", e)
+
+        return JSONResponse(
+            {"ok": True,
+             "competition_id":  comp_id,
+             "competition_url": comp_url})
+
+
+_register_upload_route()
+
+
+# ---------------------------------------------------------------------------
 # Auth: a single shared password
 # ---------------------------------------------------------------------------
 
@@ -798,14 +930,12 @@ async def on_message(msg: cl.Message):
 # ---------------------------------------------------------------------------
 
 async def _maybe_offer_bundle_actions() -> None:
-    """Surface a 'Download / Upload' message once stage 8's zip exists.
+    """Surface a one-time 'Bundle ready' chat message once Phase 2's
+    zip exists. Fires at most once per session.
 
-    Fires at most once per session — `bundle_actions_offered` flag.
-    The bundle's location is `auto_codabench/bundles/<slug>/<slug>.zip`
-    (the agent's zip_bundle tool puts it there); we mirror it to the
-    per-session public dir from _write_public_artifacts. Download =
-    direct link to that public file. Upload = cl.Action triggering
-    `autocodabench_upload_bundle`.
+    All download + publish UX lives in the workspace panel on the right
+    (downloads list + Codabench credentials form). This chat message is
+    just a pointer — no cl.Actions, no LLM-driven upload path.
     """
     if cl.user_session.get("bundle_actions_offered"):
         return
@@ -820,68 +950,22 @@ async def _maybe_offer_bundle_actions() -> None:
 
     size_mb = public_zip.stat().st_size / (1024 * 1024)
     download_url = f"/public/sessions/{session_id}/bundle.zip"
-    actions = [
-        cl.Action(name="ac_upload_codabench",
-                  payload={"zip_path": str(public_zip)},
-                  label="⬆️ Upload to Codabench",
-                  tooltip="Publishes the bundle to Codabench using "
-                          "CODABENCH_USERNAME / CODABENCH_PASSWORD "
-                          "from the Space's Repository Secrets. "
-                          "Returns the competition URL when finished."),
-    ]
     await cl.Message(
         author="autocodabench",
         content=(
             f"## 📦 Bundle ready ({size_mb:.1f} MB)\n\n"
-            f"**[📥 Download bundle.zip]({download_url})** — click to "
-            f"save it locally; the same link is in the workspace "
-            f"panel's `📦 bundle.zip` tab.\n\n"
-            f"Or click below to publish it directly to Codabench. "
-            f"You'll see the competition URL when the upload finishes."
+            f"Open the **workspace panel on the right** to:\n\n"
+            f"- **Download** `bundle.zip` (or `workspace.zip` for "
+            f"everything: plan + transcript + cost + bundle).\n"
+            f"- **Publish to Codabench**: type your Codabench username + "
+            f"password into the form at the bottom of the panel and "
+            f"click *Upload &amp; publish*. The upload runs directly "
+            f"(no LLM cost) and the competition URL appears in the form "
+            f"when it's done.\n\n"
+            f"_Direct download link, in case the panel is hidden:_ "
+            f"**[📥 bundle.zip]({download_url})**"
         ),
-        actions=actions,
     ).send()
-
-
-@cl.action_callback("ac_upload_codabench")
-async def _on_upload_codabench(action: cl.Action):
-    """Run autocodabench_upload_bundle through the agent and show progress."""
-    p = action.payload or {}
-    run_dir = Path(cl.user_session.get("run_dir") or ".")
-    # Find the slug — the bundle dir name under auto_codabench/bundles/.
-    bundle_src = _find_bundle_zip(run_dir)
-    slug = bundle_src.parent.name if bundle_src else None
-    if not slug:
-        await cl.Message(
-            author="autocodabench",
-            content="❌ Couldn't find the bundle slug. Re-run stage 8 first.",
-        ).send()
-        return
-    # Surface a status step so the user can watch.
-    step = cl.Step(name=f"Uploading {slug} to Codabench…", type="tool",
-                   show_input="json")
-    step.input = {"slug": slug}
-    await step.send()
-    _append_transcript(run_dir, role="user",
-                       text=f"[ui] Upload bundle '{slug}' to Codabench.")
-    # The agent (in PHASE_IMPLEMENTATION) has the upload tool;
-    # synthesise a turn asking it to run upload_bundle and surface
-    # the competition URL.
-    await _stream_one_turn(
-        run_dir,
-        f"The user clicked **Upload to Codabench**. Call "
-        f"`autocodabench_upload_bundle(slug='{slug}')` NOW. When it "
-        f"returns, surface the `competition_url` as a clickable "
-        f"markdown link, prominently. If the call fails (bad "
-        f"credentials, network), report the error verbatim and "
-        f"suggest the user verify CODABENCH_USERNAME / "
-        f"CODABENCH_PASSWORD in the Space's Repository Secrets.",
-    )
-    try:
-        step.output = "Upload kicked off — watch the tool chips above for the URL."
-        await step.update()
-    except Exception:
-        pass
 
 
 @cl.action_callback("ac_build_bundle")
@@ -1638,33 +1722,25 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
             except Exception:
                 return "0-0"
 
-        # The implementation plan is the primary file in the workspace
-        # panel; it's the locked artifact the user reviews before clicking
-        # Advance to Phase 2.
+        # Manifest is split into two arrays:
+        #   tabs[]      — viewable in the iframe (the panel's tab strip)
+        #   downloads[] — real binary files; rendered as <a download> in
+        #                 the footer because iframes can't render zips.
+        # This is the fix for the "bundle is ready but I don't see it"
+        # bug: previously bundle.zip was a tab and clicking it just
+        # navigated to a zip URL the browser couldn't render inline.
         plan_ready = plan_path is not None and plan_path.stat().st_size > 0
-        manifest = {
-            "session_id": session_id,
-            "updated_at": _utc_now(),
-            "files": [
-                {
-                    "name":  "📝 implementation_plan.md",
-                    "url":   f"/public/sessions/{session_id}/plan.html",
-                    "kind":  "plan",
-                    "ready": plan_ready,
-                    "tag":   _tag(out / "plan.html"),
-                },
-            ],
-        }
-        if bundle_pub.is_file():
-            manifest["files"].append({
-                "name": "📦 bundle.zip (download)",
-                "url":  f"/public/sessions/{session_id}/bundle.zip",
-                "kind": "bundle",
-                "ready": True,
-                "tag":  _tag(bundle_pub),
-            })
+        tabs = [
+            {
+                "name":  "📝 implementation_plan.md",
+                "url":   f"/public/sessions/{session_id}/plan.html",
+                "kind":  "plan",
+                "ready": plan_ready,
+                "tag":   _tag(out / "plan.html"),
+            },
+        ]
         if (out / "transcript.html").is_file():
-            manifest["files"].append({
+            tabs.append({
                 "name": "📄 transcript.md",
                 "url":  f"/public/sessions/{session_id}/transcript.html",
                 "kind": "transcript",
@@ -1672,25 +1748,75 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "tag":  _tag(out / "transcript.html"),
             })
         if (out / "cost.html").is_file():
-            manifest["files"].append({
+            tabs.append({
                 "name": "💰 cost.jsonl",
                 "url":  f"/public/sessions/{session_id}/cost.html",
                 "kind": "cost",
                 "ready": True,
                 "tag":  _tag(out / "cost.html"),
             })
-        # specs/ also contains implementation_plan.md (already surfaced as
-        # the primary 📝 plan tab above). Skip duplicates.
+        # specs/ also contains implementation_plan.md (already surfaced
+        # as the primary 📝 plan tab above). Skip duplicates.
         for spec_html in sorted(specs_out.glob("*.html")):
             if spec_html.stem == "implementation_plan":
                 continue
-            manifest["files"].append({
+            tabs.append({
                 "name": f"📄 specs/{spec_html.stem}.md",
                 "url":  f"/public/sessions/{session_id}/specs/{spec_html.name}",
                 "kind": "spec",
                 "ready": True,
                 "tag":  _tag(spec_html),
             })
+
+        downloads: list[dict] = []
+        if bundle_pub.is_file():
+            downloads.append({
+                "name":     "📦 bundle.zip",
+                "filename": "bundle.zip",
+                "url":      f"/public/sessions/{session_id}/bundle.zip",
+                "kind":     "bundle",
+                "size":     bundle_pub.stat().st_size,
+                "tag":      _tag(bundle_pub),
+            })
+
+        # workspace.zip — everything in the panel as a single download.
+        # Built last so it includes the bundle + the freshly-rendered HTML
+        # pages. Excludes itself + the manifest (which would race).
+        workspace_zip = out / "workspace.zip"
+        try:
+            import zipfile
+            tmp_zip = out / ".workspace.zip.tmp"
+            with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                for p in out.rglob("*"):
+                    if not p.is_file():
+                        continue
+                    if p.name in ("workspace.zip", ".workspace.zip.tmp",
+                                  "manifest.json"):
+                        continue
+                    zf.write(p, p.relative_to(out))
+            tmp_zip.replace(workspace_zip)
+        except Exception as e:
+            log.warning("workspace.zip build failed: %s", e)
+        if workspace_zip.is_file():
+            downloads.append({
+                "name":     "📦 workspace.zip (all artifacts)",
+                "filename": "workspace.zip",
+                "url":      f"/public/sessions/{session_id}/workspace.zip",
+                "kind":     "workspace",
+                "size":     workspace_zip.stat().st_size,
+                "tag":      _tag(workspace_zip),
+            })
+
+        manifest = {
+            "session_id": session_id,
+            "updated_at": _utc_now(),
+            "tabs":       tabs,
+            "downloads":  downloads,
+            # `files` is kept as a flat union for any legacy chat.js the
+            # browser may still have cached pre-rebuild. New chat.js
+            # reads `tabs` + `downloads` directly.
+            "files":      tabs,
+        }
         (out / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )

@@ -479,6 +479,15 @@
         return JSON.stringify((files || []).map((f) => [f.url, f.name]));
     }
 
+    let _lastDownloadsSig = "";
+
+    function _formatBytes(n) {
+        if (!n && n !== 0) return "";
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
     async function _refreshSidePanelFromManifest() {
         const sid = _currentSessionId();
         const panel = document.getElementById("ac-side-panel");
@@ -493,21 +502,22 @@
             );
             if (!r.ok) return;
             const m = await r.json();
-            const files = m.files || [];
-            const tabsHost = panel.querySelector(".ac-tabs");
-            const iframe   = panel.querySelector("#ac-side-iframe");
+            // New manifest shape: `tabs` (viewable) + `downloads` (real
+            // files). Fall back to legacy `files` if the backend hasn't
+            // been updated.
+            const tabs      = m.tabs || m.files || [];
+            const downloads = m.downloads || [];
+            const tabsHost  = panel.querySelector(".ac-tabs");
+            const iframe    = panel.querySelector("#ac-side-iframe");
 
-            const tabsSig = _tabsListSig(files);
+            // --- tabs (iframe-viewable) ---
+            const tabsSig = _tabsListSig(tabs);
             if (tabsSig !== _lastFileListSig) {
-                // Tab set itself changed (new file added, file removed):
-                // rebuild the tab strip. Do NOT auto-reload the iframe
-                // here unless we have to — only reload when the user
-                // hasn't picked a tab yet (initial load).
                 _lastFileListSig = tabsSig;
                 const wasActiveUrl = tabsHost.querySelector(".ac-tab-active")
                     ?.dataset.url || null;
                 tabsHost.innerHTML = "";
-                files.forEach((f, i) => {
+                tabs.forEach((f, i) => {
                     const isActive = wasActiveUrl
                         ? f.url === wasActiveUrl
                         : i === 0;
@@ -525,11 +535,9 @@
                     });
                     tabsHost.appendChild(b);
                 });
-                // Initial-load only: if iframe has no real src, load the
-                // first/active tab so something is visible.
                 if (iframe.src === "about:blank" || !iframe.src) {
-                    const target = files.find((f) => f.url === wasActiveUrl)
-                        || files[0];
+                    const target = tabs.find((f) => f.url === wasActiveUrl)
+                        || tabs[0];
                     if (target) {
                         iframe.src = target.url + `?t=${Date.now()}`;
                         _lastTagByUrl[target.url] = target.tag;
@@ -538,12 +546,11 @@
             }
 
             // For the currently-active tab, ONLY reload if its content
-            // actually changed since we last loaded it. This is what
-            // killed the scroll-to-top bug — previously we reloaded
-            // every tick regardless.
+            // actually changed since we last loaded it. Killed the
+            // scroll-to-top bug.
             const active = tabsHost.querySelector(".ac-tab-active");
             if (active) {
-                const activeFile = files.find((f) => f.url === active.dataset.url);
+                const activeFile = tabs.find((f) => f.url === active.dataset.url);
                 if (activeFile
                     && activeFile.tag
                     && _lastTagByUrl[activeFile.url] !== activeFile.tag) {
@@ -551,9 +558,124 @@
                     _lastTagByUrl[activeFile.url] = activeFile.tag;
                 }
             }
+
+            // --- downloads + publish footer ---
+            const footer  = panel.querySelector(".ac-side-footer");
+            const dlHost  = footer?.querySelector(".ac-dl-buttons");
+            const pubSec  = footer?.querySelector(".ac-pub-section");
+            if (footer && dlHost) {
+                const hasDownloads = downloads.length > 0;
+                footer.setAttribute("data-state",
+                    hasDownloads ? "shown" : "hidden");
+                const bundleReady = downloads.some(
+                    (d) => d.kind === "bundle");
+                pubSec?.setAttribute("data-bundle-ready",
+                    bundleReady ? "yes" : "no");
+
+                const dlSig = JSON.stringify(downloads.map(
+                    (d) => [d.url, d.tag, d.size]));
+                if (dlSig !== _lastDownloadsSig) {
+                    _lastDownloadsSig = dlSig;
+                    dlHost.innerHTML = "";
+                    downloads.forEach((d) => {
+                        const a = document.createElement("a");
+                        a.className = "ac-dl-btn";
+                        a.href = d.url;
+                        a.setAttribute("download", d.filename || "");
+                        a.dataset.kind = d.kind;
+                        a.innerHTML = `<span class="ac-dl-label">${d.name}</span>`
+                            + `<span class="ac-dl-size">${_formatBytes(d.size)}</span>`;
+                        dlHost.appendChild(a);
+                    });
+                }
+            }
         } catch (e) {
             // Network blip / not-yet-written → silent.
         }
+    }
+
+    function _wirePublishForm(panel) {
+        const sec = panel.querySelector(".ac-pub-section");
+        if (!sec || sec.dataset.acWired) return;
+        sec.dataset.acWired = "1";
+
+        // Header toggle expands/collapses the form.
+        const toggle = sec.querySelector(".ac-pub-toggle");
+        toggle?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = sec.getAttribute("data-state") !== "collapsed";
+            sec.setAttribute("data-state", open ? "collapsed" : "open");
+        });
+
+        const form   = sec.querySelector(".ac-pub-form");
+        const status = sec.querySelector(".ac-pub-status");
+        const submit = sec.querySelector(".ac-pub-submit");
+        if (!form || !status || !submit) return;
+
+        // Clicks inside the form shouldn't bubble up to the panel-level
+        // "click anywhere to open" handler (matters when the panel is
+        // collapsed — though we set the form hidden then anyway).
+        form.addEventListener("click", (e) => e.stopPropagation());
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const sid = _currentSessionId();
+            if (!sid) {
+                status.innerHTML =
+                    "<span class='ac-pub-err'>session id missing — refresh</span>";
+                return;
+            }
+            const fd = new FormData(form);
+            const username = (fd.get("username") || "").toString().trim();
+            const password = (fd.get("password") || "").toString();
+            if (!username || !password) {
+                status.innerHTML =
+                    "<span class='ac-pub-err'>username + password required</span>";
+                return;
+            }
+            // Disable form, show spinner.
+            submit.disabled = true;
+            const origLabel = submit.textContent;
+            submit.textContent = "⏳ Uploading…";
+            status.innerHTML =
+                "<span class='ac-pub-info'>uploading to Codabench "
+                + "(can take 30–90 s while it unpacks)…</span>";
+            try {
+                const r = await fetch("/ac/upload-codabench", {
+                    method:  "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body:    JSON.stringify({
+                        session_id: sid,
+                        username, password,
+                    }),
+                });
+                const out = await r.json().catch(() => ({
+                    ok: false, error: `bad JSON from server (HTTP ${r.status})`,
+                }));
+                if (!out.ok) {
+                    status.innerHTML =
+                        "<span class='ac-pub-err'>❌ " +
+                        (out.error || "unknown error") + "</span>";
+                } else {
+                    const url = out.competition_url || "#";
+                    status.innerHTML =
+                        "<span class='ac-pub-ok'>✅ Published!</span><br>" +
+                        `<a class="ac-pub-link" href="${url}" `
+                        + `target="_blank" rel="noopener">${url}</a>`;
+                    // Clear password but keep username so the user can
+                    // retry / re-publish without retyping it.
+                    form.querySelector("input[name='password']").value = "";
+                }
+            } catch (err) {
+                status.innerHTML =
+                    "<span class='ac-pub-err'>❌ network error: "
+                    + (err?.message || err) + "</span>";
+            } finally {
+                submit.disabled = false;
+                submit.textContent = origLabel;
+            }
+        });
     }
 
     function _setPanelCollapsed(panel, collapsed) {
@@ -603,6 +725,34 @@
             <iframe id="ac-side-iframe"
                     src="about:blank"
                     sandbox="allow-same-origin"></iframe>
+            <div class="ac-side-footer" data-state="hidden">
+                <section class="ac-dl-section">
+                    <div class="ac-foot-title">Downloads</div>
+                    <div class="ac-dl-buttons"></div>
+                </section>
+                <section class="ac-pub-section" data-state="collapsed">
+                    <div class="ac-foot-title ac-pub-toggle">
+                        🚀 Publish to Codabench
+                        <span class="ac-pub-chev">▾</span>
+                    </div>
+                    <form class="ac-pub-form" autocomplete="off">
+                        <label>Username
+                          <input type="text" name="username"
+                                 autocomplete="username"
+                                 placeholder="codabench username" required>
+                        </label>
+                        <label>Password
+                          <input type="password" name="password"
+                                 autocomplete="current-password"
+                                 placeholder="codabench password" required>
+                        </label>
+                        <button type="submit" class="ac-pub-submit">
+                            🚀 Upload &amp; publish
+                        </button>
+                        <div class="ac-pub-status" role="status"></div>
+                    </form>
+                </section>
+            </div>
         `;
         document.body.appendChild(panel);
         // Sync class/state after the panel is in the DOM (we set
@@ -648,6 +798,10 @@
         panel.querySelector(".ac-tabs").addEventListener("click", (e) => {
             e.stopPropagation();
         });
+
+        // Wire the bottom-panel publish form (idempotent — guarded
+        // internally by a data-attr).
+        _wirePublishForm(panel);
 
         // First fetch + then periodic refresh every 3.5 s, but only
         // while the panel is OPEN (see _refreshSidePanelFromManifest).

@@ -50,26 +50,38 @@ def _load_upload_helpers():
     return module
 
 
-def _do_upload(slug: str, root_dir: str | None) -> dict[str, Any]:
-    """Run the 4-step Codabench upload flow synchronously. Used inside asyncio.to_thread."""
-    bundle_dir = resolve_bundle_dir(slug, root_dir)
-    zip_path = bundle_dir.parent / f"{slug}.zip"
-    if not zip_path.is_file():
-        return {
-            "error": f"zip not found at {zip_path}. Run autocodabench_zip_bundle first."
-        }
+def upload_zip(
+    zip_path: Path,
+    *,
+    username: str | None = None,
+    password: str | None = None,
+    token: str | None = None,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """Publish an already-built zip to Codabench. Credentials-explicit.
 
-    base_url = os.environ.get("CODABENCH_BASE_URL", "https://www.codabench.org")
-    username = os.environ.get("CODABENCH_USERNAME")
-    password = os.environ.get("CODABENCH_PASSWORD")
-    token = os.environ.get("CODABENCH_TOKEN")
+    Used both by the MCP `autocodabench_upload_bundle` tool (which pulls
+    creds from env) and by the web-UI `/ac/upload-codabench` route
+    (which passes user-supplied creds from the workspace form). Pulling
+    from env is therefore optional — callers can fully override.
+
+    Returns a dict with `competition_id` + `competition_url` on success,
+    or `{"error": "..."}` on any failure. Never raises.
+    """
+    if not zip_path.is_file():
+        return {"error": f"zip not found at {zip_path}. Run zip_bundle first."}
+
+    base_url = base_url or os.environ.get(
+        "CODABENCH_BASE_URL", "https://www.codabench.org")
+    username = username or os.environ.get("CODABENCH_USERNAME")
+    password = password or os.environ.get("CODABENCH_PASSWORD")
+    token    = token    or os.environ.get("CODABENCH_TOKEN")
 
     if not (username and password) and not token:
         return {
             "error": (
-                "Missing Codabench credentials. Set CODABENCH_USERNAME + "
-                "CODABENCH_PASSWORD or CODABENCH_TOKEN in the environment "
-                "(.env on local, Repository Secrets on HF Spaces)."
+                "Missing Codabench credentials. Provide username + password "
+                "(via the workspace form) or set CODABENCH_TOKEN."
             )
         }
 
@@ -78,7 +90,7 @@ def _do_upload(slug: str, root_dir: str | None) -> dict[str, Any]:
     except Exception as e:
         return {"error": f"Could not load upload helpers: {e}"}
 
-    log.info("upload_bundle slug=%s zip=%s size=%d", slug, zip_path, zip_path.stat().st_size)
+    log.info("upload_zip path=%s size=%d", zip_path, zip_path.stat().st_size)
 
     try:
         # Step 1: fetch a fresh token if we have user/pass.
@@ -147,6 +159,13 @@ def _do_upload(slug: str, root_dir: str | None) -> dict[str, Any]:
         "competition_url": f"{base_url.rstrip('/')}/competitions/{cid}/",
         "raw": outcome,
     }
+
+
+def _do_upload(slug: str, root_dir: str | None) -> dict[str, Any]:
+    """Resolve slug → zip path, then delegate to upload_zip (env-creds)."""
+    bundle_dir = resolve_bundle_dir(slug, root_dir)
+    zip_path = bundle_dir.parent / f"{slug}.zip"
+    return upload_zip(zip_path)
 
 
 @mcp.tool()

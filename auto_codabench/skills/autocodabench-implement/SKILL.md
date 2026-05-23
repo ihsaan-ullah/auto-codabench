@@ -235,13 +235,12 @@ Render this closing block:
   bundle zip       — `<run>/bundles/<slug>/<slug>.zip` (≈<N> MB)
   validate_bundle  — passed
   files written    — <n>
-  codabench URL    — <url if uploaded; otherwise "(not yet uploaded)">
 
-A 📦 bundle.zip tab is now in the workspace panel on the right.
-Click it to download. To publish to Codabench directly, click
-**⬆️ Upload to Codabench** below (the button will appear in chat) —
-that needs `CODABENCH_USERNAME` + `CODABENCH_PASSWORD` configured on
-the Space.
+Open the **workspace panel on the right** to download the bundle (or
+the entire workspace as one zip) and to publish to Codabench. The
+Publish form takes your Codabench username + password and runs the
+upload directly — no extra agent turns needed. The competition URL
+shows up in that same form when the upload finishes.
 
 Choices I made where the plan was ambiguous:
   - <list any defaults you picked here, or "none — the plan was fully concrete">
@@ -265,21 +264,22 @@ affordances. STOP.
 
 ---
 
-## 6. Optional: publish
+## 6. Publish (no agent action needed)
 
-Only if the user explicitly asked ("publish" / "upload" / "push to
-Codabench" / "go"):
+The web UI's workspace panel has its own Codabench upload form — the
+user enters username + password there and the upload runs as a direct
+HTTP call (no LLM turn). Do NOT call `autocodabench_upload_bundle`
+yourself unless the user explicitly asks in chat ("publish", "upload",
+"go"). The form is the canonical path and avoids burning agent cost
+on a deterministic 4-step API flow.
 
+If the user does ask you to upload via chat, call:
 ```
 result = autocodabench_upload_bundle(slug)
 ```
-
-Requires `CODABENCH_USERNAME` + `CODABENCH_PASSWORD` (or
-`CODABENCH_TOKEN`) in env. Returns
-`{"competition_id": <int>, "competition_url": "https://www.codabench.org/competitions/<id>/"}`.
-
-Surface the URL prominently as a clickable markdown link in your
-closing message.
+This uses `CODABENCH_USERNAME` + `CODABENCH_PASSWORD` (or
+`CODABENCH_TOKEN`) from env. Returns `{competition_id, competition_url}`.
+Surface the URL as a clickable markdown link.
 
 ---
 
