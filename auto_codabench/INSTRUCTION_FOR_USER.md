@@ -1,150 +1,264 @@
 # AutoCodabench — User Guide
 
-> **Branch note (`try-alex-mcp`):** this branch uses the OpenAlex-based
-> `alex-mcp` server in place of `semantic-scholar`. OpenAlex's polite-pool
-> (just an email — `OPENALEX_MAILTO`) is far more reliable than
-> unauthenticated SS, so most of the "rate-limited / citation pending"
-> friction disappears. The autocodabench MCP server is unchanged.
+You have a one-sentence idea for a Codabench competition. You want to
+walk away with a `.zip` ready to upload (or already published on
+Codabench). This guide takes you there two ways:
 
-You have one sentence about a competition idea ("a contest on detecting
-AI-generated text"). You want to walk away with a `.zip` you can upload to
-Codabench. This guide takes you from a fresh laptop to that `.zip`, with
-Claude doing all the work via two MCP servers and three skills.
+- **Web UI** — click-through chat at the AutoCodabench Space (or
+  `chainlit run app.py` locally). 2 phases, no MCP config, no skill
+  install — just sign in and chat. See §A.
+- **CLI** — Claude Desktop or Claude Code, with the autocodabench MCP
+  server + skills wired in. Same 2-phase shape, more knobs. See §B.
 
 ---
 
-## 1. What this actually is, in 30 seconds
+## What this actually is, in 30 seconds
 
 Two **MCP servers** plug into Claude:
 
-- **alex-mcp (OpenAlex)** — lets Claude search papers, look up authors,
-  cross-check against PubMed and ORCID. Used during planning to ground
-  every metric / dataset / baseline suggestion in real published work.
-  Authenticated via an email (`OPENALEX_MAILTO`) — no API key required.
-- **autocodabench** — lets Claude write Codabench bundle files
-  (`competition.yaml`, scoring program, pages, etc.), lint them, and zip
-  them. Purely local — it never touches the Codabench server.
+- **alex-mcp (OpenAlex)** — Claude searches papers, looks up authors,
+  cross-checks against PubMed and ORCID, so every metric / dataset /
+  baseline suggestion is grounded in real published work.
+  Authenticated via an email only (`OPENALEX_MAILTO`) — no API key.
+- **autocodabench** — Claude writes Codabench bundle files
+  (`competition.yaml`, scoring program, pages, etc.), lints them,
+  zips them, and (optionally) uploads them. Purely local apart from
+  the upload step.
 
-Three **skills** in `auto_codabench/skills/` tell Claude *how* to use those
-servers:
+Two **skills** in `auto_codabench/skills/`:
 
-- `competition-design` — distilled rules of thumb from a 315-page book on
-  designing competitions.
-- `codabench-bundle` — the exact schema Codabench expects.
-- `autocodabench-orchestrator` — the iterative loop you'll run in Session 1.
+- `autocodabench-plan` — Phase 1: walks the user through a short
+  citation-grounded design conversation and saves
+  `<run>/specs/implementation_plan.md`. Pure prose, no code.
+- `autocodabench-implement` — Phase 2: reads the locked plan and
+  packages a Codabench bundle directly (`competition.yaml`,
+  `scoring_program/`, `solution/`, pages), validates, zips,
+  optionally uploads. No intermediate notebook step.
 
-**Updated workflow (2026-05).** The earlier two-phase prose-proposal
-flow has been replaced by a single **9-stage notebook flow**: you and
-Claude build `starting_kit.ipynb` cell-group by cell-group, and the
-last stage packages the executed notebook into the Codabench
-`.zip`. There's no separate "proposal", no "implementation plan
-markdown" — the executed notebook IS the design artifact, and when
-it runs end-to-end on toy data the design is by construction
-self-consistent.
+Two **reference skills** that the two above lean on but you don't
+invoke directly: `competition-design` (Pavão book rules of thumb) and
+`codabench-bundle` (Codabench bundle schema).
 
-| Stage | What happens                                                                                       | What lands in the notebook                              |
-| ----- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| 0     | **Roadmap** — design conversation, no cells. Claude shows the 8-stage table + drills into a tension. | (none — design talk)                                    |
-| 1     | **Setup**           — imports, paths, env summary.                                                  | 4-6 cells                                               |
-| 2     | **Data loader**     — `read_data()`, shapes, sample rows.                                          | 3-5 cells; data-split decision encoded                  |
-| 3     | **EDA**             — class distribution + visual probe.                                            | 2-3 cells with plots                                    |
-| 4     | **Metric**          — `score(y_true, y_pred)` + random-baseline sanity test.                        | 1-2 cells + a printed sanity check                      |
-| 5     | **Baseline model**  — trivial + modest baseline (sklearn-class, CPU only).                          | 3-4 cells                                               |
-| 6     | **Predict + score** — apply baselines, score, comparison table.                                      | 2-3 cells with the comparison numbers                   |
-| 7     | **Diagnostics**     — confusion matrix, per-slice metric.                                            | 2-3 cells with plots                                    |
-| 8     | **Bundle**          — generates `competition.yaml`, `scoring_program/`, `solution/`, pages, zips.   | files under `auto_codabench/bundles/<slug>/<slug>.zip`  |
+**The flow is the same in both interfaces:**
 
-After each of stages 1-7, the UI shows an approval gate with three
-actions: **Approve & advance**, **Revise this stage**, **Save &
-exit**. Revise is reversible — it restarts the kernel, drops the
-stage's outputs, re-executes earlier stages, and asks you what to
-refine. You won't lose prior work.
+```
+your idea (one sentence)
+        │
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│ Phase 1 — PLAN                                            │
+│   Short citation-grounded chat. Agent saves               │
+│   <run>/specs/implementation_plan.md (covering the 7      │
+│   design sections: task, data, metric, baseline, rules,   │
+│   ethics, schedule).                                      │
+└──────────────────────────────────────────────────────────┘
+        │  (you review the plan, advance)
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│ Phase 2 — COMPETITION CREATION                            │
+│   Fresh agent (no Phase-1 chat history; only the plan).   │
+│   Generates the bundle from the plan, validates, zips.    │
+│   Optional one-click Codabench upload → competition URL.  │
+└──────────────────────────────────────────────────────────┘
+        │
+        ▼
+   bundle.zip  →  https://www.codabench.org/competitions/<id>/
+```
 
-The approval click on stage 7 is the new planning→implementation
-boundary: it rebuilds Claude with bundle-write tools and auto-starts
-stage 8. There's no separate "Session 2"; the whole thing lives in
-one conversation. On the web UI, files appear in the side panel as
-they're written — click any chip (or the `📁 Files` button on the
-right edge) to view a file at any time. On the CLI, use
-`/autocodabench-implement` in a fresh chat to invoke stage 8
-manually against an earlier-built run dir.
+The hard agent reset between phases is the whole cost-savings story —
+Phase 2 reads only the plan, not the chat history. Make the plan
+concrete (named sklearn classes for baselines, exact metric function
+names) and Phase 2 packages without re-inviting design questions.
 
 ---
 
-## 2. What you need on your machine
+# A. Web UI — the easy path
 
-- **macOS, Linux, or WSL.** Windows native should work but isn't tested.
-- **Miniconda or Anaconda.** If you don't have it:
-  https://docs.conda.io/projects/miniconda/en/latest/
+The maintained AutoCodabench Space is at:
+
+> `https://huggingface.co/spaces/<owner>/<space-name>`
+> (Your operator will share the actual URL + the `SHARED_PASSWORD`
+> out-of-band.)
+
+You can also run it locally — see `web/README.md` §1.
+
+## A.1 Sign in
+
+You'll see a Chainlit login form: username (anything) + the
+`SHARED_PASSWORD` your operator gave you. After signing in, a greeting
+appears with your session ID, model name, and budget cap.
+
+## A.2 The phase bar
+
+At the top of the page, next to the **Readme** and **New chat**
+buttons, you'll see two black pills:
+
+```
+[ 1. 📝 Plan ]  [ 2. 📦 Competition Creation ]
+```
+
+- **Active** pill (filled white): you're currently in this phase.
+- **🔒 Locked** pill: this phase finished; click to go back and revise
+  (a confirm dialog explains what gets discarded).
+- **▶ Advance** pill (blue + ▶ glyph): the next phase is unlocked
+  because the current phase's artifact exists; click to advance.
+- Grayed pill: not yet eligible. Clicking it pulses the **Readme**
+  button — that's the hint to open Readme to learn how the bar works.
+
+## A.3 Phase 1 — Plan (chat)
+
+Send your idea in one sentence ("a contest on detecting AI-generated
+text"). The agent will:
+
+1. Open a per-session run directory (visible in chat).
+2. Show a 7-section table (Pavão Ch. 1-5) and ask 1-2 scope questions.
+3. Search OpenAlex / PubMed / ORCID for relevant papers as you go.
+4. Once you've answered, write `implementation_plan.md` to disk and
+   announce it's ready.
+
+You'll see the rendered plan in the **workspace panel on the right**
+under the 📝 `implementation_plan.md` tab. Review it. If anything
+critical from the chat is missing, tell the agent — it can re-snapshot
+the plan.
+
+When the plan looks right, click **▶ Advance to 2. 📦 Competition
+Creation**. A confirm dialog explains what happens (Phase 2 starts
+fresh; Phase 1 chat history is dropped; you can come back via 🔒 but
+that discards the bundle).
+
+## A.4 Phase 2 — Competition Creation (chat)
+
+A fresh agent starts automatically. It reads the locked plan and
+generates the bundle directly: `competition.yaml`,
+`scoring_program/score.py` (implements your metric),
+`solution/sample_code_submission/model.py` (the baseline class from
+the plan), four standard pages. Then validates and zips.
+
+When done, the workspace panel's **Downloads** section lights up with:
+
+- **📦 competition bundle (.zip)** — your Codabench-ready zip.
+- **📦 workspace.zip (all artifacts)** — plan + transcript + cost +
+  bundle, one file for archival.
+
+(Both buttons are visible from session start, grayed out until ready.)
+
+## A.5 Publish — the Codabench form
+
+Below Downloads in the workspace panel:
+
+```
+🚀 Publish to Codabench         ▾
+  Username  [____________]
+  Password  [____________]
+  [🚀 Upload & publish]
+```
+
+Type your Codabench username + password and click **Upload &
+publish**. This runs as a direct HTTP call to Codabench (4-step
+upload + unpack poll, ~30-90 s) — **no LLM is involved**, so no
+agent cost. When Codabench finishes unpacking, the competition URL
+appears right in the form.
+
+The credentials are sent over HTTPS to the Space and are never logged
+or stored. They're only used for this single upload.
+
+## A.6 Going back (revising the plan)
+
+If you realize the plan was wrong after seeing the bundle:
+
+1. Click the now-🔒 **Plan** pill at the top.
+2. Confirm. The bundle gets discarded; the plan is preserved so you
+   can edit it.
+3. Chat with the agent to revise the plan (it has no memory of either
+   the previous Phase 1 or the Phase 2 chat — only the saved plan).
+4. When happy, click **▶ Advance to Phase 2** again. A new bundle
+   regenerates from the updated plan.
+
+## A.7 Watching the cost
+
+After every assistant turn, you'll see a one-line footer:
+
+```
+turn ≈ $0.012 · session $0.34 / $5.00 · ctx 4.2% (8,415 tok)
+```
+
+- `turn` — what this turn cost.
+- `session` — cumulative spend / per-session budget cap.
+- `ctx` — input tokens / Sonnet's 200k context window (resets on
+  phase advance).
+
+Sessions hard-cap at `MAX_USD_PER_SESSION` (default $5). When you hit
+it, send a fresh message and Claude will tell you the cap was hit.
+Refresh the page to start a new session with a fresh budget.
+
+## A.8 Things to know
+
+- **Privacy.** Your conversation lands in a per-session run directory
+  that the maintainer can see for postmortems. The Space uploads runs
+  to a private HF Dataset (`autocodabench-runs`). Don't paste anything
+  in chat you wouldn't want the maintainer to read.
+- **Multiple tabs / windows.** Each tab is its own session with its
+  own run dir and budget. They don't share state.
+- **HF Space sleep.** A free-tier Space sleeps after ~48 h of no
+  traffic. First visit after sleep takes ~30 s to wake.
+
+---
+
+# B. CLI — Claude Desktop / Claude Code
+
+For power users who want to run the workflow locally without the web
+UI. You get the same 2 phases (Plan + Competition Creation), driven
+by the two skills, with results on your local filesystem.
+
+## B.1 What you need on your machine
+
+- **macOS, Linux, or WSL.**
+- **Miniconda / Anaconda.**
 - **Claude Desktop OR Claude Code.** Either works.
-- **An email for the OpenAlex polite pool** — set `OPENALEX_MAILTO=you@example.com`.
-  Any real email works (OpenAlex uses it to identify you for support and
-  to give you higher rate limits). **This is required** — alex-mcp will
-  refuse to start without it. No registration needed; you do not get an
-  API key, just give them a working email.
+- **An email** for the OpenAlex polite pool (any working email; no
+  registration). Required — alex-mcp won't start without it.
 - **git** to clone this repo.
 
----
-
-## 3. One-time install (5–10 minutes)
+## B.2 Install (5-10 min, one time)
 
 ```bash
-# Clone the repo (skip if you already have it)
-git clone <this-repo-url> auto-codabench
+git clone https://github.com/ihsaan-ullah/auto-codabench.git
 cd auto-codabench
 
-# Create a dedicated conda env. The fastest way is to clone base.
+# Dedicated conda env — name is arbitrary; we use semantic-scholar
+# for historical reasons.
 conda create -n semantic-scholar --clone base -y
 conda activate semantic-scholar
 
-# Install BOTH MCP servers into the same env
-pip install -e ./alex-mcp
+# Install autocodabench + alex-mcp from upstream
 pip install -e .
+pip install "git+https://github.com/drAbreu/alex-mcp.git@v4.8.2"
 
-# Create your .env (gitignored)
-cp auto_codabench/.env.example .env
-# Then open .env and set the OpenAlex polite-pool email:
+# .env at the repo root (gitignored). Minimum:
 #   OPENALEX_MAILTO=you@example.com
+cp -n .env.example .env 2>/dev/null || true
+# (open .env in your editor and set OPENALEX_MAILTO)
 ```
 
-Verify both packages installed by running the **in-process smoke test**:
+Verify autocodabench installed:
 
 ```bash
-python - <<'PY'
-import asyncio
-from fastmcp import Client
-from auto_codabench.mcp_server.mcp import mcp
-from auto_codabench.mcp_server import tools  # noqa
-
-async def main():
-    async with Client(mcp) as c:
-        ts = await c.list_tools()
-        print(f"OK: {len(ts)} autocodabench tools available")
-
-asyncio.run(main())
-PY
+python -c "from auto_codabench.mcp_server import tools; print('ok')"
 ```
 
-You should see `OK: 9 autocodabench tools available` (a one-line
-`AuthlibDeprecationWarning` from fastmcp's optional auth module may
-appear first — harmless, ignore it).
-
-Also confirm the python path you'll need for Claude's config:
+Find your conda env's Python path (you'll need this for Claude's
+config):
 
 ```bash
 which python
-# expected:  /Users/<you>/miniconda3/envs/semantic-scholar/bin/python
+# expected: /Users/<you>/miniconda3/envs/semantic-scholar/bin/python
 ```
 
-Copy that path — you need it in the next step.
+## B.3 Wire the MCP servers into Claude
 
----
+Pick A (Claude Desktop) or B (Claude Code).
 
-## 4. Wire the MCP servers into Claude
-
-Pick **A** or **B** based on which Claude you use.
-
-### A. Claude Desktop
+### B.3A Claude Desktop
 
 Open the config file (create it if absent):
 
@@ -159,16 +273,11 @@ Add or merge:
     "alex-mcp": {
       "command": "/Users/<you>/miniconda3/envs/semantic-scholar/bin/python",
       "args": ["-m", "alex_mcp.server"],
-      "env": {
-        "OPENALEX_MAILTO": "you@example.com"
-      }
+      "env": { "OPENALEX_MAILTO": "you@example.com" }
     },
     "autocodabench": {
       "command": "/Users/<you>/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "auto_codabench.mcp_server.server"],
-      "env": {
-        "AUTOCODABENCH_BUNDLES_ROOT": "/absolute/path/to/auto-codabench/auto_codabench/bundles"
-      }
+      "args": ["-m", "auto_codabench.mcp_server.server"]
     }
   }
 }
@@ -176,453 +285,157 @@ Add or merge:
 
 Two things people get wrong:
 
-1. **Absolute paths only.** Claude Desktop does not expand `~` and does not
-   read your shell's PATH.
-2. **The Python from the conda env**, not system Python. That's why the
-   `command` ends in `…/envs/semantic-scholar/bin/python`.
+1. **Absolute paths only.** Claude Desktop does not expand `~` and
+   does not read your shell's PATH.
+2. **The Python from the conda env**, not system Python.
 
-**Restart Claude Desktop.** In the bottom-right of the chat window there's
-a small icon (hammer / plug) showing connected MCP servers. Click it — you
-should see `alex-mcp` and `autocodabench` both listed, with their tools
-enumerated.
+Restart Claude Desktop. Bottom-right of the chat: a small hammer /
+plug icon shows connected MCP servers. Click it — `alex-mcp` and
+`autocodabench` should both be listed.
 
-### B. Claude Code (recommended for this repo)
+### B.3B Claude Code (recommended for this repo)
 
 Use the built-in `claude mcp add` command — it writes the canonical
-project-scope file `.mcp.json` at the repo root for you. Do **not** edit
-`.claude/settings.json` for MCP; that file is not read by Claude Code's
-MCP loader (this is a common confusion).
-
-From the repo root:
+project-scope file `.mcp.json` at the repo root.
 
 ```bash
-# Register the autocodabench server (project scope)
+# Register autocodabench (project scope)
 claude mcp add autocodabench --scope project -- \
   /Users/<you>/miniconda3/envs/semantic-scholar/bin/python \
   -m auto_codabench.mcp_server.server
 
-# Register the alex-mcp server (project scope). OPENALEX_MAILTO is REQUIRED;
-# alex-mcp will refuse to start without it.
+# Register alex-mcp (project scope). OPENALEX_MAILTO is REQUIRED.
 claude mcp add alex-mcp --scope project \
   --env OPENALEX_MAILTO=you@example.com -- \
   /Users/<you>/miniconda3/envs/semantic-scholar/bin/python \
   -m alex_mcp.server
 ```
 
-Each command prints `File modified: <repo>/.mcp.json` on success. Verify:
+Verify:
 
 ```bash
 claude mcp list
+# Both should print ✓ Connected
 ```
 
-Expected output (the leading "Checking MCP server health…" is fine):
+Use `--scope user` instead to make the servers available in every
+directory.
 
-```
-autocodabench: ... -m auto_codabench.mcp_server.server  - ✓ Connected
-alex-mcp:      ... -m alex_mcp.server                   - ✓ Connected
-```
+## B.4 Install the skills
 
-If you see anything other than `✓ Connected`, the most likely cause is the
-wrong absolute path to the conda env's `python`. Re-check with
-`which python` while the env is activated.
+Symlink the two user-invocable skills (and the two reference skills
+they lean on) into Claude's skills directory.
 
-Inside a chat you can also type `/mcp` to see the live tool count and
-status.
-
-> **Tip — user scope vs project scope.** `--scope project` writes
-> `.mcp.json` next to your repo and is shared with collaborators (commit
-> it). Use `--scope user` instead if you want the servers available in
-> *every* directory you launch `claude` from; that writes to
-> `~/.claude.json` and is per-machine.
-
----
-
-## 5. Install the three skills
-
-Skills tell Claude *how* to use the MCP servers. There are three; install
-all of them.
-
-### A. Globally (recommended — works in any project)
+**Globally** (recommended):
 
 ```bash
 mkdir -p ~/.claude/skills
-ln -s "$(pwd)/auto_codabench/skills/competition-design"          ~/.claude/skills/competition-design
-ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"            ~/.claude/skills/codabench-bundle
-ln -s "$(pwd)/auto_codabench/skills/orchestrator"  ~/.claude/skills/autocodabench-orchestrator
-ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement"  ~/.claude/skills/autocodabench-implement
+ln -s "$(pwd)/auto_codabench/skills/plan"                ~/.claude/skills/autocodabench-plan
+ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement" ~/.claude/skills/autocodabench-implement
+ln -s "$(pwd)/auto_codabench/skills/competition-design"  ~/.claude/skills/competition-design
+ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"    ~/.claude/skills/codabench-bundle
 ```
 
-### B. Project-scoped (only inside this repo)
+**Project-scoped** (only inside this repo): swap `~/.claude/` for
+`.claude/`.
 
-```bash
-mkdir -p .claude/skills
-ln -s "$(pwd)/auto_codabench/skills/competition-design"          .claude/skills/competition-design
-ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"            .claude/skills/codabench-bundle
-ln -s "$(pwd)/auto_codabench/skills/orchestrator"  .claude/skills/autocodabench-orchestrator
-ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement"  .claude/skills/autocodabench-implement
-```
+Restart Claude Desktop or relaunch `claude` (Code). Type `/skills` —
+you should see all four listed.
 
-Restart Claude (Desktop) or relaunch `claude` (Code). Type `/skills` —
-you should see all three listed.
+## B.5 Phase 1 — Plan
 
----
-
-## 6. Session 1 — your first conversation (planning only)
-
-Start a **fresh** Claude conversation. The orchestrator skill is keyed on
-phrases like "design", "plan", or "build a competition", so it should
-auto-activate. To be safe, type `/autocodabench-orchestrator` to invoke
-it explicitly the first time.
-
-Then write your idea in one sentence. **Just one.** Don't pre-fill the
-form — let Claude pull details out of you.
-
-### Example opening prompt
+Start a **fresh** Claude conversation. Invoke the planning skill:
 
 ```
-/autocodabench-orchestrator
+/autocodabench-plan
 
 I want to design a Codabench competition on detecting AI-generated text.
 ```
 
-### What Claude will do — Phase 1A (proposal crystallization)
+What happens:
 
-This is **the main event of Session 1** and usually the longest part of
-the whole workflow. Expect 10–50 turns of back-and-forth.
+1. The skill auto-runs `autocodabench_open_run(slug=<short-kebab>)`
+   and tells you the run dir path.
+2. Claude shows the 7-section table and asks 1-2 scope questions.
+3. After you answer, Claude searches OpenAlex briefly and writes
+   `<run>/specs/implementation_plan.md`.
+4. Claude **stops** and tells you to start a fresh chat for Phase 2.
 
-1. Open a run directory (`autocodabench_open_run`) and tell you where it is.
-   Everything in this session lands inside it.
-2. **NOT** restate your idea in two paragraphs. Get straight to a useful
-   question.
-3. Surface a real tension from the literature ("Sadasivan 2023 argues
-   detection is futile; Krishna 2023 disagrees — which side do you
-   lean?") and ask for your intuition.
-4. Cycle: open question → paper searches → option framings (each cited
-   with a chapter + OpenAlex Work ID) → your reaction → next exploration.
-   Coverage builds across these dimensions (organized internally in the
-   skill, not shown to you as a checklist):
-   - **Motivation & scope** — what gap, who cares, falsifiable success criterion
-   - **Task & data** — domain, languages, generators, sources, splits, leakage, distribution shift between phases
-   - **Evaluation & ranking** — primary metric, secondary metrics, error bars, tie-breaking
-   - **Rules & participant experience** — submission protocol (λ / γ), caps, starting kit, prize
-   - **Ethics & broader impact** — dual-use, privacy, fairness, datasheets
-   - **Schedule & sustainability** — phase lengths, post-comp release, FAIR, paper plan
-   - **Reproducibility** — env spec, seed policy, winner reproducibility check
-5. When the proposal feels sharp, you say so: *"the proposal looks
-   crystallized"* / *"lock the proposal"* / *"draft the proposal"*.
-   Claude then writes `<run>/specs/project_proposal.md` — 5–15 pages of
-   markdown structured like a NeurIPS Competition Track submission
-   (motivation, related work, task, data, evaluation, baselines, rules,
-   schedule, ethics, sustainability, references).
-6. Claude **stops** after writing the proposal. You read it in your
-   editor, push back on anything, ask for revisions, OR move on.
+Read the plan in your editor. Push back if something's wrong:
 
-### Your job in Phase 1A
+> In §3, the metric should be macro-F1 not accuracy.
 
-- Answer questions thoughtfully — these are scientific questions, not a
-  form. *"I don't know — what does the literature say?"* is a legitimate
-  answer. Claude will search and bring back papers.
-- **Push back** when a citation doesn't fit your context. *"That paper
-  is about scientific abstracts; my audience is news articles."* Claude
-  will revise.
-- Volunteer angles Claude might miss. *"What about adversarial
-  paraphrase attacks?"*. Researchers know their subfield better than
-  Claude does.
-- Read the proposal in your editor when it lands. Iterate as many
-  times as you want by saying *"in §4, change …"* — Claude will rewrite
-  and the old version is preserved in `specs_history/`.
+Claude re-snapshots the plan. The previous version is preserved under
+`<run>/specs_history/`.
 
-### What Claude will do — Phase 1B (implementation skeleton, optional)
+## B.6 Phase 2 — Competition Creation
 
-ONLY if you decide you want the implementation skeleton. Trigger phrases:
-*"ready to implement"* / *"draft the implementation plan"* / *"move to
-phase B"* / *"write the specs"*.
-
-If you only wanted the proposal (e.g. for a NeurIPS Competition Track
-submission), just say *"we're done"* and Claude stops without Phase 1B.
-
-When triggered, Claude translates the *accepted* proposal into 7 files —
-no new design decisions, just implementation grain:
-
-- `specs/01-task-framing.md`
-- `specs/02-data.md`
-- `specs/03-metrics-and-leaderboard.md`
-- `specs/04-baseline-and-starting-kit.md`
-- `specs/05-bundle-and-pages.md`
-- `specs/06-run-logging-and-env.md`
-- `implementation_plan.md`
-
-Then Claude **stops**. No bundle files exist yet; that's Session 2.
-
-### Looking at what Claude has done so far
-
-- `transcript.md` in the run dir is the full natural-language
-  back-and-forth, with role headers and tool calls folded inline.
-  **Read this first.**
-- `transcript.jsonl` — the raw Claude Code session log (one JSON
-  object per turn) for programmatic analysis.
-- `events.jsonl` — structured timeline of MCP calls and skill events.
-- `tool_calls/NNNN_*.json` — every MCP tool call with full
-  request and response.
-- `README.md` — a per-run cheatsheet auto-written when the session
-  opens, explaining every file and giving `jq` one-liners.
-
-See §9 below for the full postmortem workflow.
-
-### Red flag
-
-If Claude calls any `autocodabench_write_*` *bundle* tool during
-Session 1, **stop it**:
-
-> Stop. We're in Session 1 — no bundle files. Plan only.
-
-If Claude jumps to writing `specs/01-task-framing.md` *before* you've
-signed off on `project_proposal.md`, **stop it**:
-
-> Stop. We're still in Phase 1A. Don't write the specs until I've
-> accepted the proposal.
-
-Both rules are hard rules in the orchestrator skill but Claude may drift
-under context pressure; the reminders reset it.
-
----
-
-## 7. Session 2 — execution (a fresh conversation)
-
-When you're happy with the specs and `implementation_plan.md`, **start
-a brand-new chat** and invoke the implementation skill. (A fresh
-context window keeps the execution focused; the orchestrator's design
-context isn't useful for execution.)
-
-### Opening prompt
+When the plan looks right, **start a fresh Claude chat** (a clean
+context window is the whole point — no Phase 1 history). Invoke the
+implementation skill:
 
 ```
 /autocodabench-implement
 ```
 
-That's it. The skill reads `auto_codabench/runs/LATEST/` (your most
-recent run dir), loads the proposal + 6 specs + `implementation_plan.md`,
-and executes the plan step by step. No env vars to export, no
-multi-line shell setup — the skill picks the run dir up automatically
-from `autocodabench_current_run` / the `LATEST` symlink.
+That's it. The skill:
 
-If you want it to publish to Codabench at the end, follow with:
+1. Calls `autocodabench_current_run()` to locate your most recent
+   run dir (via the `LATEST` symlink under `auto_codabench/runs/`).
+2. Reads `<run>/specs/implementation_plan.md`.
+3. Generates the bundle (`competition.yaml`, `scoring_program/`,
+   `solution/`, `pages/`).
+4. Validates + zips → `<run>/bundles/<slug>/<slug>.zip`.
 
-```
-publish to Codabench when validation passes.
-```
+When done, the bundle is in `<run>/bundles/<slug>/<slug>.zip`. Browse
+the unpacked tree at `<run>/bundles/<slug>/` to inspect what Claude
+wrote.
 
-The skill won't upload without that explicit instruction — uploading
-creates a public competition page, so it requires a deliberate ask.
-
-### On the web UI
-
-Skip this section entirely — click the big **START IMPLEMENTATION**
-button that appears under the chat once `implementation_plan.md` is
-written. Same skill, same flow, no typing required.
-
-### What happens
-
-The plan defines roughly these subagents (the exact list is whatever
-Session 1 wrote — read your plan):
-
-| Subagent             | Tools it can use                          | What it produces                                 |
-| -------------------- | ----------------------------------------- | ------------------------------------------------ |
-| `data-curator`     | filesystem +`autocodabench_attach_data` | populates `reference_data/`, `input_data/`   |
-| `scoring-author`   | `autocodabench_write_scoring_program`   | `scoring_program/score.py` + `metadata.yaml` |
-| `baseline-author`  | `autocodabench_write_solution`          | a "barely-passes" reference solution             |
-| `pages-author`     | `autocodabench_write_page`              | overview / evaluation / terms / data pages       |
-| `bundle-assembler` | `autocodabench_write_competition_yaml`  | the master `competition.yaml`                  |
-| `bundle-validator` | `autocodabench_validate_bundle`         | runs the linter, fixes issues, retries           |
-| `packager`         | `autocodabench_zip_bundle`              | the final `.zip` at the bundle root            |
-| `meta-reviewer`    | read-only on logs/ + bundles/             | the final report (markdown + viz)                |
-
-Each subagent has narrow permissions — the `pages-author` cannot
-overwrite the scoring program, etc.
-
-### What you end up with
+To publish to Codabench in the same chat, say:
 
 ```
-auto_codabench/bundles/<slug>/                          ← the unpacked bundle (browse it)
-auto_codabench/bundles/<slug>.zip                       ← upload THIS to Codabench
-auto_codabench/runs/<branch_id>_<runtime_id>/           ← one folder per session
-  ├── events.jsonl                                       ← structured timeline
-  ├── tool_calls/NNNN_<tool>.json                        ← every MCP call captured
-  ├── specs/                                             ← final specs
-  ├── implementation_plan.md
-  ├── specs_history/                                     ← versioned spec rewrites
-  ├── mcp_stderr/autocodabench.log                       ← server stderr
-  └── artifacts/<subagent>/                              ← Session-2 outputs (report, plots, etc.)
-auto_codabench/runs/LATEST                              ← symlink to most recent run
+publish to Codabench.
 ```
 
-Upload `<slug>.zip` to https://www.codabench.org → Benchmark →
-"Submit a new benchmark". Codabench unpacks it server-side.
+This requires `CODABENCH_USERNAME` + `CODABENCH_PASSWORD` (or
+`CODABENCH_TOKEN`) in env. The skill calls the upload tool, polls for
+~30-90 s, and surfaces the competition URL.
 
----
+If you'd rather upload manually, take the `.zip` to
+https://www.codabench.org → Benchmark → "Submit a new benchmark".
 
-## 8. Troubleshooting
+## B.7 Where everything lives
 
-### "I don't see the MCP servers in Claude"
+```
+auto_codabench/runs/<branch_id>_<runtime_id>/   ← per session
+  ├── meta.json                                  ← branch / git_sha / slug / start time
+  ├── events.jsonl                               ← structured timeline of MCP calls
+  ├── tool_calls/NNNN_<tool>.json                ← every MCP call captured (args + return)
+  ├── specs/implementation_plan.md               ← Phase 1 artifact
+  ├── specs_history/                             ← every revision, timestamped
+  ├── transcript.md                              ← natural-language conversation
+  ├── transcript.jsonl                           ← raw Claude Code session log
+  ├── bundles/<slug>/                            ← Phase 2 artifact (unpacked)
+  ├── bundles/<slug>/<slug>.zip                  ← the upload-to-Codabench zip
+  └── mcp_stderr/autocodabench.log               ← server stderr
 
-- **Claude Code:** run `claude mcp list`. Both should print `✓ Connected`.
-  If they don't appear at all, you probably edited `.claude/settings.json`
-  by hand — that file is **not** read by the MCP loader. Use
-  `claude mcp add --scope project ...` instead; it writes the correct file
-  (`.mcp.json` at the repo root). You can `cat .mcp.json` to confirm.
-- **Claude Desktop:** quit fully (Cmd-Q) and reopen — config is read only
-  at launch. Then click the plug/hammer icon and inspect server logs.
-- In both cases, the Python path must be **absolute** and must point to
-  the *conda env's* `python` (`…/envs/semantic-scholar/bin/python`), not
-  system Python. `~` is not expanded.
-- JSON validity: a missing comma silently disables the whole
-  `mcpServers` block. If in doubt, pipe through `python -m json.tool`.
+auto_codabench/runs/LATEST                       ← symlink to the most recent run
+```
 
-### "Claude says the tool failed"
+(Bundles live UNDER the per-session run dir to keep concurrent
+sessions isolated. If `AUTOCODABENCH_RUN_DIR` isn't set the bundles
+fall back to the global `auto_codabench/bundles/` — but that's only
+for one-off CLI usage with no active run.)
 
-Tool errors come back as `{"error": "..."}`. Common causes:
+## B.8 Postmortems
 
-- **`init_bundle failed: bundle not initialised`** — you called a write
-  tool before `init_bundle`. Tell Claude to init first.
-- **`validate_bundle: missing required key 'leaderboards'`** — Claude
-  wrote a partial `competition.yaml`. Have it fill the missing keys.
-- **`zip_bundle: competition.yaml missing`** — same.
-
-### "The orchestrator skill never activates"
-
-Type `/autocodabench-orchestrator` explicitly at the start of the
-conversation. Skills auto-activate on description matches but the
-match isn't always confident.
-
-### "alex-mcp searches return empty / the server won't start"
-
-If alex-mcp won't start, the most likely cause is a missing
-`OPENALEX_MAILTO`. The server *requires* it at boot and exits with
-`sys.exit(1)` otherwise. Verify:
+Useful commands:
 
 ```bash
-claude mcp list
-# alex-mcp should print ✓ Connected
-```
-
-If it shows `✗ Failed to connect`, run it directly to see stderr:
-
-```bash
-conda activate semantic-scholar
-OPENALEX_MAILTO=you@example.com python -m alex_mcp.server
-# should print boot banner; Ctrl-C to exit
-```
-
-If `search_works` returns `total_count: 0`, broaden the query (drop
-filters, switch `search_type` to `general`) or pass
-`peer_reviewed_only=False` — alex-mcp filters aggressively to remove
-preprint catalogs and data dumps, which can occasionally remove
-legitimate papers.
-
-OpenAlex's polite-pool is generous (10 req/sec by default; tens of
-thousands per day). You should very rarely see rate-limit errors with
-a real email set.
-
-### (Legacy) Switching back to Semantic Scholar
-
-This branch (`try-alex-mcp`) ships alex-mcp. The Semantic Scholar
-server is still in `semantic-scholar-fastmcp-mcp-server/` and can be
-re-enabled with:
-
-```bash
-claude mcp remove alex-mcp --scope project
-claude mcp add semantic-scholar --scope project \
-  --env SEMANTIC_SCHOLAR_API_KEY=YOUR_REAL_KEY \
-  --env SEMANTIC_SCHOLAR_ENABLE_HTTP_BRIDGE=0 -- \
-  /Users/$USER/miniconda3/envs/semantic-scholar/bin/python \
-  -m semantic_scholar.server
-```
-
-Tunable env vars for SS (when re-enabled):
-`SEMANTIC_SCHOLAR_MAX_RETRIES` (4), `SEMANTIC_SCHOLAR_BASE_BACKOFF`
-(1.0 s), `SEMANTIC_SCHOLAR_MAX_BACKOFF` (30 s),
-`SEMANTIC_SCHOLAR_UNAUTH_RATE` (40 / 5 min),
-`SEMANTIC_SCHOLAR_DISABLE_CACHE=1`,
-`SEMANTIC_SCHOLAR_CACHE_TTL_SECONDS` (600).
-
-- The API occasionally has cold starts. If a search returns nothing,
-  ask Claude to retry once.
-
-### "Claude is making things up"
-
-The orchestrator skill requires every metric / dataset / baseline
-suggestion to be backed by **two attributions**:
-
-1. A named book chapter — e.g. `Per Pavão et al. (Ch. 5 §5.3) …` from
-   the `competition-design` skill.
-2. An OpenAlex Work ID — e.g. `[oa:W4390175962]` — from a real
-   `search_works` call.
-
-If you see a claim without either, push back:
-
-> Where did you get that? Cite the chapter and an OpenAlex Work ID, or
-> remove the claim.
-
-### "My env doesn't have `fastmcp`"
-
-You probably installed into the wrong conda env. Verify:
-
-```bash
-conda activate semantic-scholar
-python -c "import fastmcp; print(fastmcp.__file__)"
-```
-
-If that fails, repeat step 3.
-
----
-
-## 9. Postmortems — when something went wrong (or you just want to know what Claude did)
-
-Every session — both planning (Session 1) and execution (Session 2) — writes
-to a dedicated directory:
-
-```
-auto_codabench/runs/<branch_id>_<runtime_id>/
-auto_codabench/runs/LATEST                  ← symlink to the most recent
-```
-
-### What's in there
-
-Every run dir also writes its own `README.md` at session-open time that
-mirrors this table and includes context-specific `jq` snippets — that
-README is the most up-to-date reference for any given run.
-
-| File / dir                              | What it tells you                                                                                                                                                                                                                                                       |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`README.md`**                 | Auto-written cheatsheet for THIS run. Same info as the table below, plus `jq` recipes pre-filled with the run's name. **Read this first.**                                                                                                                      |
-| **`transcript.md`**             | The full natural-language Claude ↔ user conversation, rendered with role headers (👤 user / 🤖 claude). Tool calls and results are folded into `<details>` blocks so the prose stays readable. Mirrored after every assistant turn by the Claude Code `Stop` hook. |
-| **`transcript.jsonl`**          | Raw Claude Code session log (one JSON object per turn). Ground truth for programmatic analysis.                                                                                                                                                                         |
-| `meta.json`                           | When the run started, what git branch + SHA, conda env, pid, slug                                                                                                                                                                                                       |
-| `events.jsonl`                        | Structured timeline. One JSON object per line.`kind` = `run_opened`, `tool_call_started`, `hook_fired`, `question_asked`, `ss_searched`, `proposal_made`, `spec_written`, `iter1_done`, etc. (see orchestrator skill §11)                            |
-| `tool_calls/NNNN_<tool>.json`         | Full request + response of every MCP tool call, in order. Includes args, return value, duration_ms, error if any.                                                                                                                                                       |
-| **`specs/project_proposal.md`** | The Phase 1A artifact — a NeurIPS-track-style competition proposal (5–15 pages). This is the source of truth for the whole rest of the workflow.                                                                                                                      |
-| `specs/01-…06-*.md`                  | Phase 1B artifacts (only if you triggered Phase 1B). Implementation specs derived FROM the proposal.                                                                                                                                                                    |
-| `specs_history/`                      | Every rewrite of every spec / proposal, timestamp-suffixed.`diff` adjacent ones to see what Claude changed.                                                                                                                                                           |
-| `implementation_plan.md`              | The Session-2 input (only if you triggered Phase 1B). Lists subagents and what each will do.                                                                                                                                                                            |
-| `mcp_stderr/autocodabench.log`        | Stderr from the autocodabench MCP server — useful when a tool errored silently.                                                                                                                                                                                        |
-| `mcp_stderr/hook_errors.log`          | (Only if non-empty) Errors from the transcript-mirroring hook.                                                                                                                                                                                                          |
-| `artifacts/<subagent>/`               | Session-2 output: model checkpoints, plots, the meta-reviewer's report.                                                                                                                                                                                                 |
-
-### Useful commands
-
-```bash
-# The auto-written cheatsheet for this run (start here)
-cat auto_codabench/runs/LATEST/README.md
-
-# Read the conversation (rendered)
+# Read the conversation
 less auto_codabench/runs/LATEST/transcript.md
 
-# All Claude's text-only output in order
-jq -r 'select(.type=="assistant") | .message.content[]?
-       | select(.type=="text") | .text' \
-   < auto_codabench/runs/LATEST/transcript.jsonl
-
-# Greppable timeline (needs `jq`)
+# Greppable timeline
 jq -c '{ts, kind, tool: (.tool // null), msg: (.message // null)}' \
   < auto_codabench/runs/LATEST/events.jsonl
 
@@ -633,128 +446,139 @@ jq -c 'select(.error != null)' \
 # Pretty-print a specific tool call by counter
 cat auto_codabench/runs/LATEST/tool_calls/0003_*.json | python -m json.tool
 
-# How a spec evolved
-ls auto_codabench/runs/LATEST/specs_history/ | grep '01-task-framing'
-diff auto_codabench/runs/LATEST/specs_history/01-task-framing.2026-05-20T15-12-04Z.md \
-     auto_codabench/runs/LATEST/specs/01-task-framing.md
+# How the plan evolved
+diff auto_codabench/runs/LATEST/specs_history/implementation_plan.<ts>.md \
+     auto_codabench/runs/LATEST/specs/implementation_plan.md
 ```
 
-### Listing all sessions
-
-```bash
-ls -t auto_codabench/runs/             # newest first
-```
-
-Each directory name is `<branch_id>_<runtime_id>`, where `branch_id` is your
-git branch at session start (slashes replaced with hyphens) and `runtime_id`
-is `YYYYMMDDTHHMMSS` in UTC. So you can `cd` into any past run and read its
-specs / events / tool calls without needing to remember the exact name.
-
-### "I expected logs and the run dir doesn't exist"
-
-The orchestrator skill is supposed to call `autocodabench_open_run` as its
-very first MCP action. If you don't see a run dir, that step didn't happen
-— check `auto_codabench/runs/LATEST` and look for the most-recent dir. If
-none, the skill never activated; type `/autocodabench-orchestrator`
-explicitly at the start of the next conversation.
+Each run dir also writes its own `README.md` at session-open time with
+context-specific `jq` snippets — that README is the most up-to-date
+reference for any given run.
 
 ---
 
-## 10. Quick reference
+# Troubleshooting
 
-### Paths you'll touch
+### Web UI: "unknown error" from the Publish form
+You should never see this anymore (the route returns explicit error
+messages for every failure path). If you do, expand the
+`<details>` block below the error to see the full server response,
+and report it to the operator with the session ID from the greeting.
 
-| Path                                                                | What                                                                       |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `~/.claude/skills/` (or `.claude/skills/`)                      | Skill symlinks                                                             |
-| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config                                                         |
-| `.mcp.json` (repo root)                                           | Claude Code MCP config (managed via `claude mcp add`)                    |
-| `.env` (repo root)                                                | API keys, gitignored                                                       |
-| `auto_codabench/runs/<branch_id>_<runtime_id>/`                   | All artifacts of one session (gitignored): specs, plan, events, tool calls |
-| `auto_codabench/runs/LATEST`                                      | Symlink to the most recent run                                             |
-| `auto_codabench/bundles/<slug>/`                                  | Generated bundle (gitignored)                                              |
-| `auto_codabench/bundles/<slug>.zip`                               | What you upload                                                            |
+### Web UI: bundle download button stays grayed
+Phase 2 hasn't finished writing the bundle. Send a message in chat
+and Claude will tell you what state it's in.
 
-### The 13 autocodabench tools (so you can read Claude's tool calls)
+### CLI: "I don't see the MCP servers in Claude"
+- **Claude Code:** `claude mcp list` — both should print ✓ Connected.
+  If they don't appear, you probably edited `.claude/settings.json`
+  by hand; that file is NOT read by the MCP loader. Use
+  `claude mcp add --scope project ...` (writes `.mcp.json` at the
+  repo root).
+- **Claude Desktop:** quit fully (Cmd-Q) and reopen — config is read
+  only at launch.
 
-**Runs (Session 1 and Session 2 — manage the run dir):**
-
-| Tool                            | When it runs                                                    |
-| ------------------------------- | --------------------------------------------------------------- |
-| `autocodabench_open_run`      | First MCP call of every session — opens the run dir            |
-| `autocodabench_current_run`   | Sanity-check that a run is open                                 |
-| `autocodabench_log_event`     | Each milestone (question asked, SS searched, proposal made, …) |
-| `autocodabench_snapshot_spec` | Every spec write (also keeps a versioned copy)                  |
-
-**Bundle (Session 2 only):**
-
-| Tool                                      | When it runs                                    |
-| ----------------------------------------- | ----------------------------------------------- |
-| `autocodabench_init_bundle`             | First, creates the empty skeleton               |
-| `autocodabench_write_competition_yaml`  | After all other files exist, ties them together |
-| `autocodabench_write_page`              | Overview / evaluation / terms / data tabs       |
-| `autocodabench_write_scoring_program`   | `score.py` + `metadata.yaml`                |
-| `autocodabench_write_ingestion_program` | (Only for code-submission competitions)         |
-| `autocodabench_write_solution`          | Baseline / starting kit                         |
-| `autocodabench_attach_data`             | Reference data, input data                      |
-| `autocodabench_validate_bundle`         | Lint pass — always run before zipping          |
-| `autocodabench_zip_bundle`              | Produces the final upload .zip                  |
-
-### Commands cheatsheet
-
+### CLI: alex-mcp won't start
+Almost always a missing `OPENALEX_MAILTO`. Verify with:
 ```bash
-# Activate the env
-conda activate semantic-scholar
-
-# Run the data-layer self-test (no MCP, no Claude — just verifies file I/O)
-python -m auto_codabench.mcp_server.bundle_io
-
-# Manually boot the MCP server (it will hang on stdin — Ctrl-C to exit)
-python -m auto_codabench.mcp_server.server
-
-# Manually list tools through a real MCP client
-python - <<'PY'
-import asyncio
-from fastmcp import Client
-from auto_codabench.mcp_server.mcp import mcp
-from auto_codabench.mcp_server import tools  # noqa
-
-async def main():
-    async with Client(mcp) as c:
-        for t in await c.list_tools():
-            print(t.name)
-
-asyncio.run(main())
-PY
+OPENALEX_MAILTO=you@example.com python -m alex_mcp.server
+# should print a boot banner; Ctrl-C to exit
 ```
+
+### CLI: tool call fails with "init_bundle failed: bundle not initialised"
+Claude tried a write tool before `init_bundle`. Tell it: *"You
+skipped init_bundle; start over with that."*
+
+### CLI: Phase 2 starts looking for the wrong plan
+The skill resolves the run dir via `autocodabench_current_run()`,
+which adopts `AUTOCODABENCH_RUN_DIR` from env or falls back to
+`runs/LATEST`. If you advanced to Phase 2 in a different conversation
+than your most recent Phase 1, point it explicitly:
+> Read `auto_codabench/runs/<branch>_<ts>/specs/implementation_plan.md`
+> and follow autocodabench-implement.
+
+### CLI: "Claude is making things up"
+Both skills require citations to be clickable markdown links
+(`[Author YYYY](https://openalex.org/Wxxxxx)` or
+`[Pavão Ch. X §Y](https://ai-competitions-book.github.io/...)`).
+If you see a claim without either:
+> Where did you get that? Cite the chapter and an OpenAlex Work ID,
+> or remove the claim.
 
 ---
 
-## 11. The shortest possible recipe
+# Quick reference
 
-1. `conda create -n semantic-scholar --clone base -y && conda activate semantic-scholar`
-2. `pip install -e ./alex-mcp && pip install -e .`
-3. Register both servers (Claude Code):
-   ```bash
-   claude mcp add autocodabench --scope project -- \
-     /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m auto_codabench.mcp_server.server
-   claude mcp add alex-mcp --scope project --env OPENALEX_MAILTO=you@example.com -- \
-     /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m alex_mcp.server
-   claude mcp list   # both should print ✓ Connected
-   ```
+### Paths you'll touch (CLI)
 
-   (Or, for Claude Desktop: edit `claude_desktop_config.json` per §4 and restart.)
-4. Symlink the three skills into `~/.claude/skills/` (§5).
-5. New Claude chat: `/autocodabench-orchestrator` + your one-sentence idea.
-6. **Phase 1A**: iterate on the proposal until you say *"lock the
-   proposal"*. Read `<run>/specs/project_proposal.md` in your editor.
-7. (Optional) **Phase 1B**: say *"ready to implement"* to get the 6
-   specs + `implementation_plan.md`. Skip this if you only wanted the
-   proposal.
-8. **New** Claude chat: "Execute `auto_codabench/runs/LATEST/implementation_plan.md`."
-9. Upload `auto_codabench/bundles/<slug>.zip` to https://www.codabench.org.
+| Path | What |
+|------|------|
+| `~/.claude/skills/` (or `.claude/skills/`) | Skill symlinks |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Desktop MCP config |
+| `.mcp.json` (repo root) | Claude Code MCP config |
+| `.env` (repo root) | `OPENALEX_MAILTO`, optionally `CODABENCH_USERNAME` / `CODABENCH_PASSWORD` for CLI uploads |
+| `auto_codabench/runs/<branch>_<ts>/` | Per-session artifacts |
+| `auto_codabench/runs/LATEST` | Symlink to the most recent run |
 
-That's it. The hard part is being patient in Phase 1A — let Claude
-explore the idea space with you for many turns before you lock the
-proposal. The depth of Phase 1A is what makes the rest of the pipeline
-worthwhile.
+### The autocodabench tools (so you can read Claude's tool chips)
+
+**Run dir + logging:**
+
+| Tool | When |
+|------|------|
+| `autocodabench_open_run` | First MCP call of every session |
+| `autocodabench_current_run` | Sanity-check / locate active run dir |
+| `autocodabench_log_event` | At every milestone |
+| `autocodabench_snapshot_spec` | Plan writes (versioned in `specs_history/`) |
+
+**Bundle authoring (Phase 2):**
+
+| Tool | When |
+|------|------|
+| `autocodabench_init_bundle` | First — creates the empty skeleton |
+| `autocodabench_write_competition_yaml` | After all other files exist |
+| `autocodabench_write_page` | Overview / evaluation / terms / data |
+| `autocodabench_write_scoring_program` | `score.py` + `metadata.yaml` |
+| `autocodabench_write_ingestion_program` | (Only for γ code-submission competitions) |
+| `autocodabench_write_solution` | Baseline / starting kit |
+| `autocodabench_attach_data` | `reference_data` / `input_data` / `public_data` |
+| `autocodabench_validate_bundle` | Lint — always run before zipping |
+| `autocodabench_zip_bundle` | Produces the final upload `.zip` |
+| `autocodabench_upload_bundle` | Optional — publishes to Codabench |
+
+### Shortest possible CLI recipe
+
+```bash
+# 1. Install
+conda create -n semantic-scholar --clone base -y && conda activate semantic-scholar
+pip install -e . "git+https://github.com/drAbreu/alex-mcp.git@v4.8.2"
+
+# 2. Register MCP servers (Claude Code)
+claude mcp add autocodabench --scope project -- \
+  /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m auto_codabench.mcp_server.server
+claude mcp add alex-mcp --scope project --env OPENALEX_MAILTO=you@example.com -- \
+  /Users/$USER/miniconda3/envs/semantic-scholar/bin/python -m alex_mcp.server
+claude mcp list                                # both ✓ Connected
+
+# 3. Symlink skills
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/auto_codabench/skills/plan"                ~/.claude/skills/autocodabench-plan
+ln -s "$(pwd)/auto_codabench/skills/autocodabench-implement" ~/.claude/skills/autocodabench-implement
+ln -s "$(pwd)/auto_codabench/skills/competition-design"  ~/.claude/skills/competition-design
+ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"    ~/.claude/skills/codabench-bundle
+
+# 4. Phase 1 — new chat
+#    /autocodabench-plan
+#    "design a competition on <your idea>"
+#    iterate until plan looks right
+
+# 5. Phase 2 — FRESH chat
+#    /autocodabench-implement
+#    "publish to Codabench."   # only if you want the upload
+
+# 6. Bundle is at auto_codabench/runs/LATEST/bundles/<slug>/<slug>.zip
+```
+
+The hard part is being concrete in Phase 1. A B+ plan with named
+sklearn classes for baselines and exact metric function names ships
+faster than an A+ plan full of "an appropriate model".

@@ -1,190 +1,193 @@
-# AutoCodabench
+# auto_codabench — package internals
 
-An MCP-server-driven workflow for turning a vague competition idea into a
-ready-to-upload Codabench bundle — without ever touching the Codabench server
-during design / authoring.
+The `auto_codabench` Python package contains the **MCP server**, the
+**skills**, and the bundle authoring code. End-user docs live in
+[`INSTRUCTION_FOR_USER.md`](./INSTRUCTION_FOR_USER.md); read that
+first if you just want to USE the workflow.
 
-```
-your idea (one sentence)
-        │
-        ▼
-┌────────────────────────────────────────────────────────────┐
-│ Session 1 — Planning (this skill loop)                    │
-│                                                            │
-│  Claude (host) ──► semantic-scholar MCP   (cite papers)    │
-│         │      ──► competition-design SKILL (book wisdom)  │
-│         │      ──► YOU         (adaptive Q&A)               │
-│         ▼                                                  │
-│   specs/*.md + implementation_plan.md                       │
-│   (NO bundle files yet — review and push back)              │
-└────────────────────────────────────────────────────────────┘
-        │
-        ▼  (you review, say "go" in a fresh session)
-┌────────────────────────────────────────────────────────────┐
-│ Session 2 — Execution                                     │
-│                                                            │
-│   /agents subagents ──► autocodabench MCP                   │
-│   (data-curator, scoring-author, baseline-author,           │
-│    pages-author, bundle-assembler, validator, packager,     │
-│    meta-reviewer)                                           │
-│         ▼                                                  │
-│   auto_codabench/bundles/<slug>/                            │
-│   auto_codabench/bundles/<slug>.zip   ← upload to Codabench │
-│   logs/<branchid>_<runtime_id>/                            │
-└────────────────────────────────────────────────────────────┘
-```
-
-The autocodabench MCP server **never talks to Codabench**. It only writes
-files to your local disk and lints them. Uploading is a separate, future
-concern (see `scripts/upload_bundle.py` in the parent repo's git history
-for the API contract).
+This README is for anyone editing the package itself.
 
 ---
 
-## Components
+## Layout
 
-| Path | What it is |
-|------|------------|
-| `mcp_server/` | FastMCP 2.x server. Tools: `autocodabench_init_bundle`, `autocodabench_write_competition_yaml`, `autocodabench_write_page`, `autocodabench_write_scoring_program`, `autocodabench_write_ingestion_program`, `autocodabench_write_solution`, `autocodabench_attach_data`, `autocodabench_validate_bundle`, `autocodabench_zip_bundle`. |
-| `mcp_server/bundle_io.py` | Pure data layer — runnable standalone (`python -m auto_codabench.mcp_server.bundle_io` runs the self-test that creates, validates, and zips a tiny demo bundle). |
-| `skills/competition-design/SKILL.md` | Best practices distilled from the Pavao et al. AI-competitions book — task framing, metrics, splits, leaderboards, anti-cheating. |
-| `skills/codabench-bundle/SKILL.md` | Technical schema reference for `competition.yaml`, pages, phases, scoring/ingestion programs, leaderboard ↔ `scores.json` mapping, zip layout. |
-| `skills/orchestrator/SKILL.md` | The iterative-loop skill: drives Q&A + Semantic Scholar searches → `specs/*.md` + `implementation_plan.md`. **Iteration 1 must NOT touch bundle files.** |
-| `bundles/<slug>/` | Generated bundle directories live here (gitignored). |
-| `specs/` | Per-module specs produced during iteration 1. |
+```
+auto_codabench/
+├── mcp_server/                  # FastMCP 2.x stdio server
+│   ├── server.py                # entry point: python -m auto_codabench.mcp_server.server
+│   ├── mcp.py                   # the shared FastMCP() instance
+│   ├── config.py                # paths + resolve_bundle_dir(slug) (per-session aware)
+│   ├── run_log.py               # open_run, current_run, log_event, snapshot_spec,
+│   │                            #   logged_tool decorator (full audit trail)
+│   ├── bundle_io.py             # pure file-I/O layer; no MCP; importable standalone
+│   ├── notebook_kernel.py       # Jupyter kernel + nb_* authoring (legacy — used by the
+│   │                            #   3-phase web flow on branch try-web-ui-with-starting-kit)
+│   └── tools/
+│       ├── runs.py              # autocodabench_open_run / current_run / log_event / snapshot_spec
+│       ├── bundle.py            # init / write_competition_yaml / write_page /
+│       │                        #   write_scoring_program / write_ingestion_program /
+│       │                        #   write_solution / attach_data
+│       ├── package.py           # validate_bundle / zip_bundle
+│       ├── upload.py            # upload_zip helper (env- OR param-credentials) +
+│       │                        #   autocodabench_upload_bundle MCP wrapper
+│       └── notebook.py          # nb_init / nb_write_cell / nb_run_stage / ... (legacy)
+│
+├── skills/
+│   ├── plan/SKILL.md                    # Phase 1 — produces specs/implementation_plan.md
+│   ├── autocodabench-implement/SKILL.md # Phase 2 — packages the bundle from the plan
+│   ├── orchestrator/SKILL.md            # (legacy — Phase 2 in the 3-phase starting-kit flow)
+│   ├── competition-design/SKILL.md      # reference — Pavão book rules of thumb
+│   └── codabench-bundle/SKILL.md        # reference — Codabench bundle schema
+│
+├── bundles/                     # default global bundles root (gitignored). Per-session
+│                                # bundles land at <run>/bundles/<slug>/ instead.
+└── runs/                        # per-session run directories (gitignored).
+    └── LATEST                   # symlink to the most recent run
+```
 
 ---
 
-## Install
+## Key invariants
 
-You will share the conda env with the semantic-scholar-fastmcp-mcp-server,
-per the project decision. First time:
+- **Per-session isolation.** `resolve_bundle_dir(slug)` defaults to
+  `<AUTOCODABENCH_RUN_DIR>/bundles/<slug>/` when the env var is set
+  (every web session sets it). The global
+  `auto_codabench/bundles/<slug>/` is the fallback for CLI usage
+  outside any active run. Two concurrent web sessions can't collide.
+- **Run-dir adoption.** `current_run()` adopts `AUTOCODABENCH_RUN_DIR`
+  on first call when `_current_run` is None — so a fresh MCP
+  subprocess (spawned on every web phase transition) reliably
+  resolves to its parent's session, not to the global `runs/LATEST`
+  symlink.
+- **Every tool call is captured.** `logged_tool(name)` in `run_log.py`
+  wraps each `@mcp.tool` so the request + response + duration land
+  under `<run>/tool_calls/NNNN_<tool>.json` + a one-liner in
+  `<run>/events.jsonl`.
+
+---
+
+## MCP tools
+
+15 tools total. The web app's allowlist exposes a subset per phase
+(see `web/app.py:_TOOLS_BY_PHASE`).
+
+### Run + logging
+
+| Tool                            | Used by              | What it does                                           |
+| ------------------------------- | -------------------- | ------------------------------------------------------ |
+| `autocodabench_open_run`        | Phase 1 (web), CLI   | Create or adopt a run dir; route subsequent logs there |
+| `autocodabench_current_run`     | Both phases          | Return active run path (`{opened: bool, path}`)        |
+| `autocodabench_log_event`       | Both phases          | Append a structured event to `events.jsonl`            |
+| `autocodabench_snapshot_spec`   | Phase 1 only         | Write `<run>/specs/<name>.md` + versioned copy         |
+
+### Bundle authoring (Phase 2)
+
+| Tool                                      | What it does                                                  |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `autocodabench_init_bundle`               | Create `<run>/bundles/<slug>/` skeleton                       |
+| `autocodabench_write_competition_yaml`    | The master `competition.yaml`                                 |
+| `autocodabench_write_page`                | One of `overview.md` / `evaluation.md` / `terms.md` / `data.md` |
+| `autocodabench_write_scoring_program`     | `scoring_program/score.py` + `metadata.yaml`                  |
+| `autocodabench_write_ingestion_program`   | (Only for γ code-submission competitions)                     |
+| `autocodabench_write_solution`            | `solution/sample_code_submission/model.py` + sample data      |
+| `autocodabench_attach_data`               | `reference_data` / `input_data` / `public_data`               |
+| `autocodabench_validate_bundle`           | Schema lint — always run before zipping                       |
+| `autocodabench_zip_bundle`                | Produces `<run>/bundles/<slug>/<slug>.zip`                    |
+| `autocodabench_upload_bundle`             | Optional — publishes the zip to Codabench via REST API        |
+
+### Notebook authoring (legacy, used only by the 3-phase backup branch)
+
+`nb_init` / `nb_write_cell` / `nb_run_stage` / `nb_reset_to_stage` /
+`nb_render_html` / `nb_shutdown`. The current 2-phase web v1 flow
+doesn't include them in any phase's allowlist.
+
+---
+
+## Install + wire-up (for editing the package)
 
 ```bash
 # from repo root
-conda create -n semantic-scholar --clone base -y   # or: conda create -n semantic-scholar python=3.11 -y
+conda create -n semantic-scholar --clone base -y
 conda activate semantic-scholar
-
-# install both packages into the same env
-pip install -e ./semantic-scholar-fastmcp-mcp-server
-pip install -e .                                   # installs autocodabench from repo root pyproject.toml
+pip install -e .
+pip install "git+https://github.com/drAbreu/alex-mcp.git@v4.8.2"
 ```
 
-Sanity-check the data layer (creates a tiny demo bundle in a tempdir):
+Sanity-check the data layer (creates a tiny demo bundle in a tempdir,
+no MCP, no Claude):
 
 ```bash
 python -m auto_codabench.mcp_server.bundle_io
 # expect: { "ok": true, "issues": [] ... } then a zip_path line
 ```
 
-Sanity-check the MCP server boots (it will hang waiting for stdin — that's
-correct; press Ctrl-C):
+Sanity-check the MCP server boots (it will hang on stdin — that's
+correct; Ctrl-C to exit):
 
 ```bash
 python -m auto_codabench.mcp_server.server
 ```
 
----
+In-process tool-count check (~15 tools):
 
-## Wire it into Claude Desktop / Claude Code
+```bash
+python - <<'PY'
+import asyncio
+from fastmcp import Client
+from auto_codabench.mcp_server.mcp import mcp
+from auto_codabench.mcp_server import tools  # noqa: F401 — registers tools
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
-(macOS) and add **both** servers:
+async def main():
+    async with Client(mcp) as c:
+        ts = await c.list_tools()
+        print(f"OK: {len(ts)} autocodabench tools available")
+        for t in ts:
+            print(" -", t.name)
 
-```json
-{
-  "mcpServers": {
-    "semantic-scholar": {
-      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "semantic_scholar.server"],
-      "env": {
-        "SEMANTIC_SCHOLAR_API_KEY": "${SEMANTIC_SCHOLAR_API_KEY}"
-      }
-    },
-    "autocodabench": {
-      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
-      "args": ["-m", "auto_codabench.mcp_server.server"],
-      "env": {
-        "AUTOCODABENCH_BUNDLES_ROOT": "/Users/ktgiahieu/Documents/auto-codabench/auto_codabench/bundles"
-      }
-    }
-  }
-}
+asyncio.run(main())
+PY
 ```
 
-Restart Claude Desktop. You should see two MCP-tool indicators with
-`paper_relevance_search` / `autocodabench_init_bundle` listed.
+---
 
-For Claude Code: the same JSON shape works in your project's
-`.claude/settings.json` under `"mcpServers"`.
+## Wire into Claude (CLI)
+
+See [`INSTRUCTION_FOR_USER.md` §B.3](./INSTRUCTION_FOR_USER.md#b3-wire-the-mcp-servers-into-claude).
+
+Both `claude mcp add` (Claude Code) and the
+`claude_desktop_config.json` JSON form work; the underlying contract
+is just "run `python -m auto_codabench.mcp_server.server` on stdio".
 
 ---
 
 ## Skills
 
-The three skill files in `skills/*/SKILL.md` are designed to be loaded by
-Claude as user-invocable skills. To install them globally:
+The skill files in `skills/*/SKILL.md` are Markdown with YAML
+frontmatter (`name`, `description`). Claude loads them when the
+description matches user intent, or when the user types
+`/<skill-name>` explicitly.
 
-```bash
-mkdir -p ~/.claude/skills
-ln -s "$(pwd)/auto_codabench/skills/competition-design"   ~/.claude/skills/competition-design
-ln -s "$(pwd)/auto_codabench/skills/codabench-bundle"     ~/.claude/skills/codabench-bundle
-ln -s "$(pwd)/auto_codabench/skills/autocodabench-orchestrator"   ~/.claude/skills/autocodabench-orchestrator
-```
+- `autocodabench-plan` — Phase 1 driver. Keep the hard rules at the
+  top stable; the rest of the body can evolve.
+- `autocodabench-implement` — Phase 2 driver. Reads the plan,
+  produces a bundle.
+- `competition-design`, `codabench-bundle` — pulled in by the two
+  drivers as on-demand reference material.
 
-(For Claude Code project-scoped skills, drop them under `.claude/skills/`.)
-
----
-
-## .env
-
-`.env` lives at the repo root (already gitignored). Minimum keys:
-
-```
-SEMANTIC_SCHOLAR_API_KEY=...
-```
-
-Add whatever your competition needs (e.g. dataset-download tokens, an
-OpenAI key for an evaluation model). Spec 06 (`specs/06-run-logging-and-env.md`)
-must enumerate every key the implementation phase reads.
+For Claude Code project-scoped skills, drop them under
+`.claude/skills/`. For globally-available skills, symlink into
+`~/.claude/skills/` (the user guide shows the exact commands).
 
 ---
 
-## The two-session workflow
+## Out of scope (deliberately)
 
-**Session 1 — planning (this is what the orchestrator skill drives):**
-
-You say: *"I want a competition on detecting AI-generated text."*
-
-Claude (with the orchestrator skill active):
-1. Restates the task in one paragraph.
-2. Searches Semantic Scholar for recent baselines (RAID, M4, …).
-3. Asks one decisive question.
-4. Cycles Q&A + searches until every dimension in §3 of the orchestrator skill
-   has a confirmed answer or a citation-backed proposal.
-5. Writes `specs/01-*.md` … `specs/06-*.md` + `implementation_plan.md`.
-6. **Stops.** No bundle files exist on disk yet.
-
-You read the specs, push back, iterate. When you say "go":
-
-**Session 2 — execution (fresh session, run `/agents` to spawn subagents):**
-
-The `implementation_plan.md` defines subagents — each with narrow
-permissions and a focused task. They each call the appropriate
-`autocodabench_*` tools, log to `logs/<branchid>_<runtime_id>/`, and the
-final `meta-reviewer` subagent audits everything and writes a report.
-
-The final artifact is `auto_codabench/bundles/<slug>.zip`. Upload that to
-Codabench through the UI (or — future work — a small `upload_bundle` MCP
-tool).
-
----
-
-## Explicitly out of scope (v1)
-
-- No Codabench API client. No auth. No upload tool.
-- No compute-worker setup, no Docker image building, no queue config.
-- No verification that the bundle actually runs on Codabench infrastructure.
-- No live smoke-test (running the scoring program against the baseline
-  solution as a subprocess) — `validate_bundle` is the strongest local
-  guarantee. A `smoke_test_bundle` tool may be added later.
+- Codabench upload UI lives in the **web** app
+  (`web/app.py:/ac/upload-codabench` FastAPI route), not in this
+  package. The MCP `autocodabench_upload_bundle` tool exists as a
+  CLI alternative.
+- The notebook-based 3-phase flow lives on
+  `try-web-ui-with-starting-kit` if we ever want to revive it.
+- No Codabench compute-worker setup, no Docker images for scoring,
+  no queue config. `validate_bundle` is the strongest local
+  guarantee.
