@@ -174,21 +174,219 @@
 
     // ---------------------------------------------------------------
     // (5) Tag the phase-switch action buttons by their label text so
-    //     CSS can style them big + pulsing. The labels are stable —
-    //     they come from app.py's cl.Action(label=...) constants.
+    //     CSS can style / hide them. The labels are stable — they come
+    //     from app.py's cl.Action(label=...) constants.
+    //
+    // The new 3-phase model uses synthetic label prefixes
+    // (AC_ADVANCE::<phase>, AC_REVERT::<phase>) so chat.js can find
+    // them deterministically and simulate clicks from the phase-bar
+    // pill interactions. We tag them with data attributes here and
+    // hide them via CSS.
     // ---------------------------------------------------------------
     function tagPhaseActions() {
         document.querySelectorAll("button").forEach((btn) => {
             const t = (btn.textContent || "").trim();
-            if (!t || btn.dataset.acImplButton) return;
-            if (t.startsWith("🛠 START IMPLEMENTATION")) {
-                btn.dataset.acImplButton = "primary";
-            } else if (t.startsWith("✅ YES — switch to IMPLEMENTATION")) {
-                btn.dataset.acImplButton = "confirm";
-            } else if (t.startsWith("❌ Cancel — keep planning")) {
-                btn.dataset.acImplButton = "cancel";
+            if (!t) return;
+
+            // Legacy 2-phase buttons (kept for completeness, the new
+            // model doesn't emit these anymore).
+            if (!btn.dataset.acImplButton) {
+                if (t.startsWith("🛠 START IMPLEMENTATION")) {
+                    btn.dataset.acImplButton = "primary";
+                } else if (t.startsWith("✅ YES — switch to IMPLEMENTATION")) {
+                    btn.dataset.acImplButton = "confirm";
+                } else if (t.startsWith("❌ Cancel — keep planning")) {
+                    btn.dataset.acImplButton = "cancel";
+                }
+            }
+
+            // 3-phase model: hidden navigation buttons. Match both the
+            // "AC_ADVANCE::kit" / "AC_REVERT::plan" forms.
+            if (!btn.dataset.acPhaseNav) {
+                const m = t.match(/^AC_(ADVANCE|REVERT)::([a-z]+)/);
+                if (m) {
+                    btn.dataset.acPhaseNav  = m[1].toLowerCase();  // advance|revert
+                    btn.dataset.acPhaseTarget = m[2];              // plan|kit|bundle
+                }
             }
         });
+    }
+
+    // Click the hidden cl.Action matching (kind, target). Walks the
+    // DOM bottom-up so we always pick the most recent button if
+    // Chainlit happened to leave older ones around.
+    function _clickHiddenPhaseNav(kind, target) {
+        const btns = Array.from(document.querySelectorAll(
+            `button[data-ac-phase-nav="${kind}"][data-ac-phase-target="${target}"]`
+        ));
+        if (btns.length === 0) {
+            console.warn("[autocodabench] no hidden phase-nav button for",
+                kind, target);
+            return false;
+        }
+        const target_btn = btns[btns.length - 1];
+        try { target_btn.click(); return true; }
+        catch (e) { console.error("[autocodabench] phase-nav click failed", e);
+                    return false; }
+    }
+
+
+    // ---------------------------------------------------------------
+    // (5b) PHASE BAR — top-of-page sticky bar with 3 pills + advance
+    //     button + live context-% chip. Driven by phase_state.json
+    //     which app.py writes after every turn.
+    // ---------------------------------------------------------------
+
+    const PHASE_ORDER = ["plan", "kit", "bundle"];
+    let _lastPhaseStateJson = "";
+
+    function _injectPhaseBar() {
+        if (document.getElementById("ac-phase-bar")) return;
+        if (!document.querySelector("textarea")) return; // login screen
+        if (!_currentSessionId()) return;
+        const bar = document.createElement("div");
+        bar.id = "ac-phase-bar";
+        bar.innerHTML = `
+            <div class="ac-pb-pills" role="tablist"></div>
+            <div class="ac-pb-right">
+                <button type="button" id="ac-pb-advance"
+                        class="ac-pb-advance" disabled
+                        title="Advance to the next phase">▶ Advance</button>
+                <span class="ac-pb-ctx" title="Approximate context window usage">
+                    <span class="ac-pb-ctx-label">ctx</span>
+                    <span class="ac-pb-ctx-bar"><span class="ac-pb-ctx-fill"></span></span>
+                    <span class="ac-pb-ctx-pct">—</span>
+                </span>
+                <span class="ac-pb-cost" title="Session cost (USD)">
+                    <span class="ac-pb-ctx-label">$</span>
+                    <span class="ac-pb-ctx-pct ac-pb-cost-val">—</span>
+                </span>
+            </div>
+        `;
+        document.body.appendChild(bar);
+        document.body.classList.add("ac-phase-bar-active");
+
+        bar.querySelector("#ac-pb-advance").addEventListener("click", (e) => {
+            e.stopPropagation();
+            const target = e.currentTarget.dataset.target;
+            if (!target) return;
+            _clickHiddenPhaseNav("advance", target);
+        });
+    }
+
+    async function _refreshPhaseBarFromState() {
+        const sid = _currentSessionId();
+        const bar = document.getElementById("ac-phase-bar");
+        if (!sid || !bar) return;
+        try {
+            const r = await fetch(
+                `/public/sessions/${sid}/phase_state.json?t=${Date.now()}`,
+                {cache: "no-cache"},
+            );
+            if (!r.ok) return;
+            const state = await r.json();
+            // Skip rebuilds when state hasn't changed.
+            const sig = JSON.stringify({
+                p: state.current, n: state.next, c: state.can_advance,
+                ph: (state.phases || []).map((x) => [x.id, x.status]),
+                ctx: state.context?.pct, cost: state.cost?.cumulative_usd,
+            });
+            if (sig === _lastPhaseStateJson) return;
+            _lastPhaseStateJson = sig;
+
+            // --- pills ---
+            const pillsHost = bar.querySelector(".ac-pb-pills");
+            pillsHost.innerHTML = "";
+            (state.phases || []).forEach((ph, idx) => {
+                const pill = document.createElement("button");
+                pill.type = "button";
+                pill.className = "ac-pb-pill ac-pb-pill-" + ph.status;
+                pill.dataset.phaseId = ph.id;
+                pill.dataset.phaseStatus = ph.status;
+                let icon;
+                if (ph.status === "active")        icon = "🟢";
+                else if (ph.status === "locked")   icon = "🔒";
+                else                                icon = "○";
+                pill.innerHTML = `
+                    <span class="ac-pb-pill-icon">${icon}</span>
+                    <span class="ac-pb-pill-num">${idx + 1}</span>
+                    <span class="ac-pb-pill-title">${ph.title}</span>
+                `;
+                if (ph.status === "locked") {
+                    pill.title = "Click to revise " + ph.title +
+                        " (discards everything after this phase)";
+                    pill.addEventListener("click", () => {
+                        const ok = confirm(
+                            "Go back to " + ph.title + "?\n\n" +
+                            "Everything in later phases will be discarded " +
+                            "(the kit notebook / bundle zip will be wiped " +
+                            "and regenerated when you advance again). " +
+                            "The " + ph.title + " artifact itself is preserved " +
+                            "so you can edit it.");
+                        if (!ok) return;
+                        _clickHiddenPhaseNav("revert", ph.id);
+                    });
+                } else if (ph.status === "pending") {
+                    pill.title = "Complete the current phase first";
+                } else {
+                    pill.title = "Currently in " + ph.title;
+                }
+                pillsHost.appendChild(pill);
+                if (idx < (state.phases.length - 1)) {
+                    const sep = document.createElement("span");
+                    sep.className = "ac-pb-sep";
+                    sep.textContent = "→";
+                    pillsHost.appendChild(sep);
+                }
+            });
+
+            // --- advance button ---
+            const adv = bar.querySelector("#ac-pb-advance");
+            if (state.next && state.can_advance) {
+                adv.disabled = false;
+                adv.dataset.target = state.next;
+                const nextPh = (state.phases || []).find(
+                    (x) => x.id === state.next);
+                adv.textContent = "▶ Advance to " + (nextPh?.title || state.next);
+                adv.title = "Click to advance to " + (nextPh?.title || state.next);
+            } else {
+                adv.disabled = true;
+                adv.dataset.target = "";
+                if (!state.next) {
+                    adv.textContent = "✓ Final phase";
+                    adv.title = "You're in the last phase.";
+                } else {
+                    const curPh = (state.phases || []).find(
+                        (x) => x.id === state.current);
+                    adv.textContent = "▶ Advance";
+                    adv.title = "Finish " + (curPh?.title || state.current) +
+                                " first — its artifact is missing.";
+                }
+            }
+
+            // --- context chip ---
+            const pct = state.context?.pct || 0;
+            const fill = bar.querySelector(".ac-pb-ctx-fill");
+            const pctEl = bar.querySelector(".ac-pb-ctx-pct");
+            if (fill && pctEl) {
+                fill.style.width = Math.min(100, Math.max(0, pct)) + "%";
+                pctEl.textContent = pct.toFixed(1) + "%";
+                fill.dataset.level = pct < 50 ? "low"
+                                   : pct < 80 ? "mid"
+                                   : "high";
+            }
+
+            // --- cost chip ---
+            const costEl = bar.querySelector(".ac-pb-cost-val");
+            if (costEl) {
+                const c = state.cost?.cumulative_usd || 0;
+                const b = state.cost?.budget_usd     || 0;
+                costEl.textContent = "$" + c.toFixed(2) +
+                                     " / $" + b.toFixed(2);
+            }
+        } catch (e) {
+            // Silent — state file may not exist yet on first paint.
+        }
     }
 
     // ---------------------------------------------------------------
@@ -490,7 +688,8 @@
 
     function tick() {
         syncInitGate();   // run first so the lock is up before anything else
-        _injectSidePanel();  // sci-space-style persistent workspace panel
+        _injectSidePanel();   // sci-space-style persistent workspace panel
+        _injectPhaseBar();    // top-of-page 3-phase bar (driven by JSON)
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
@@ -505,6 +704,10 @@
             if (stale) stale.remove();
         }
     }
+
+    // Poll the phase state JSON on its own ~2 s timer (faster than the
+    // workspace iframe so pill updates feel snappy).
+    setInterval(_refreshPhaseBarFromState, 2000);
 
     // Apply the lock as soon as possible — ideally before React mounts
     // the chat input. We call tick() once synchronously here, then again

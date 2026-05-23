@@ -140,17 +140,52 @@ load_dotenv(REPO_ROOT / ".env")
 
 SHARED_PASSWORD = os.environ.get("SHARED_PASSWORD", "")
 DEFAULT_MODEL = os.environ.get("AUTOCODABENCH_DEFAULT_MODEL", "claude-sonnet-4-6")
-MAX_USD_PER_SESSION = float(os.environ.get("MAX_USD_PER_SESSION", "2.0"))
+# Cost cap raised to $5 default while the 3-phase split is being tested —
+# the per-phase context reset means a session now spans three smaller
+# context windows instead of one large one, but iteration depth (refine
+# multiple sections, revise plan, etc.) can still add up.
+MAX_USD_PER_SESSION = float(os.environ.get("MAX_USD_PER_SESSION", "5.0"))
 PYTHON_BIN = os.environ.get("AUTOCODABENCH_PYTHON", sys.executable)
+# Sonnet's context-window cap (used as the denominator for the live
+# "context %" chip in the phase bar — same metric Claude Code shows).
+CONTEXT_WINDOW_TOKENS = int(os.environ.get(
+    "AUTOCODABENCH_CONTEXT_WINDOW", "200000"))
 
-# Two phases shown in the UI. Planning is the orchestrator (proposal +
-# implementation specs); Implementation is Phase C of the orchestrator
-# (bundle writes + Codabench upload). On the CLI, Phase C runs in a
-# *fresh* Claude session; on the web UI we don't have that option, so
-# the user clicks a big confirm button and we recreate the SDK client
-# in place — same run_dir, new tool allowlist, new system prompt.
-PHASE_PLANNING       = "planning"
-PHASE_IMPLEMENTATION = "implementation"
+# Three phases, each with its own agent. The whole point of the split
+# is COST: each phase starts with no conversation history and only the
+# previous phase's locked artifact in scope. We disconnect the SDK
+# client at every boundary and build a fresh one with that phase's
+# system prompt + tool allowlist.
+#
+#   Phase 1 — PLAN   : produce specs/implementation_plan.md.
+#   Phase 2 — KIT    : read the plan, write starting_kit.ipynb.
+#   Phase 3 — BUNDLE : read the notebook, package the Codabench bundle.
+#
+# The user moves between phases by clicking the phase bar at the top
+# of the page. Forward advances are gated on the previous phase's
+# artifact existing; back-navigation discards downstream artifacts so
+# the next forward advance regenerates them from the (possibly edited)
+# previous artifact.
+PHASE_PLAN   = "plan"
+PHASE_KIT    = "kit"
+PHASE_BUNDLE = "bundle"
+PHASE_ORDER  = [PHASE_PLAN, PHASE_KIT, PHASE_BUNDLE]
+PHASE_TITLE  = {
+    PHASE_PLAN:   "📝 Plan",
+    PHASE_KIT:    "📓 Starting Kit",
+    PHASE_BUNDLE: "📦 Bundle",
+}
+PHASE_ARTIFACT = {
+    PHASE_PLAN:   "specs/implementation_plan.md",
+    PHASE_KIT:    "starting_kit.ipynb",
+    PHASE_BUNDLE: "bundle.zip",
+}
+# Legacy aliases for the old two-phase code. The PR removes most of the
+# direct references, but a few call sites still pass these names; keep
+# the constants pointing at the right new phase so the old code still
+# routes correctly while we finish the migration.
+PHASE_PLANNING       = PHASE_KIT
+PHASE_IMPLEMENTATION = PHASE_BUNDLE
 
 # 8-stage notebook flow (see notebook_kernel.STAGES). Each stage gets a
 # row in the cl.TaskList that lives at the top of the chat. Stages
@@ -173,13 +208,25 @@ STAGE_TITLES: list[tuple[str, str]] = [
     ("8.bundle",       "🛠 8. Bundle"),
 ]
 
-_PLANNING_TOOLS = [
+# Per-phase tool allowlists. Each phase is given the minimum set it
+# needs — narrower allowlists mean fewer tool definitions in the
+# system prompt, which cuts per-turn input tokens.
+_PLAN_TOOLS = [
+    # Phase 1 — prose plan only. No notebook, no bundle.
     "mcp__autocodabench__autocodabench_open_run",
     "mcp__autocodabench__autocodabench_current_run",
     "mcp__autocodabench__autocodabench_log_event",
     "mcp__autocodabench__autocodabench_snapshot_spec",
-    # Notebook authoring tools — used throughout stages 1-7. Stage 8
-    # adds the bundle-write tools via _IMPLEMENTATION_TOOLS.
+    "mcp__alex-mcp__*",
+    "Read", "Grep", "Glob",
+]
+_KIT_TOOLS = [
+    # Phase 2 — notebook authoring. snapshot_spec deliberately omitted
+    # so the agent can't accidentally clobber implementation_plan.md
+    # (the Phase 1 artifact is "locked" at this phase boundary).
+    "mcp__autocodabench__autocodabench_open_run",
+    "mcp__autocodabench__autocodabench_current_run",
+    "mcp__autocodabench__autocodabench_log_event",
     "mcp__autocodabench__autocodabench_nb_init",
     "mcp__autocodabench__autocodabench_nb_write_cell",
     "mcp__autocodabench__autocodabench_nb_run_stage",
@@ -189,13 +236,23 @@ _PLANNING_TOOLS = [
     "mcp__alex-mcp__*",
     "Read", "Grep", "Glob",
 ]
-_IMPLEMENTATION_TOOLS = [
-    # Bundle-write side of the autocodabench MCP — only unlocked once
-    # the user explicitly steps into the implementation phase.
+_BUNDLE_TOOLS = [
+    # Phase 3 — full bundle-write + optional upload. The notebook
+    # tools are still allowed in case stage 8 needs to re-render
+    # the notebook from disk; snapshot_spec is allowed for writing
+    # competition pages.
     "mcp__autocodabench__*",
     "mcp__alex-mcp__*",
     "Read", "Grep", "Glob",
 ]
+_TOOLS_BY_PHASE = {
+    PHASE_PLAN:   _PLAN_TOOLS,
+    PHASE_KIT:    _KIT_TOOLS,
+    PHASE_BUNDLE: _BUNDLE_TOOLS,
+}
+# Legacy aliases kept for any caller still using the old names.
+_PLANNING_TOOLS       = _KIT_TOOLS
+_IMPLEMENTATION_TOOLS = _BUNDLE_TOOLS
 
 # Per-session run dirs are uploaded to this private HF Dataset repo
 # (cost.jsonl, transcript.md, tool_calls/, specs/, events.jsonl, …).
@@ -205,11 +262,27 @@ HF_RUNS_REPO = os.environ.get("AUTOCODABENCH_RUNS_REPO", "ktgiahieu/autocodabenc
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 SKILLS_ROOT = REPO_ROOT / "auto_codabench" / "skills"
-ORCHESTRATOR_SKILL = SKILLS_ROOT / "autocodabench-orchestrator" / "SKILL.md"
-# Fallback if symlinks not yet installed: read directly from source.
-if not ORCHESTRATOR_SKILL.exists():
-    ORCHESTRATOR_SKILL = SKILLS_ROOT / "orchestrator" / "SKILL.md"
-IMPLEMENT_SKILL = SKILLS_ROOT / "autocodabench-implement" / "SKILL.md"
+
+
+def _resolve_skill(*candidates: str) -> Path:
+    """Return the first existing SKILL.md among the candidate dir names."""
+    for name in candidates:
+        p = SKILLS_ROOT / name / "SKILL.md"
+        if p.exists():
+            return p
+    # Even if none exists yet, return the first candidate so the caller
+    # gets a reasonable path for log messages.
+    return SKILLS_ROOT / candidates[0] / "SKILL.md"
+
+
+PLAN_SKILL         = _resolve_skill("autocodabench-plan", "plan")
+ORCHESTRATOR_SKILL = _resolve_skill("autocodabench-orchestrator", "orchestrator")
+IMPLEMENT_SKILL    = _resolve_skill("autocodabench-implement")
+_SKILL_BY_PHASE = {
+    PHASE_PLAN:   PLAN_SKILL,
+    PHASE_KIT:    ORCHESTRATOR_SKILL,
+    PHASE_BUNDLE: IMPLEMENT_SKILL,
+}
 
 RUNS_ROOT = REPO_ROOT / "auto_codabench" / "runs"
 
@@ -230,52 +303,62 @@ def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _system_prompt(*, phase: str = PHASE_PLANNING) -> str:
+def _system_prompt(*, phase: str = PHASE_PLAN) -> str:
     """Return the per-phase system prompt.
 
-    Each phase loads its OWN skill body — we don't try to teach the agent
-    both at once. The orchestrator skill is for planning (proposal +
-    specs); the autocodabench-implement skill is for execution.
-
-    A short web-UI footer is appended so the model knows the phase
-    switch is button-driven (no "open a new chat" in either direction).
+    Each phase loads its own skill body — never both at once. A short
+    web-UI footer is appended so the model knows phase transitions are
+    button-driven (no "open a new chat" in either direction), and that
+    the user — not the agent — owns the click.
     """
-    if phase == PHASE_PLANNING:
-        base = _read_skill(ORCHESTRATOR_SKILL) or (
-            "You are an orchestrator that helps researchers design Codabench "
-            "competitions. (ORCHESTRATOR_SKILL missing.)"
-        )
+    skill_path = _SKILL_BY_PHASE.get(phase, PLAN_SKILL)
+    base = _read_skill(skill_path) or (
+        f"(skill body missing at {skill_path} — contact the operator.)"
+    )
+
+    if phase == PHASE_PLAN:
         footer = (
             "\n\n---\n\n"
-            "## Web UI runtime note\n\n"
-            "You are running inside the AutoCodabench web UI. The user cannot "
-            "open a fresh chat to enter Phase C — instead, the UI shows a big "
-            "**START IMPLEMENTATION** button as soon as `implementation_plan.md` "
-            "is written. When you finish Phase B, do NOT tell the user to "
-            "'open a new chat' — instead say:\n\n"
-            "> ✅ Implementation plan written. A big **START IMPLEMENTATION** "
-            "> button has appeared below this message — click it to begin "
-            "> Phase C in this same session. Switching is irreversible in "
-            "> the current session.\n\n"
-            "Stay in PLANNING mode until that button is clicked."
+            "## Web UI runtime note (Phase 1 — Plan)\n\n"
+            "You are running in the AutoCodabench web UI, Phase 1. The user "
+            "advances between phases by clicking pills in the **phase bar "
+            "at the top of the page** — you cannot trigger the advance "
+            "yourself.\n\n"
+            "When `implementation_plan.md` is saved and you'd recommend "
+            "moving on, say something like:\n\n"
+            "> ✅ Plan saved. When you're ready, click **▶ Advance to "
+            "> Phase 2 — Starting Kit** in the phase bar at the top.\n\n"
+            "Phase 2 starts with NO memory of this conversation — only the "
+            "plan file. If anything important from our chat is missing from "
+            "the plan, tell the user so we can revise before advancing."
         )
-    else:  # PHASE_IMPLEMENTATION
-        base = _read_skill(IMPLEMENT_SKILL) or (
-            "You are executing Phase C of an AutoCodabench run. "
-            "(autocodabench-implement skill missing — please contact the operator.)"
-        )
+    elif phase == PHASE_KIT:
         footer = (
             "\n\n---\n\n"
-            "## Web UI runtime note (Phase C)\n\n"
-            "You are running inside the AutoCodabench web UI in Phase C. The "
-            "user reached this mode by clicking **START IMPLEMENTATION**, "
-            "which has already been confirmed. `/agents` is NOT available "
-            "here — execute the plan serially in this chat. The user will "
-            "see your tool chips (`Running …`) for each step.\n\n"
-            "Start now: call `autocodabench_current_run` to find the run "
-            "dir, then follow §1–§6 of the autocodabench-implement skill. "
-            "Don't wait for additional instructions — the user expects you "
-            "to begin immediately."
+            "## Web UI runtime note (Phase 2 — Starting Kit)\n\n"
+            "You are running in Phase 2. The plan lives at "
+            "`<run>/specs/implementation_plan.md` — read it first. You did "
+            "NOT participate in the Phase 1 conversation; the plan is your "
+            "single source of truth for the design.\n\n"
+            "Start now: `autocodabench_current_run` → "
+            "`Read('<run>/specs/implementation_plan.md')` → "
+            "`autocodabench_nb_init()` → write all 7 sections. Don't wait "
+            "for additional instructions.\n\n"
+            "When the notebook is good, suggest the user click "
+            "**▶ Advance to Phase 3 — Bundle** in the phase bar at the top."
+        )
+    else:  # PHASE_BUNDLE
+        footer = (
+            "\n\n---\n\n"
+            "## Web UI runtime note (Phase 3 — Bundle)\n\n"
+            "You are running in Phase 3. The user reached this phase by "
+            "clicking **▶ Advance to Phase 3** in the phase bar; the kit "
+            "notebook at `<run>/starting_kit.ipynb` is locked. Execute "
+            "the autocodabench-implement skill serially in this chat — "
+            "`/agents` is not available here.\n\n"
+            "Start now: call `autocodabench_current_run`, read the "
+            "notebook + events.jsonl, then follow the autocodabench-implement "
+            "skill end-to-end. Don't wait for additional instructions."
         )
     return base + footer
 
@@ -468,11 +551,14 @@ async def on_chat_start():
             author="autocodabench",
         ).send()
 
-    # 3. Configure the Claude Agent SDK client for the PLANNING phase.
-    cl.user_session.set("phase", PHASE_PLANNING)
-    cl.user_session.set("switch_offered", False)  # so we don't spam the button
+    # 3. Configure the Claude Agent SDK client for Phase 1 (Plan).
+    cl.user_session.set("phase", PHASE_PLAN)
+    cl.user_session.set("phase_history", [])           # phases that have an artifact
+    cl.user_session.set("switch_offered", False)       # legacy single-button flag
+    cl.user_session.set("last_input_tokens", 0)        # for context-% chip
+    cl.user_session.set("last_output_tokens", 0)
 
-    client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_PLANNING))
+    client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_PLAN))
     await client.connect()
     cl.user_session.set("client", client)
 
@@ -489,8 +575,8 @@ async def on_chat_start():
     # 4. Greeting — this contains READY_PHRASE ("Tell me a competition
     # idea") which is the signal chat.js watches for to drop the banner
     # and unlock the input. Keep that exact phrase in the first line.
-    # We also lay out the two-phase contract up front so the user knows
-    # the irreversible step is coming.
+    # We lay out the 3-phase contract up front so the user knows the
+    # phase bar is the navigation surface.
     await cl.Message(
         content=(
             "# 🧠 AutoCodabench — design a Codabench competition\n\n"
@@ -498,24 +584,22 @@ async def on_chat_start():
             "explore the design space with you, citing the literature as "
             "we go. You can also drop a PDF / markdown design doc and I'll "
             "fill in only the gaps.\n\n"
-            "### How this app works\n\n"
-            "1. **Roadmap conversation** — we agree on the high-level "
-            "shape (task, data, metric). Quick.\n"
-            "2. **One-pass starting kit generation** — I write the FULL "
-            "`starting_kit.ipynb` with all 7 design sections "
-            "(Task formulation, Data & splits, Metric, Baseline & "
-            "starting kit, Rules, Ethics & dual-use, Schedule & "
-            "sustainability) + demo code that runs end-to-end. You'll "
-            "watch it materialise in the panel on the right.\n"
-            "3. **Per-section refinement** — when the v1 notebook lands, "
-            "you'll see a button row: refine any of the 7 sections, "
-            "or **Approve all & build the Codabench bundle**. Refine "
-            "is reversible.\n"
-            "4. **Bundle** — once you approve, the agent packages the "
-            "executed notebook into a Codabench `.zip`.\n\n"
-            "The panel on the right holds the live notebook (and "
-            "transcript / cost / specs tabs). It stays open the whole "
-            "session — no closing-and-can't-reopen.\n\n"
+            "### How this app works — 3 phases\n\n"
+            "**1. 📝 Plan** *(you are here)* — short roadmap conversation; "
+            "I save a one-page `implementation_plan.md`. Pure prose, no "
+            "code.\n\n"
+            "**2. 📓 Starting Kit** — a fresh agent reads the locked plan "
+            "and builds the full `starting_kit.ipynb` (all 7 design "
+            "sections + working demo code). Per-section refinement here.\n\n"
+            "**3. 📦 Bundle** — another fresh agent packages the executed "
+            "notebook into a Codabench `.zip`. Optional one-click upload.\n\n"
+            "**Phase bar at the top** drives navigation. Each phase starts "
+            "with a clean context (no memory of the previous chat — just "
+            "the locked artifact). That's the cost-savings mechanism. "
+            "Click 🔒 on a previous phase to revise it (discards everything "
+            "downstream).\n\n"
+            "The panel on the right holds the live notebook + transcript + "
+            "cost + specs tabs.\n\n"
             f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
             f"budget ${MAX_USD_PER_SESSION:.2f}_"
         ),
@@ -526,8 +610,13 @@ async def on_chat_start():
 
     # Pre-write a placeholder notebook.html + manifest.json so the
     # right panel has something to load on first render — even before
-    # the user's first message arrives.
+    # the user's first message arrives. Phase state too, so the phase
+    # bar in chat.js can paint immediately.
     _write_public_artifacts(run_dir, session_id)
+    _write_phase_state(run_dir, session_id)
+    # Stand up the hidden phase-controls message so chat.js has
+    # buttons to simulate-click from pill / advance interactions.
+    await _refresh_phase_controls()
 
 
 # ---------------------------------------------------------------------------
@@ -537,10 +626,12 @@ async def on_chat_start():
 def _build_options(run_dir: Path, phase: str) -> ClaudeAgentOptions:
     """Build the ClaudeAgentOptions for the requested phase.
 
-    Planning uses a tight allowlist (no bundle writes). Implementation
-    unlocks the full autocodabench MCP namespace including bundle write
-    + Codabench upload tools.
+    Each phase gets its own skill body + its own tool allowlist — see
+    the _TOOLS_BY_PHASE table and the per-phase footer in
+    _system_prompt(). max_budget_usd is shared across the whole
+    session (cumulative cost cap), not per-phase.
     """
+    tools = _TOOLS_BY_PHASE.get(phase, _PLAN_TOOLS)
     return ClaudeAgentOptions(
         model=DEFAULT_MODEL,
         system_prompt=_system_prompt(phase=phase),
@@ -552,8 +643,7 @@ def _build_options(run_dir: Path, phase: str) -> ClaudeAgentOptions:
             **os.environ,
             "AUTOCODABENCH_RUN_DIR": str(run_dir),
         },
-        allowed_tools=(_PLANNING_TOOLS if phase == PHASE_PLANNING
-                       else _IMPLEMENTATION_TOOLS),
+        allowed_tools=tools,
     )
 
 
@@ -678,6 +768,20 @@ async def on_message(msg: cl.Message):
                 cost = getattr(message, "total_cost_usd", None) or 0.0
                 cum = cl.user_session.get("cum_cost_usd", 0.0) + cost
                 cl.user_session.set("cum_cost_usd", cum)
+                # Pull token usage for the live context-% chip in the
+                # phase bar. Schema: ResultMessage.usage is a dict
+                # (anthropic SDK shape) with input_tokens / output_tokens.
+                usage = getattr(message, "usage", None) or {}
+                if isinstance(usage, dict):
+                    in_tok  = int(usage.get("input_tokens")  or 0)
+                    out_tok = int(usage.get("output_tokens") or 0)
+                else:
+                    in_tok  = int(getattr(usage, "input_tokens",  0) or 0)
+                    out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+                if in_tok:
+                    cl.user_session.set("last_input_tokens", in_tok)
+                if out_tok:
+                    cl.user_session.set("last_output_tokens", out_tok)
                 if cost:
                     await response_msg.stream_token(
                         f"\n\n_turn cost ≈ ${cost:.3f}; session total ≈ ${cum:.2f} / "
@@ -728,7 +832,14 @@ async def on_message(msg: cl.Message):
     # always-visible right panel injected by chat.js fetches these
     # from `/public/sessions/<sid>/...` — the workspace panel is the
     # ONLY file viewer.
-    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
+    sid = cl.user_session.get("session_id") or ""
+    _write_public_artifacts(run_dir, sid)
+    # Phase state powers the top phase bar (current phase, lock
+    # indicators, context %). Cheap; do it every turn.
+    _write_phase_state(run_dir, sid)
+    # Keep the hidden phase-controls message current so chat.js can
+    # find the right buttons to simulate-click from pill clicks.
+    await _refresh_phase_controls()
     # Update the in-chat "Starting Kit development progress" message.
     await _refresh_task_list(run_dir)
     # If stage 8 just produced a bundle, offer download + upload once.
@@ -777,7 +888,12 @@ def _stage_at(i: int) -> tuple[str, str] | None:
 
 
 async def _maybe_offer_stage_gate(run_dir: Path, stage: str) -> None:
-    """Open a single section-picker gate once the notebook has v1 of all 7 sections.
+    """Phase 2 only: open the section-picker after a writing pass.
+
+    In the 3-phase model, the bundle decision is made at the phase bar
+    (Advance to Phase 3), not at this gate. We keep the Refine /
+    Save & exit affordances and *also* mention the Advance pill so the
+    user knows where to go next.
 
     The new flow (per user direction 2026-05-23): the agent generates
     the FULL starting_kit.ipynb — all 7 design sections + demo code —
@@ -797,7 +913,7 @@ async def _maybe_offer_stage_gate(run_dir: Path, stage: str) -> None:
     rather than per-stage so the gate can re-appear after each
     refinement.
     """
-    if cl.user_session.get("phase") != PHASE_PLANNING:
+    if cl.user_session.get("phase") != PHASE_KIT:
         return
 
     # Don't gate on `0.roadmap` (design talk only) or `8.bundle`
@@ -853,11 +969,10 @@ async def _maybe_offer_stage_gate(run_dir: Path, stage: str) -> None:
     actions.append(cl.Action(
         name="ac_build_bundle",
         payload={},
-        label="✅ Approve all & build the Codabench bundle",
-        tooltip="Run stage 8: package the executed notebook into a "
-                "Codabench .zip. Other sections can still be revisited "
-                "if you refresh, but for this session bundle-mode is "
-                "next.",
+        label="✅ Approve all & advance to Phase 3 — Bundle",
+        tooltip="Same as clicking ▶ Advance to Phase 3 in the phase bar. "
+                "Rebuilds the agent with bundle-write tools and discards "
+                "the kit-phase chat history.",
     ))
     actions.append(cl.Action(
         name="ac_stage_save_exit",
@@ -902,7 +1017,7 @@ async def _refresh_legacy_bundle_gate(run_dir: Path) -> None:
     section-picker gate so legacy sessions still expose the build-bundle
     affordance.
     """
-    if cl.user_session.get("phase") != PHASE_PLANNING:
+    if cl.user_session.get("phase") != PHASE_KIT:
         return
     candidates = [
         run_dir / "specs" / "implementation_plan.md",
@@ -1070,24 +1185,281 @@ async def _on_section_refine(action: cl.Action):
 
 @cl.action_callback("ac_build_bundle")
 async def _on_build_bundle(action: cl.Action):
-    """User approved the whole notebook — switch to implementation + run stage 8."""
-    run_dir = Path(cl.user_session.get("run_dir"))
-    # Mark all 7 design sections DONE in the in-chat progress; bundle
-    # goes RUNNING.
-    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
-    for sid in ("1.task", "2.data", "3.metric", "4.baseline_kit",
-                "5.rules", "6.ethics", "7.schedule"):
-        section_status[sid] = "done"
-    section_status["8.bundle"] = "running"
-    cl.user_session.set("section_status", section_status)
-    progress_msg = cl.user_session.get("progress_msg")
-    if progress_msg is not None:
-        progress_msg.content = _render_progress_markdown(section_status)
+    """Legacy: 'Approve all & build bundle' button — same effect as
+    clicking Advance to Phase 3 in the phase bar."""
+    await _advance_to_phase(PHASE_BUNDLE)
+
+
+# ---------------------------------------------------------------------------
+# Phase advance / revert — driven by the phase bar at the top of the page.
+# Each transition disconnects the old SDK client and builds a fresh one with
+# the new phase's system prompt + tool allowlist. The previous conversation
+# is dropped entirely — only the artifact on disk carries forward. That is
+# the entire cost-savings mechanism of the 3-phase split.
+# ---------------------------------------------------------------------------
+
+def _reset_kit_session_state() -> None:
+    """Wipe per-phase ephemeral state (used on every phase transition)."""
+    cl.user_session.set("last_input_tokens", 0)
+    cl.user_session.set("last_output_tokens", 0)
+    cl.user_session.set("section_status", {})
+    cl.user_session.set("progress_msg", None)
+    cl.user_session.set("events_cursor", 0)
+    cl.user_session.set("show_progress", False)
+    cl.user_session.set("gates_offered", set())
+    cl.user_session.set("gate_pass_id", 0)
+    cl.user_session.set("bundle_actions_offered", False)
+
+
+def _delete_phase_artifact(run_dir: Path, phase: str) -> None:
+    """Remove a phase's artifact + per-session public copies.
+
+    Called on back-navigation: discard everything downstream so the next
+    forward advance regenerates from the (possibly edited) earlier
+    artifact. Plan is NEVER auto-deleted — back-nav to Plan means EDIT,
+    not blank.
+    """
+    try:
+        if phase == PHASE_KIT:
+            nb = run_dir / "starting_kit.ipynb"
+            if nb.is_file():
+                nb.unlink()
+        elif phase == PHASE_BUNDLE:
+            # The agent's zip_bundle writes into auto_codabench/bundles/<slug>/.
+            # We don't track the slug here — nuke any zips that exist so
+            # the next bundle phase regenerates them.
+            bundles_root = REPO_ROOT / "auto_codabench" / "bundles"
+            if bundles_root.is_dir():
+                for d in bundles_root.iterdir():
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+            # Also drop the per-session bundle.zip copy.
+            sid = cl.user_session.get("session_id") or ""
+            if sid:
+                pub = _PUBLIC_SESSIONS / sid / "bundle.zip"
+                if pub.is_file():
+                    pub.unlink()
+    except Exception as e:
+        log.warning("delete artifact for %s failed: %s", phase, e)
+
+
+async def _switch_sdk_client(run_dir: Path, target: str) -> None:
+    """Disconnect the current SDK client and stand up a fresh one for
+    `target`. Leaves session state mutation (phase, history) to caller."""
+    old = cl.user_session.get("client")
+    if old is not None:
         try:
-            await progress_msg.update()
-        except Exception:
-            pass
-    await _switch_to_implementation_for_bundle(run_dir)
+            await old.disconnect()
+        except Exception as e:
+            log.warning("disconnect on phase switch failed: %s", e)
+    new_client = ClaudeSDKClient(options=_build_options(run_dir, target))
+    await new_client.connect()
+    cl.user_session.set("client", new_client)
+
+
+async def _advance_to_phase(target: str) -> None:
+    """Move forward to `target` (must be exactly one step ahead, or
+    delegate to revert if it's behind)."""
+    if target not in PHASE_ORDER:
+        return
+    run_dir = Path(cl.user_session.get("run_dir"))
+    current = cl.user_session.get("phase") or PHASE_PLAN
+    if target == current:
+        return
+    tgt_idx = PHASE_ORDER.index(target)
+    cur_idx = PHASE_ORDER.index(current)
+    if tgt_idx < cur_idx:
+        await _revert_to_phase(target)
+        return
+
+    # Sanity: don't advance unless the current phase has its artifact.
+    if not _phase_artifact_exists(run_dir, current):
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                f"⚠ Can't advance to {PHASE_TITLE[target]} — "
+                f"{PHASE_TITLE[current]} hasn't produced "
+                f"`{PHASE_ARTIFACT[current]}` yet."
+            ),
+        ).send()
+        return
+
+    # Record the current phase as completed.
+    history = list(cl.user_session.get("phase_history") or [])
+    if current not in history:
+        history.append(current)
+    cl.user_session.set("phase_history", history)
+
+    _reset_kit_session_state()
+    cl.user_session.set("phase", target)
+    await _switch_sdk_client(run_dir, target)
+    _append_transcript(run_dir, role="user",
+                       text=f"[ui] Advance to {PHASE_TITLE[target]}.")
+    await _send_phase_kickoff(run_dir, target)
+
+    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
+    _write_phase_state(run_dir, cl.user_session.get("session_id") or "")
+    await _refresh_phase_controls()
+
+
+async def _revert_to_phase(target: str) -> None:
+    """Move BACK to `target` and discard all downstream artifacts."""
+    if target not in PHASE_ORDER:
+        return
+    run_dir = Path(cl.user_session.get("run_dir"))
+    current = cl.user_session.get("phase") or PHASE_PLAN
+    if target == current:
+        return
+    tgt_idx = PHASE_ORDER.index(target)
+    cur_idx = PHASE_ORDER.index(current)
+    if tgt_idx >= cur_idx:
+        # Caller asked for forward via the revert path; delegate.
+        await _advance_to_phase(target)
+        return
+
+    # Discard artifacts for all phases > target (per user-confirmed design).
+    for ph in PHASE_ORDER[tgt_idx + 1:]:
+        _delete_phase_artifact(run_dir, ph)
+
+    # Trim history.
+    history = [p for p in (cl.user_session.get("phase_history") or [])
+               if PHASE_ORDER.index(p) < tgt_idx]
+    cl.user_session.set("phase_history", history)
+
+    _reset_kit_session_state()
+    cl.user_session.set("phase", target)
+    await _switch_sdk_client(run_dir, target)
+    _append_transcript(
+        run_dir, role="user",
+        text=f"[ui] Back to {PHASE_TITLE[target]} — discarded downstream artifacts.")
+    await _send_phase_revisit(run_dir, target)
+
+    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
+    _write_phase_state(run_dir, cl.user_session.get("session_id") or "")
+    await _refresh_phase_controls()
+
+
+async def _send_phase_kickoff(run_dir: Path, target: str) -> None:
+    """User-facing greeting + agent kickoff prompt for a forward advance."""
+    if target == PHASE_KIT:
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                "# 📓 Phase 2 — Starting Kit\n\n"
+                "Fresh agent with no memory of Phase 1. It will read "
+                "`specs/implementation_plan.md`, then write the full "
+                "`starting_kit.ipynb` (all 7 sections + demo code) in one "
+                "pass. Per-section refinement after that."
+            ),
+        ).send()
+        await _stream_one_turn(
+            run_dir,
+            "Begin Phase 2. Read `specs/implementation_plan.md` first, then "
+            "build the starting kit notebook end-to-end. Follow your skill "
+            "exactly.",
+        )
+    elif target == PHASE_BUNDLE:
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                "# 📦 Phase 3 — Bundle\n\n"
+                "Fresh agent with bundle-write tools. It will read the "
+                "notebook and `events.jsonl`, then produce "
+                "`competition.yaml`, `scoring_program/`, `solution/`, "
+                "`pages/`, and finally a `.zip` you can download or "
+                "publish to Codabench."
+            ),
+        ).send()
+        await _stream_one_turn(run_dir, "Begin Phase 3: bundle packaging.")
+
+
+async def _send_phase_revisit(run_dir: Path, target: str) -> None:
+    """User-facing message after a BACK navigation."""
+    if target == PHASE_PLAN:
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                "# 📝 Phase 1 — Plan *(re-opened)*\n\n"
+                "Downstream artifacts discarded. The plan itself is "
+                "preserved — tell me what to change and I'll re-snapshot "
+                "it. When you're done, click **▶ Advance to Phase 2** to "
+                "regenerate the starting kit from the updated plan."
+            ),
+        ).send()
+        # Don't auto-prompt the agent here — wait for the user to say what
+        # to change. (Saves a needless turn.)
+    elif target == PHASE_KIT:
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                "# 📓 Phase 2 — Starting Kit *(re-opened)*\n\n"
+                "Bundle discarded. The notebook is preserved — refine "
+                "sections, or click **▶ Advance to Phase 3** when you're "
+                "ready to rebuild the bundle."
+            ),
+        ).send()
+
+
+async def _refresh_phase_controls() -> None:
+    """Maintain a single hidden cl.Message with phase-action buttons.
+
+    chat.js finds these buttons by their stable label prefix
+    (`AC_ADVANCE::<target>` / `AC_REVERT::<target>`), hides them
+    visually, and simulates clicks when the user clicks a pill in
+    the top phase bar.
+    """
+    run_dir = Path(cl.user_session.get("run_dir") or ".")
+    current = cl.user_session.get("phase") or PHASE_PLAN
+    cur_idx = PHASE_ORDER.index(current)
+
+    actions: list[cl.Action] = []
+    if cur_idx + 1 < len(PHASE_ORDER):
+        nxt = PHASE_ORDER[cur_idx + 1]
+        actions.append(cl.Action(
+            name="ac_advance_phase",
+            payload={"target": nxt},
+            label=f"AC_ADVANCE::{nxt}",
+            tooltip=f"Advance to {PHASE_TITLE[nxt]}",
+        ))
+    for prev in PHASE_ORDER[:cur_idx]:
+        actions.append(cl.Action(
+            name="ac_revert_phase",
+            payload={"target": prev},
+            label=f"AC_REVERT::{prev}",
+            tooltip=f"Back to {PHASE_TITLE[prev]} (discards downstream)",
+        ))
+
+    msg: cl.Message | None = cl.user_session.get("phase_controls_msg")
+    placeholder = "_phase controls (hidden — driven by the top phase bar)_"
+    if msg is None:
+        msg = cl.Message(content=placeholder,
+                         author="ac-phase-controls",
+                         actions=actions)
+        await msg.send()
+        cl.user_session.set("phase_controls_msg", msg)
+    else:
+        msg.actions = actions
+        try:
+            await msg.update()
+        except Exception as e:
+            log.warning("phase_controls update failed: %s — sending fresh msg", e)
+            msg = cl.Message(content=placeholder,
+                             author="ac-phase-controls",
+                             actions=actions)
+            await msg.send()
+            cl.user_session.set("phase_controls_msg", msg)
+
+
+@cl.action_callback("ac_advance_phase")
+async def _on_advance_phase(action: cl.Action):
+    target = (action.payload or {}).get("target")
+    await _advance_to_phase(str(target))
+
+
+@cl.action_callback("ac_revert_phase")
+async def _on_revert_phase(action: cl.Action):
+    target = (action.payload or {}).get("target")
+    await _revert_to_phase(str(target))
 
 
 @cl.action_callback("ac_stage_save_exit")
@@ -1119,50 +1491,8 @@ async def _on_stage_save_exit(action: cl.Action):
 
 
 async def _switch_to_implementation_for_bundle(run_dir: Path) -> None:
-    """User approved all sections → rebuild client with bundle tools, run stage 8."""
-    # Pin the gate-pass so a stale stage_done doesn't re-show the picker.
-    cl.user_session.set("gate_pass_id",
-                        int(cl.user_session.get("gate_pass_id", 0)) + 1)
-
-    old_client: ClaudeSDKClient | None = cl.user_session.get("client")
-    if old_client is not None:
-        try:
-            await old_client.disconnect()
-        except Exception as e:
-            log.warning("disconnect during stage 7→8 switch failed: %s", e)
-
-    cl.user_session.set("phase", PHASE_IMPLEMENTATION)
-    new_client = ClaudeSDKClient(options=_build_options(run_dir, PHASE_IMPLEMENTATION))
-    await new_client.connect()
-    cl.user_session.set("client", new_client)
-
-    # In-chat progress: bundle stage → RUNNING.
-    section_status: dict[str, str] = dict(cl.user_session.get("section_status") or {})
-    section_status["8.bundle"] = "running"
-    cl.user_session.set("section_status", section_status)
-    progress_msg = cl.user_session.get("progress_msg")
-    if progress_msg is not None:
-        progress_msg.content = _render_progress_markdown(section_status)
-        try:
-            await progress_msg.update()
-        except Exception:
-            pass
-
-    await cl.Message(
-        author="autocodabench",
-        content=(
-            "# 🛠 Stage 8 — Bundle packaging\n\n"
-            "Stage 7 approved. The agent has bundle-write tools available "
-            "and a Phase-C system prompt. It will now read the run dir "
-            "and produce the Codabench bundle (`competition.yaml`, "
-            "`scoring_program/`, `solution/`, `pages/`, etc.) and zip "
-            "it. Watch the chips for `init_bundle`, "
-            "`write_competition_yaml`, `write_scoring_program`, …"
-        ),
-    ).send()
-    _append_transcript(run_dir, role="user",
-                       text="[ui] Approved stage 7 — switching to Phase-C, starting stage 8 (Bundle).")
-    await _stream_one_turn(run_dir, "Begin stage 8: bundle packaging.")
+    """Legacy shim — old call sites end up at the generic advance helper."""
+    await _advance_to_phase(PHASE_BUNDLE)
 
 
 async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
@@ -1240,6 +1570,17 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                 cost = getattr(message, "total_cost_usd", None) or 0.0
                 cum  = cl.user_session.get("cum_cost_usd", 0.0) + cost
                 cl.user_session.set("cum_cost_usd", cum)
+                usage = getattr(message, "usage", None) or {}
+                if isinstance(usage, dict):
+                    in_tok  = int(usage.get("input_tokens")  or 0)
+                    out_tok = int(usage.get("output_tokens") or 0)
+                else:
+                    in_tok  = int(getattr(usage, "input_tokens",  0) or 0)
+                    out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+                if in_tok:
+                    cl.user_session.set("last_input_tokens", in_tok)
+                if out_tok:
+                    cl.user_session.set("last_output_tokens", out_tok)
                 if cost:
                     await response_msg.stream_token(
                         f"\n\n_turn cost ≈ ${cost:.3f}; session total ≈ "
@@ -1266,7 +1607,9 @@ async def _stream_one_turn(run_dir: Path, prompt_text: str) -> None:
                 ))
         _append_transcript(run_dir, role="claude", text="".join(body_chunks))
     # Same panel + progress refresh as the regular on_message path.
-    _write_public_artifacts(run_dir, cl.user_session.get("session_id") or "")
+    sid = cl.user_session.get("session_id") or ""
+    _write_public_artifacts(run_dir, sid)
+    _write_phase_state(run_dir, sid)
     await _refresh_task_list(run_dir)
     await _maybe_offer_bundle_actions()
     asyncio.create_task(_persist_to_hf(run_dir))
@@ -1665,6 +2008,108 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
         )
     except Exception as e:
         log.warning("public artifacts write failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Phase state (drives the top phase bar in chat.js)
+# ---------------------------------------------------------------------------
+
+def _phase_artifact_exists(run_dir: Path, phase: str) -> bool:
+    """Has this phase produced its locked artifact yet?
+
+    PLAN   → specs/implementation_plan.md (or implementation_plan.md as
+             a legacy fallback).
+    KIT    → starting_kit.ipynb with at least one cell.
+    BUNDLE → any *.zip under auto_codabench/bundles/.
+    """
+    if phase == PHASE_PLAN:
+        return ((run_dir / "specs" / "implementation_plan.md").is_file()
+                or (run_dir / "implementation_plan.md").is_file())
+    if phase == PHASE_KIT:
+        nb = run_dir / "starting_kit.ipynb"
+        if not nb.is_file():
+            return False
+        try:
+            import nbformat
+            return bool(nbformat.read(nb, as_version=4).cells)
+        except Exception:
+            return nb.stat().st_size > 100
+    if phase == PHASE_BUNDLE:
+        return _find_bundle_zip(run_dir) is not None
+    return False
+
+
+def _phase_status(phase: str, current: str, history: list[str],
+                  artifact_exists: bool) -> str:
+    """One of: 'active' (current phase), 'locked' (done, not current),
+    'pending' (not yet reached / no artifact)."""
+    if phase == current:
+        return "active"
+    # Index-based ordering so back-nav lands in a coherent state.
+    pi = PHASE_ORDER.index(phase)
+    ci = PHASE_ORDER.index(current)
+    if pi < ci or artifact_exists or (phase in history):
+        return "locked"
+    return "pending"
+
+
+def _write_phase_state(run_dir: Path, session_id: str) -> None:
+    """Drop web/public/sessions/<sid>/phase_state.json for chat.js.
+
+    Polled by the phase bar every ~3.5 s. Cheap to compute on every
+    turn: 3 disk stats plus a small JSON write.
+    """
+    try:
+        out = _public_session_dir(session_id)
+        current  = cl.user_session.get("phase") or PHASE_PLAN
+        history  = list(cl.user_session.get("phase_history") or [])
+        in_tok   = int(cl.user_session.get("last_input_tokens") or 0)
+        out_tok  = int(cl.user_session.get("last_output_tokens") or 0)
+        cum_cost = float(cl.user_session.get("cum_cost_usd") or 0.0)
+
+        phases_payload = []
+        for ph in PHASE_ORDER:
+            exists = _phase_artifact_exists(run_dir, ph)
+            phases_payload.append({
+                "id":       ph,
+                "title":    PHASE_TITLE[ph],
+                "artifact": PHASE_ARTIFACT[ph],
+                "exists":   exists,
+                "status":   _phase_status(ph, current, history, exists),
+            })
+        # Forward advance is only enabled when the CURRENT phase has an
+        # artifact on disk (don't let the user advance to Phase 2 with
+        # no plan written).
+        cur_idx       = PHASE_ORDER.index(current)
+        next_phase    = (PHASE_ORDER[cur_idx + 1]
+                         if cur_idx + 1 < len(PHASE_ORDER) else None)
+        can_advance   = (next_phase is not None
+                         and _phase_artifact_exists(run_dir, current))
+
+        payload = {
+            "session_id":   session_id,
+            "updated_at":   _utc_now(),
+            "current":      current,
+            "next":         next_phase,
+            "can_advance":  can_advance,
+            "phases":       phases_payload,
+            "context": {
+                "input_tokens":  in_tok,
+                "output_tokens": out_tok,
+                "max_tokens":    CONTEXT_WINDOW_TOKENS,
+                "pct":           round(100.0 * in_tok / CONTEXT_WINDOW_TOKENS, 1),
+            },
+            "cost": {
+                "cumulative_usd": round(cum_cost, 4),
+                "budget_usd":     MAX_USD_PER_SESSION,
+                "pct":            round(100.0 * cum_cost / MAX_USD_PER_SESSION, 1)
+                                  if MAX_USD_PER_SESSION > 0 else 0.0,
+            },
+        }
+        (out / "phase_state.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.warning("phase_state write failed: %s", e)
 
 
 _PROGRESS_ICONS = {
