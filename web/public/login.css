@@ -380,6 +380,24 @@ button[data-ac-impl-button="cancel"] {
     transform: translateY(-0.5px);
 }
 
+/* Red-outline pulse on the Readme button. Triggered by chat.js when
+ * the user clicks a phase pill that can't do anything yet — the
+ * implicit nudge to "check Readme to learn how the bar works".
+ * 3 short pulses over 3 s, then auto-stripped by chat.js. */
+@keyframes ac-readme-flash-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.8); outline-color: #dc2626; }
+    40%  { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);  outline-color: #dc2626; }
+    50%  { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);    outline-color: #dc2626; }
+    100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);    outline-color: #dc2626; }
+}
+.ac-readme-flash {
+    outline: 2px solid #dc2626 !important;
+    outline-offset: 2px !important;
+    border-radius: 6px !important;
+    animation: ac-readme-flash-pulse 1s ease-out 3 !important;
+}
+
+
 /* Hide the cl.Action buttons we use only as click targets for the
  * phase pills. Labels like "AC_ADVANCE::kit" / "AC_REVERT::plan"
  * are tagged in chat.js as data-ac-phase-nav="advance|revert" and

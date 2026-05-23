@@ -298,6 +298,41 @@
         host.insertBefore(pills, host.firstChild);
     }
 
+    // Locate the Readme link in the header (same heuristic as
+    // _findHeaderHost). Cached after first hit.
+    function _findReadmeButton() {
+        if (window.__acReadmeBtn
+            && document.body.contains(window.__acReadmeBtn)) {
+            return window.__acReadmeBtn;
+        }
+        const all = document.querySelectorAll("a, button");
+        for (const el of all) {
+            if ((el.textContent || "").trim() === "Readme") {
+                window.__acReadmeBtn = el;
+                return el;
+            }
+        }
+        return null;
+    }
+
+    // Flash a red outline on the Readme button for a few seconds. Used
+    // when the user clicks a pill that can't do anything yet — the
+    // implicit nudge is "see Readme for how the bar works". CSS handles
+    // the animation; we just toggle the class.
+    function _flashReadmeForHelp() {
+        const btn = _findReadmeButton();
+        if (!btn) return;
+        btn.classList.remove("ac-readme-flash");
+        // Force a reflow so the class is re-added cleanly (otherwise
+        // rapid repeat clicks don't restart the animation).
+        void btn.offsetWidth;
+        btn.classList.add("ac-readme-flash");
+        // Auto-strip the class so a one-off click doesn't leave a
+        // permanent outline once the animation ends. Match the CSS
+        // animation duration (3 s).
+        setTimeout(() => btn.classList.remove("ac-readme-flash"), 3200);
+    }
+
     async function _refreshPhasePillsFromState() {
         const sid = _currentSessionId();
         if (!sid) return;
@@ -340,6 +375,10 @@
                 // Tooltips + click behavior:
                 if (ph.status === "active") {
                     pill.title = "Currently in " + ph.title;
+                    // Active pill — clicking it doesn't go anywhere, but
+                    // users tend to click their current phase to "open"
+                    // something. Flash the Readme so they learn the bar.
+                    pill.addEventListener("click", _flashReadmeForHelp);
                 } else if (ph.status === "locked") {
                     pill.title = "Click to revise " + ph.title +
                         " (discards everything after this phase)";
@@ -359,7 +398,11 @@
                         _clickHiddenPhaseNav("advance", ph.id);
                     });
                 } else {
-                    pill.title = "Complete the current phase first";
+                    // Pending but not yet eligible to advance. Tell the
+                    // user via the Readme (more learnable than a toast).
+                    pill.title = "Complete the current phase first — " +
+                        "see Readme for how the phase bar works";
+                    pill.addEventListener("click", _flashReadmeForHelp);
                 }
                 pillsHost.appendChild(pill);
             });
