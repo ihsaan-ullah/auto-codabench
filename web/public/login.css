@@ -315,9 +315,11 @@ button[data-ac-impl-button="cancel"] {
     top: 0 !important;
     right: 0 !important;
     bottom: 0 !important;
-    width: 40vw !important;
-    min-width: 380px !important;
-    max-width: 660px !important;
+    /* 55vw clamped to [480, 900] px so the notebook has real reading
+     * room on wide monitors without devouring the chat on narrow ones. */
+    width: 55vw !important;
+    min-width: 480px !important;
+    max-width: 900px !important;
     z-index: 10000 !important;             /* above Chainlit chrome */
     display: flex !important;
     flex-direction: column !important;
@@ -468,16 +470,19 @@ button[data-ac-impl-button="cancel"] {
 }
 
 /* Reserve room on the right of the page so chat content isn't
- * underneath the panel. Toggle is added/removed by chat.js. */
+ * underneath the panel. Keep this in sync with #ac-side-panel
+ * `width` above (55vw, clamped to 480-900px). Toggle is added /
+ * removed by chat.js as the panel opens/collapses. */
 body.ac-side-active {
-    padding-right: 44vw;
+    padding-right: min(900px, 55vw);
 }
 @media (max-width: 900px) {
     body.ac-side-active { padding-right: 0; }
     #ac-side-panel {
-        width: 100vw;
-        max-width: none;
-        height: 50vh;
+        width: 100vw !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        height: 60vh;
         top: auto;
         bottom: 0;
         border-top: 1px solid color-mix(in oklab, currentColor 18%, transparent);

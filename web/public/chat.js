@@ -221,14 +221,29 @@
         return null;
     }
 
-    let _lastManifestSig = "";
+    // Per-URL `tag` (size+mtime from manifest.json) of the version we
+    // currently have showing in the iframe. Updated only when we
+    // actually (re)load that URL into the iframe — used to detect
+    // real content changes vs. the manifest just being re-written
+    // with the same data. Without this, the iframe reloaded on every
+    // 3.5 s tick and the user's scroll position kept jumping to the
+    // top. Initial-load case: tag captured at first iframe.src set.
+    const _lastTagByUrl = {};
+    let _lastFileListSig = "";
+
+    function _tabsListSig(files) {
+        // Sig keys ONLY off the file list shape (URL + name), not
+        // content tags — content changes shouldn't rebuild the tabs.
+        return JSON.stringify((files || []).map((f) => [f.url, f.name]));
+    }
+
     async function _refreshSidePanelFromManifest() {
         const sid = _currentSessionId();
         const panel = document.getElementById("ac-side-panel");
         if (!sid || !panel) return;
         // Skip the network round-trip if the user has the panel
         // collapsed — there's no visible content to update.
-        if (panel.classList.contains("ac-collapsed")) return;
+        if (panel.getAttribute("data-state") === "collapsed") return;
         try {
             const r = await fetch(
                 `/public/sessions/${sid}/manifest.json?t=${Date.now()}`,
@@ -236,16 +251,27 @@
             );
             if (!r.ok) return;
             const m = await r.json();
-            const sig = JSON.stringify(m.files || []);
+            const files = m.files || [];
             const tabsHost = panel.querySelector(".ac-tabs");
             const iframe   = panel.querySelector("#ac-side-iframe");
-            if (sig !== _lastManifestSig) {
-                _lastManifestSig = sig;
+
+            const tabsSig = _tabsListSig(files);
+            if (tabsSig !== _lastFileListSig) {
+                // Tab set itself changed (new file added, file removed):
+                // rebuild the tab strip. Do NOT auto-reload the iframe
+                // here unless we have to — only reload when the user
+                // hasn't picked a tab yet (initial load).
+                _lastFileListSig = tabsSig;
+                const wasActiveUrl = tabsHost.querySelector(".ac-tab-active")
+                    ?.dataset.url || null;
                 tabsHost.innerHTML = "";
-                (m.files || []).forEach((f, i) => {
+                files.forEach((f, i) => {
+                    const isActive = wasActiveUrl
+                        ? f.url === wasActiveUrl
+                        : i === 0;
                     const b = document.createElement("button");
                     b.type = "button";
-                    b.className = "ac-tab" + (i === 0 ? " ac-tab-active" : "");
+                    b.className = "ac-tab" + (isActive ? " ac-tab-active" : "");
                     b.dataset.url = f.url;
                     b.textContent = f.name;
                     b.addEventListener("click", () => {
@@ -253,18 +279,34 @@
                             (x) => x.classList.remove("ac-tab-active"));
                         b.classList.add("ac-tab-active");
                         iframe.src = f.url + `?t=${Date.now()}`;
+                        _lastTagByUrl[f.url] = f.tag;
                     });
                     tabsHost.appendChild(b);
                 });
-                if ((m.files || []).length > 0 && !iframe.dataset.acPinned) {
-                    iframe.src = m.files[0].url + `?t=${Date.now()}`;
+                // Initial-load only: if iframe has no real src, load the
+                // first/active tab so something is visible.
+                if (iframe.src === "about:blank" || !iframe.src) {
+                    const target = files.find((f) => f.url === wasActiveUrl)
+                        || files[0];
+                    if (target) {
+                        iframe.src = target.url + `?t=${Date.now()}`;
+                        _lastTagByUrl[target.url] = target.tag;
+                    }
                 }
-            } else {
-                // Same file set but content may have changed (notebook
-                // got more cells). Reload the iframe of the active tab.
-                const active = tabsHost.querySelector(".ac-tab-active");
-                if (active && !iframe.dataset.acPinned) {
-                    iframe.src = active.dataset.url + `?t=${Date.now()}`;
+            }
+
+            // For the currently-active tab, ONLY reload if its content
+            // actually changed since we last loaded it. This is what
+            // killed the scroll-to-top bug — previously we reloaded
+            // every tick regardless.
+            const active = tabsHost.querySelector(".ac-tab-active");
+            if (active) {
+                const activeFile = files.find((f) => f.url === active.dataset.url);
+                if (activeFile
+                    && activeFile.tag
+                    && _lastTagByUrl[activeFile.url] !== activeFile.tag) {
+                    iframe.src = activeFile.url + `?t=${Date.now()}`;
+                    _lastTagByUrl[activeFile.url] = activeFile.tag;
                 }
             }
         } catch (e) {

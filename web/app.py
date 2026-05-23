@@ -1604,6 +1604,17 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 log.warning("bundle copy failed: %s", e)
 
         # --- manifest.json: drives the panel's tab strip ---
+        # Each file gets a `tag` (size + mtime) so chat.js can detect
+        # actual content changes and skip reloads otherwise — without
+        # this, the iframe reloaded every 3.5 s and the user's
+        # scroll position jumped back to the top while reading.
+        def _tag(p: Path) -> str:
+            try:
+                st = p.stat()
+                return f"{st.st_size}-{int(st.st_mtime)}"
+            except Exception:
+                return "0-0"
+
         manifest = {
             "session_id": session_id,
             "updated_at": _utc_now(),
@@ -1613,6 +1624,7 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                     "url":   f"/public/sessions/{session_id}/notebook.html",
                     "kind":  "notebook",
                     "ready": nb_html is not None and "empty" not in nb_html[:200],
+                    "tag":   _tag(out / "notebook.html"),
                 },
             ],
         }
@@ -1622,6 +1634,7 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "url":  f"/public/sessions/{session_id}/bundle.zip",
                 "kind": "bundle",
                 "ready": True,
+                "tag":  _tag(bundle_pub),
             })
         if (out / "transcript.html").is_file():
             manifest["files"].append({
@@ -1629,6 +1642,7 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "url":  f"/public/sessions/{session_id}/transcript.html",
                 "kind": "transcript",
                 "ready": True,
+                "tag":  _tag(out / "transcript.html"),
             })
         if (out / "cost.html").is_file():
             manifest["files"].append({
@@ -1636,6 +1650,7 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "url":  f"/public/sessions/{session_id}/cost.html",
                 "kind": "cost",
                 "ready": True,
+                "tag":  _tag(out / "cost.html"),
             })
         for spec_html in sorted(specs_out.glob("*.html")):
             manifest["files"].append({
@@ -1643,6 +1658,7 @@ def _write_public_artifacts(run_dir: Path, session_id: str) -> None:
                 "url":  f"/public/sessions/{session_id}/specs/{spec_html.name}",
                 "kind": "spec",
                 "ready": True,
+                "tag":  _tag(spec_html),
             })
         (out / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
