@@ -41,9 +41,9 @@ Pattern for surfacing a tension in chat:
 
 ## 0. How to quote from this skill in user-facing chat
 
-The orchestrator skill's §2 *scientific tone* rule requires that every
-proposal made to the user names its source. When you draw on a bullet
-from this file, **surface the chapter handle verbatim** in your reply.
+AutoCodabench's *scientific tone* rule requires that every proposal made
+to the user names its source. When you draw on a bullet from this file,
+**surface the chapter handle verbatim** in your reply.
 The right citation form, depending on context:
 
 - **Inline principle**: *"Per Pavão et al. (Ch. 4 §4.2) …"* — use when

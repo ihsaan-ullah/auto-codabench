@@ -20,22 +20,18 @@ auto_codabench/
 │   ├── run_log.py               # open_run, current_run, log_event, snapshot_spec,
 │   │                            #   logged_tool decorator (full audit trail)
 │   ├── bundle_io.py             # pure file-I/O layer; no MCP; importable standalone
-│   ├── notebook_kernel.py       # Jupyter kernel + nb_* authoring (legacy — used by the
-│   │                            #   3-phase web flow on branch try-web-ui-with-starting-kit)
 │   └── tools/
 │       ├── runs.py              # autocodabench_open_run / current_run / log_event / snapshot_spec
 │       ├── bundle.py            # init / write_competition_yaml / write_page /
 │       │                        #   write_scoring_program / write_ingestion_program /
 │       │                        #   write_solution / attach_data
 │       ├── package.py           # validate_bundle / zip_bundle
-│       ├── upload.py            # upload_zip helper (env- OR param-credentials) +
-│       │                        #   autocodabench_upload_bundle MCP wrapper
-│       └── notebook.py          # nb_init / nb_write_cell / nb_run_stage / ... (legacy)
+│       └── upload.py            # upload_zip helper (env- OR param-credentials) +
+│                                #   autocodabench_upload_bundle MCP wrapper
 │
 ├── skills/
 │   ├── plan/SKILL.md                    # Phase 1 — produces specs/implementation_plan.md
 │   ├── autocodabench-implement/SKILL.md # Phase 2 — packages the bundle from the plan
-│   ├── orchestrator/SKILL.md            # (legacy — Phase 2 in the 3-phase starting-kit flow)
 │   ├── competition-design/SKILL.md      # reference — Pavão book rules of thumb
 │   └── codabench-bundle/SKILL.md        # reference — Codabench bundle schema
 │
@@ -68,7 +64,7 @@ auto_codabench/
 
 ## MCP tools
 
-15 tools total. The web app's allowlist exposes a subset per phase
+14 tools total. The web app's allowlist exposes a subset per phase
 (see `web/app.py:_TOOLS_BY_PHASE`).
 
 ### Run + logging
@@ -94,12 +90,6 @@ auto_codabench/
 | `autocodabench_validate_bundle`           | Schema lint — always run before zipping                       |
 | `autocodabench_zip_bundle`                | Produces `<run>/bundles/<slug>/<slug>.zip`                    |
 | `autocodabench_upload_bundle`             | Optional — publishes the zip to Codabench via REST API        |
-
-### Notebook authoring (legacy, used only by the 3-phase backup branch)
-
-`nb_init` / `nb_write_cell` / `nb_run_stage` / `nb_reset_to_stage` /
-`nb_render_html` / `nb_shutdown`. The current 2-phase web v1 flow
-doesn't include them in any phase's allowlist.
 
 ---
 
@@ -128,7 +118,7 @@ correct; Ctrl-C to exit):
 python -m auto_codabench.mcp_server.server
 ```
 
-In-process tool-count check (~15 tools):
+In-process tool-count check (14 tools):
 
 ```bash
 python - <<'PY'

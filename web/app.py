@@ -241,9 +241,6 @@ def _resolve_skill(*candidates: str) -> Path:
 
 PLAN_SKILL      = _resolve_skill("autocodabench-plan", "plan")
 IMPLEMENT_SKILL = _resolve_skill("autocodabench-implement")
-# Kept around for the backup branch's import compatibility; not used
-# in the 2-phase web v1 flow.
-ORCHESTRATOR_SKILL = _resolve_skill("autocodabench-orchestrator", "orchestrator")
 _SKILL_BY_PHASE = {
     PHASE_PLAN:   PLAN_SKILL,
     PHASE_BUNDLE: IMPLEMENT_SKILL,
@@ -1511,7 +1508,7 @@ def _extract_attachment_text(element) -> tuple[str, str] | None:
       - PDF      → pypdf text extraction, capped at _ATTACHMENT_MAX_CHARS.
       - .md/.txt → raw read.
     Other binary types (images, zip, …) are skipped silently — the
-    orchestrator skill assumes text-only inputs at this stage.
+    plan skill assumes text-only inputs at this stage.
     """
     path = getattr(element, "path", None)
     name = getattr(element, "name", None) or (Path(path).name if path else "<unknown>")
@@ -2042,8 +2039,8 @@ def _augment_user_message(run_dir: Path, msg: "cl.Message") -> str:
 
     head = (
         f"_The user attached {len(extracted_blocks)} document(s). The full "
-        f"extracted text is included below; treat this per orchestrator §1.6 "
-        f"(PDF intake — map onto the §1.0 roadmap, ask only for missing rows)._"
+        f"extracted text is included below; use it as reference for the plan — "
+        f"extract the relevant design decisions and ask only about what's missing._"
     )
     return f"{msg.content or ''}\n\n{head}\n\n" + "\n\n".join(extracted_blocks)
 

@@ -1,9 +1,9 @@
 """MCP tools for opening / logging into a run directory.
 
 A *run* is the working folder for one planning or execution session. The
-orchestrator skill calls `autocodabench_open_run` as its first action and
-then uses `autocodabench_log_event` / `autocodabench_snapshot_spec` to
-record what's happening as it happens.
+plan skill calls `autocodabench_open_run` as its first action and then
+uses `autocodabench_log_event` / `autocodabench_snapshot_spec` to record
+what's happening as it happens.
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ async def autocodabench_log_event(
 ) -> dict[str, Any]:
     """Append a structured event to the active run's events.jsonl.
 
-    Recommended `kind` values for the orchestrator skill:
+    Recommended `kind` values for the plan skill:
 
       - `iter1_started`           — first call after the skill activates
       - `question_asked`          — payload={"question": "..."}

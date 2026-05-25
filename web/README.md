@@ -1,7 +1,7 @@
 # AutoCodabench web UI — local dev + Hugging Face Spaces deploy
 
-A private-alpha Chainlit chat surface over the 2-phase orchestrator
-workflow (Plan → Competition Creation). End-user docs live in
+A private-alpha Chainlit chat surface over the 2-phase workflow
+(Plan → Competition Creation). End-user docs live in
 [`../auto_codabench/INSTRUCTION_FOR_USER.md`](../auto_codabench/INSTRUCTION_FOR_USER.md)
 §A. This file is for the maintainer.
 

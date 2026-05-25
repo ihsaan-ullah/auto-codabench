@@ -28,3 +28,6 @@ alex-mcp/*.webp
 test_pdf_folder/
 # Chainlit local per-session attachment cache (auto-created next to web/).
 web/.files/
+# Per-session web runtime artifacts (manifest/plan/transcript/bundle HTML+zip).
+# Written at runtime by web/app.py; never source.
+web/public/sessions/
