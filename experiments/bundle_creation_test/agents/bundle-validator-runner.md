@@ -6,11 +6,11 @@ tools:
   - Write
   - Bash
 allowedTools:
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
   - Read(./experiments/bundle_creation_test/bundle_validator.py)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/validation/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/validation/**)
   - Bash(python ./experiments/bundle_creation_test/bundle_validator.py:*)
-  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle:*)
+  - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle:*)
 permissionMode: dontAsk
 ---
 
@@ -19,10 +19,10 @@ report.
 
 ## Inputs
 
-- `bundle_root`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/`
+- `bundle_root`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/`
   (the actual bundle dir — one level inside `bundle/`, named after the
   slug).
-- `validation_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/validation/`
+- `validation_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/validation/`
 
 If the orchestrator gave you `<run>/bundle/` instead of `<run>/bundle/<slug>/`,
 use `ls <run>/bundle/` to find the slug subdir (it's the only directory
@@ -60,6 +60,6 @@ ignore).
   "status": "pass" | "fail",
   "exit_code": <int>,
   "first_error": null | "verbatim text after '[-] Validation Error:' or '[-] Unexpected Error:'",
-  "report_path": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/validation/report.txt"
+  "report_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/validation/report.txt"
 }
 ```

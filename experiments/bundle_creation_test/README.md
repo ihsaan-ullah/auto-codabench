@@ -251,7 +251,7 @@ you can invoke it explicitly via the Task tool with
 `subagent_type=bundle-experiment-runner`). The orchestrator:
 
 1. Computes a `run_id` = `<short_sha>_<utc_ts>`.
-2. Creates `experiments/bundle_creation_test/competitions/<comp>/<run_id>/`
+2. Creates `experiments/bundle_creation_test/runs/<comp>/<run_id>/`
    and writes an initial `manifest.json`.
 3. Spawns the 5 step-agents in order. For step 5 it loops over every
    `<comp>/ground_truth/sample_submissions/sub_*/`, spawning a reformatter

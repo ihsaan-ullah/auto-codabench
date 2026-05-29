@@ -12,9 +12,9 @@ tools:
   - Skill
 allowedTools:
   - Read(./experiments/bundle_creation_test/competitions/*/input/**)
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/plan/**)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/plan/**)
-  - Edit(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/plan/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/**)
+  - Edit(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/**)
   - Read(./auto_codabench/skills/**)
   - Read(./auto_codabench/mcp_server/**)
   - Read(./auto_codabench/README.md)
@@ -40,7 +40,7 @@ and a `plan_dir` (where to write the plan). You produce
 - `input_dir`: `./experiments/bundle_creation_test/competitions/<comp>/input/`
   - Contains the proposal paper (e.g. `report.pdf`) AND the public
     `sample_data/` dataset directory.
-- `plan_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/`
+- `plan_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/`
 
 ## Hard rules (the permission system enforces these — these are
 your honor-system reminders so you don't waste tool-calls trying)
@@ -88,7 +88,7 @@ A single fenced JSON object. Schema:
 ```json
 {
   "status": "pass" | "fail",
-  "plan_path": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/implementation_plan.md",
+  "plan_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md",
   "sections_covered": ["task", "data", "metric", "baseline", "rules", "ethics", "schedule"],
   "citations_count": <int>,
   "open_questions": ["..."],

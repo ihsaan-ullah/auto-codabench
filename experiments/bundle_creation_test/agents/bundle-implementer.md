@@ -9,11 +9,11 @@ tools:
   - Grep
   - Skill
 allowedTools:
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/plan/implementation_plan.md)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/implementation_plan.md)
   - Read(./experiments/bundle_creation_test/competitions/*/input/sample_data/**)
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
-  - Edit(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
+  - Edit(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
   - Read(./auto_codabench/skills/**)
   - Read(./auto_codabench/mcp_server/**)
   - Read(./auto_codabench/README.md)
@@ -32,12 +32,12 @@ zip of it).
 
 ## Inputs (from orchestrator's prompt)
 
-- `plan_path`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/implementation_plan.md`
+- `plan_path`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md`
   — your **only** spec.
 - `sample_data_dir`: `./experiments/bundle_creation_test/competitions/<comp>/input/sample_data/`
   — public dataset to inspect for shape, naming, and to copy/reference
   in the bundle's `input_data/` or `starting_kit/`.
-- `bundle_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/`
+- `bundle_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/`
 
 ## Hard rules
 
@@ -101,8 +101,8 @@ zip of it).
 {
   "status": "pass" | "fail",
   "slug": "...",
-  "bundle_dir": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/",
-  "zip_path": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/<slug>.zip",
+  "bundle_dir": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/",
+  "zip_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/<slug>.zip",
   "validation_summary": "<one-line: 'ok, 0 issues' or 'N issues remain after 3 retries'>",
   "decisions": ["short bullets of choices made under ambiguity"],
   "submission_interface": "<one-line description: e.g. 'class model exposing fit(X, y) and predict(X) returning ndarray of shape (n_samples, n_tasks)'>",

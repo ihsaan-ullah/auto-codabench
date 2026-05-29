@@ -6,18 +6,18 @@ tools:
   - Write
   - Bash
 allowedTools:
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/reformatted_submission/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/reformatted_submission/**)
   - Read(./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions/*/expected_result.json)
   - Read(./experiments/bundle_creation_test/competitions/*/input/sample_data/**)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/submission_run/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/submission_run/**)
   - Bash(python:*)
-  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle:*)
-  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/reformatted_submission:*)
-  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/submission_run:*)
+  - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle:*)
+  - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/reformatted_submission:*)
+  - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/submission_run:*)
   - Bash(cp:*)
   - Bash(mkdir:*)
-  - Bash(rm -rf ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/submission_run/*/sandbox:*)
+  - Bash(rm -rf ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/submission_run/*/sandbox:*)
 permissionMode: dontAsk
 ---
 
@@ -26,10 +26,10 @@ program locally and write the score + comparison to disk.
 
 ## Inputs (from orchestrator's prompt)
 
-- `bundle_root`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/`
-- `submission_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/reformatted_submission/<sub_N>/`
+- `bundle_root`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/`
+- `submission_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
 - `expected_result_path`: `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/expected_result.json`
-- `out_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/submission_run/<sub_N>/`
+- `out_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/`
 
 ## Hard rules
 
@@ -103,7 +103,7 @@ program locally and write the score + comparison to disk.
   "delta": <float | null>,
   "within_tolerance": <bool | null>,
   "stdout_tail": "<last ~20 lines of stdout>",
-  "score_path": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/submission_run/<sub_N>/score.json",
+  "score_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/score.json",
   "error": null | "..."
 }
 ```

@@ -12,22 +12,22 @@ tools:
 allowedTools:
   - Read(./experiments/bundle_creation_test/README.md)
   - Read(./experiments/bundle_creation_test/bundle_validator.py)
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/**)
   - Read(./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions/*/expected_result.json)
   - Read(./auto_codabench/runs/**)
   - Read(./auto_codabench/README.md)
   - Read(./auto_codabench/INSTRUCTION_FOR_USER.md)
   - Read(./README.md)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/**)
-  - Edit(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/**)
+  - Edit(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/**)
   - Glob(./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions/*)
-  - Glob(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/**)
+  - Glob(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/**)
   - Bash(git rev-parse:*)
   - Bash(git branch --show-current:*)
   - Bash(date:*)
   - Bash(mkdir -p ./experiments/bundle_creation_test/competitions/*:*)
   - Bash(cp -r ./auto_codabench/runs/*:*)
-  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*:*)
+  - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*:*)
   - Bash(ls ./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions:*)
   - Bash(ls ./auto_codabench/runs/*:*)
   - Bash(stat:*)
@@ -82,12 +82,12 @@ SHORT_SHA=$(git rev-parse --short=8 HEAD)
 UTC_TS=$(date -u +%Y%m%d_%H%M%S)
 RUN_ID="${SHORT_SHA}_${UTC_TS}"
 BRANCH=$(git branch --show-current)
-mkdir -p experiments/bundle_creation_test/competitions/<comp>/${RUN_ID}/{plan,bundle,validation,reformatted_submission,submission_run}
+mkdir -p experiments/bundle_creation_test/runs/<comp>/${RUN_ID}/{plan,bundle,validation,reformatted_submission,submission_run}
 ```
 
 (The run_id starts with a hex character so your write allowlist matches.)
 
-Write `experiments/bundle_creation_test/competitions/<comp>/<run_id>/manifest.json`:
+Write `experiments/bundle_creation_test/runs/<comp>/<run_id>/manifest.json`:
 
 ```json
 {
@@ -124,11 +124,11 @@ Prompt (substitute `<comp>` and `<run_id>` literally):
 > Run AutoCodabench Phase 1.
 >
 > input_dir: `./experiments/bundle_creation_test/competitions/<comp>/input/`
-> plan_dir:  `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/`
+> plan_dir:  `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/`
 >
-> Use `run_dir=./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/auto_codabench_run`
+> Use `run_dir=./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/auto_codabench_run`
 > when calling `autocodabench_open_run`. Write the final plan as
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/implementation_plan.md`.
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md`.
 > Your final message MUST be the JSON object specified in your skill body.
 
 When it returns, parse its JSON final message. Append a `steps` entry:
@@ -141,11 +141,11 @@ Prompt:
 
 > Run AutoCodabench Phase 2.
 >
-> plan_path:  `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/plan/implementation_plan.md`
+> plan_path:  `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md`
 > sample_data_dir: `./experiments/bundle_creation_test/competitions/<comp>/input/sample_data/` (read-only reference for dataset shape)
-> bundle_dir: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/`
+> bundle_dir: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/`
 >
-> Use `run_dir=./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/auto_codabench_run`
+> Use `run_dir=./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/auto_codabench_run`
 > for the MCP open_run call. Final message: the JSON object specified in
 > your skill body.
 
@@ -156,9 +156,9 @@ Stop on fail.
 Prompt:
 
 > Run `bundle_validator.py` against the bundle at
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/`
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/`
 > (you'll find the slug by listing `<run>/bundle/`). Write report to
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/validation/report.txt`.
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/validation/report.txt`.
 
 Stop on fail.
 
@@ -174,22 +174,22 @@ Prompt:
 > Reformat the ground-truth submission code under
 > `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/submission/`
 > to match the interface at
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/solutions/sample_code_submission/model.py`
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/solutions/sample_code_submission/model.py`
 > (or whatever the bundle's submission interface is — read the bundle).
-> Output to `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/reformatted_submission/<sub_N>/`.
+> Output to `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`.
 
 #### 5b. Spawn `submission-runner`
 
 Prompt:
 
 > Execute the reformatted submission at
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/reformatted_submission/<sub_N>/`
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
 > through the scoring program in
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/scoring_program/`.
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/scoring_program/`.
 > Compare against
 > `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/expected_result.json`.
 > Write artifacts to
-> `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/submission_run/<sub_N>/`.
+> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/`.
 
 Aggregate into a single `steps` entry:
 
@@ -244,5 +244,5 @@ Experiment: <comp> · run_id: <run_id> · status: pass | fail_at_<step>
 | sub_2      | pass   | actual 0.303, expected 0.303, Δ 0.000 (within 0.001 tolerance)       |
 | ...        | ...    |                                                                      |
 
-run dir: ./experiments/bundle_creation_test/competitions/<comp>/<run_id>/
+run dir: ./experiments/bundle_creation_test/runs/<comp>/<run_id>/
 ```

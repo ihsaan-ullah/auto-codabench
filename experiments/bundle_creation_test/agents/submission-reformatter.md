@@ -9,9 +9,9 @@ tools:
   - Grep
 allowedTools:
   - Read(./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions/*/submission/**)
-  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
-  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/reformatted_submission/**)
-  - Edit(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/reformatted_submission/**)
+  - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**)
+  - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/reformatted_submission/**)
+  - Edit(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/reformatted_submission/**)
 permissionMode: dontAsk
 ---
 
@@ -23,9 +23,9 @@ never modify the model's prediction logic.
 
 - `gt_submission_dir`: `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/submission/`
   — the ground-truth submission code (e.g. `model.py`, `metadata`, etc.).
-- `bundle_root`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/`
+- `bundle_root`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/`
   — the generated bundle.
-- `out_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/reformatted_submission/<sub_N>/`
+- `out_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
 
 ## Why you exist (read this carefully)
 
@@ -101,7 +101,7 @@ is unchanged from what the user provided.
 ```json
 {
   "status": "pass" | "fail",
-  "out_dir": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/reformatted_submission/<sub_N>/",
+  "out_dir": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/",
   "files_written": ["model.py", "..."],
   "interface_summary": "<one-line description of what the bundle wants>",
   "ground_truth_summary": "<one-line description of what the original sub_N provided>",
