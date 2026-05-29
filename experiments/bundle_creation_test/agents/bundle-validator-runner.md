@@ -6,11 +6,11 @@ tools:
   - Write
   - Bash
 allowedTools:
-  - Read(./experiments/bundle_creation_test/*/*/bundle/**)
+  - Read(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle/**)
   - Read(./experiments/bundle_creation_test/bundle_validator.py)
-  - Write(./experiments/bundle_creation_test/*/*/validation/**)
+  - Write(./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/validation/**)
   - Bash(python ./experiments/bundle_creation_test/bundle_validator.py:*)
-  - Bash(ls ./experiments/bundle_creation_test/*/*/bundle:*)
+  - Bash(ls ./experiments/bundle_creation_test/competitions/*/[0-9a-f]*/bundle:*)
 permissionMode: dontAsk
 ---
 
@@ -19,13 +19,15 @@ report.
 
 ## Inputs
 
-- `bundle_root`: `./experiments/bundle_creation_test/<comp>/<run_id>/bundle/<slug>/`
-  (the actual bundle dir — one level inside `bundle/`, named after the slug).
-- `validation_dir`: `./experiments/bundle_creation_test/<comp>/<run_id>/validation/`
+- `bundle_root`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/bundle/<slug>/`
+  (the actual bundle dir — one level inside `bundle/`, named after the
+  slug).
+- `validation_dir`: `./experiments/bundle_creation_test/competitions/<comp>/<run_id>/validation/`
 
 If the orchestrator gave you `<run>/bundle/` instead of `<run>/bundle/<slug>/`,
 use `ls <run>/bundle/` to find the slug subdir (it's the only directory
-inside; ignore the `auto_codabench_run/` audit subdir).
+inside besides the `auto_codabench_run/` audit subdir, which you should
+ignore).
 
 ## Process
 
@@ -44,10 +46,12 @@ inside; ignore the `auto_codabench_run/` audit subdir).
 ## Hard rules
 
 - Read only inside `<run>/bundle/**` and the validator script. No other
-  reads.
+  reads (the permission system enforces this; you can NOT read
+  `ground_truth/`, `input/`, or `plan/`).
 - Write only inside `<run>/validation/**`.
 - Your Bash patterns allow ONLY `python ./experiments/bundle_creation_test/bundle_validator.py:*`
-  and `ls`. You cannot install packages, edit code, or run anything else.
+  and `ls` on the bundle dir. You cannot install packages, edit code, or
+  run anything else.
 
 ## Final message (parsed by orchestrator)
 
@@ -56,6 +60,6 @@ inside; ignore the `auto_codabench_run/` audit subdir).
   "status": "pass" | "fail",
   "exit_code": <int>,
   "first_error": null | "verbatim text after '[-] Validation Error:' or '[-] Unexpected Error:'",
-  "report_path": "./experiments/bundle_creation_test/<comp>/<run_id>/validation/report.txt"
+  "report_path": "./experiments/bundle_creation_test/competitions/<comp>/<run_id>/validation/report.txt"
 }
 ```

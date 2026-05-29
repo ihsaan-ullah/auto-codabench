@@ -6,7 +6,7 @@ the resulting score matches a pre-recorded ground truth (within tolerance).
 
 This is a **wrapper** around `auto_codabench/`. We do not modify the
 package or the skills here — we orchestrate Claude subagents that use them,
-copy logs out into the experiment dir, and add a final
+co-locate logs in the experiment dir, and add a final
 "does-a-known-submission-score-correctly" gate that doesn't exist in the
 production web flow.
 
@@ -16,73 +16,181 @@ or define their own.
 
 ---
 
-## Five-step pipeline (per experiment run)
-
-| # | Step | Agent | Reads | Writes |
-|---|------|-------|-------|--------|
-| 1 | Input | _(orchestrator)_ | `<comp>/input/` exists check | manifest precondition |
-| 2 | Plan | `bundle-planner` | `<comp>/input/**` | `<run>/plan/implementation_plan.md` |
-| 3 | Implement | `bundle-implementer` | `<run>/plan/implementation_plan.md` only | `<run>/bundle/<slug>/...` + `.zip` |
-| 4 | Validate | `bundle-validator-runner` | `<run>/bundle/**` + `bundle_validator.py` | `<run>/validation/report.txt` |
-| 5a | Reformat submission | `submission-reformatter` | `<comp>/sample_submission.py` + bundle's interface contract | `<run>/reformatted_submission/submission.py` |
-| 5b | Run + compare | `submission-runner` | reformatted submission + bundle + `<comp>/expected_result.json` | `<run>/submission_run/score.json` + tolerance check |
-
-Every step is a **fresh subagent** spawned by `bundle-experiment-runner` via
-the Task tool. No two subagents share chat context, and each one is locked
-down by `tools` / `allowedTools` / `permissionMode: dontAsk` to **only** see
-the slice of disk relevant to its job. The motivating constraint:
-
-- **Planner and implementer must not see the test submission** (would let
-  them overfit the bundle to it).
-- **Reformatter must not see the plan or planning chat** (would let it
-  smuggle ground-truth labels into the submission).
-- **Runner must not see the plan** for the same reason.
-
-The orchestrator is the only agent with broad filesystem access inside
-`experiments/bundle_creation_test/`; it strictly passes file paths to
-subagents and never reads their forbidden inputs itself.
-
----
-
 ## Layout
 
 ```
 experiments/bundle_creation_test/
-├── README.md                        # this file
-├── bundle_validator.py              # validator script (vendored, used by step 4)
-├── setup.sh                         # one-time: symlinks agents into .claude/agents/
-├── agents/                          # source of truth for the 6 subagent definitions
+├── README.md                            # this file
+├── bundle_validator.py                  # validator script (vendored, used by step 4)
+├── setup.sh                             # one-time: symlinks agents into .claude/agents/
+├── agents/                              # source of truth for the 6 subagent definitions
 │   ├── bundle-experiment-runner.md
 │   ├── bundle-planner.md
 │   ├── bundle-implementer.md
 │   ├── bundle-validator-runner.md
 │   ├── submission-reformatter.md
 │   └── submission-runner.md
-└── <competition_sample_name>/       # one folder per competition you're testing
-    ├── input/                       # paper/proposal PDF + supplementary text
-    ├── sample_submission.py         # ground-truth submission (any working version)
-    ├── expected_result.json         # {"score": float, "tolerance": float, "metric": "..."}
-    └── <branch_short_sha>_<utc_ts>/ # one folder per experiment RUN, created by the orchestrator
-        ├── manifest.json            # step-by-step result log
-        ├── plan/                    # bundle-planner output
-        │   ├── implementation_plan.md
-        │   └── auto_codabench_run/  # full MCP audit trail (events.jsonl, tool_calls/, specs/)
-        ├── bundle/                  # bundle-implementer output
-        │   └── <slug>/
-        │       ├── competition.yaml
-        │       ├── scoring_program/
-        │       ├── solutions/sample_code_submission/model.py   # ← interface contract for step 5a
-        │       └── ... (everything Codabench needs)
-        ├── validation/
-        │   └── report.txt           # validator stdout + exit code
-        ├── reformatted_submission/
-        │   └── submission.py        # ground-truth logic rewrapped to bundle's interface
-        └── submission_run/
-            ├── sandbox/             # ephemeral workspace for the score program
-            ├── stdout.txt
-            ├── stderr.txt
-            └── score.json           # parsed scores + delta-vs-expected
+└── competitions/                        # one subdir per competition sample
+    └── <competition_sample_name>/       # e.g. style-trans-fair/
+        ├── input/                       # accessible to planner; sample_data/ also to implementer + runner
+        │   ├── report.pdf               # the proposal paper — planner reads only
+        │   └── sample_data/             # public dataset — planner / implementer / runner can read
+        │       ├── content/
+        │       ├── styles/
+        │       ├── stylized/
+        │       ├── tasks/
+        │       └── info.json
+        ├── ground_truth/                # OFF-LIMITS to planner & implementer
+        │   ├── bundle/                  # GOLDEN reference bundle — OFF-LIMITS to ALL agents
+        │   │   ├── competition.yaml     #   (lives here so a human can verify the agents'
+        │   │   ├── scoring_program/     #    output against the canonical Codabench bundle)
+        │   │   ├── ingestion_program/
+        │   │   ├── reference_data/
+        │   │   └── ...
+        │   └── sample_submissions/      # ground-truth submissions to score the generated bundle
+        │       └── sub_<N>/             # one folder per ground-truth submission
+        │           ├── submission/      # the actual submission code — reformatter reads only
+        │           │   ├── model.py
+        │           │   └── ...
+        │           └── expected_result.json   # the score this submission produced on the
+        │                                      # real Codabench — runner reads only
+        └── <branch_short_sha>_<utc_ts>/ # one folder per experiment RUN, created by orchestrator
+            ├── manifest.json
+            ├── plan/                    # bundle-planner output
+            │   ├── implementation_plan.md
+            │   └── auto_codabench_run/  # full MCP audit trail
+            ├── bundle/
+            │   └── <slug>/
+            │       ├── competition.yaml
+            │       ├── scoring_program/
+            │       ├── solutions/sample_code_submission/model.py   # interface contract for reformatter
+            │       └── ...
+            ├── validation/
+            │   └── report.txt
+            ├── reformatted_submission/
+            │   └── sub_<N>/             # one subdir per ground-truth submission
+            │       └── submission.py
+            └── submission_run/
+                └── sub_<N>/             # one subdir per ground-truth submission
+                    ├── sandbox/         # ephemeral execution workspace
+                    ├── stdout.txt
+                    ├── stderr.txt
+                    └── score.json       # parsed scores + delta-vs-expected
 ```
+
+---
+
+## Five-step pipeline (per experiment run)
+
+| # | Step | Agent | Reads | Writes |
+|---|------|-------|-------|--------|
+| 1 | Input | _(orchestrator)_ | `<comp>/input/` exists check | manifest precondition |
+| 2 | Plan | `bundle-planner` | `<comp>/input/**` (incl. sample_data) | `<run>/plan/implementation_plan.md` |
+| 3 | Implement | `bundle-implementer` | `<run>/plan/implementation_plan.md` + `<comp>/input/sample_data/**` only | `<run>/bundle/<slug>/...` + `.zip` |
+| 4 | Validate | `bundle-validator-runner` | `<run>/bundle/**` + `bundle_validator.py` | `<run>/validation/report.txt` |
+| 5 | Reformat + run per submission | `submission-reformatter` then `submission-runner`, **looped over every `<comp>/ground_truth/sample_submissions/sub_*/`** | reformatter: `sub_N/submission/**` + bundle interface; runner: reformatted submission + bundle + `sub_N/expected_result.json` | `<run>/reformatted_submission/sub_N/`, `<run>/submission_run/sub_N/score.json` |
+
+Every step is a **fresh subagent** spawned by `bundle-experiment-runner` via
+the Task tool. No two subagents share chat context, and each one is locked
+down by `tools` / `allowedTools` / `permissionMode: dontAsk` so it can
+**only** see the slice of disk relevant to its job. The motivating constraint:
+
+- **Planner can read the paper AND sample_data**, but cannot read any
+  ground-truth submission or its expected score (would let it overfit the
+  plan to the test).
+- **Implementer reads only `implementation_plan.md` and `sample_data/`** —
+  no paper, no test submission. This forces the bundle to be built from
+  the locked plan, not from re-reading the user's intent.
+- **Reformatter reads only the bundle's interface and the ground-truth
+  submission's code**. It has no view into the plan, the paper, or the
+  expected score — so it cannot smuggle answers into the submission.
+- **Runner reads the reformatted submission, the bundle, and the
+  expected_result.json** — but not the ground-truth submission's source
+  code (it's already been adapted by the reformatter).
+- **The golden bundle under `ground_truth/bundle/` is off-limits to
+  every agent** — it exists for a human reviewer to compare the agents'
+  output against a known-good reference.
+
+The orchestrator is the only agent with broad write access inside
+`<run>/`; it strictly passes file paths to subagents and never reads any
+forbidden inputs itself.
+
+---
+
+## Permission model (TL;DR)
+
+| Agent | Tools | Read | Write |
+|---|---|---|---|
+| `bundle-experiment-runner` | Read, Write, Edit, Bash (narrow), Glob, Grep, Task | own `<run>/**` + `ground_truth/sample_submissions/*/expected_result.json` + `auto_codabench/runs/**` (for log fallback) | `<run>/**` only (run-id has hex prefix; `input/` and `ground_truth/` excluded by glob) |
+| `bundle-planner` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench + alex-mcp, WebFetch, WebSearch | `<comp>/input/**` (paper + sample_data), `auto_codabench/skills/**`, own `plan/**` | own `plan/**` only |
+| `bundle-implementer` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench | `<run>/plan/implementation_plan.md` **only** from plan side; `<comp>/input/sample_data/**` (no paper); `auto_codabench/skills/**`; own `bundle/**` | own `bundle/**` only |
+| `bundle-validator-runner` | Read, Write, Bash (validator only) | own `bundle/**`, the validator script | own `validation/**` only |
+| `submission-reformatter` | Read, Write, Edit, Glob, Grep | `<comp>/ground_truth/sample_submissions/*/submission/**`, own `bundle/**` | own `reformatted_submission/sub_*/` only |
+| `submission-runner` | Read, Write, Bash (narrow) | own `bundle/**`, own `reformatted_submission/**`, `<comp>/ground_truth/sample_submissions/*/expected_result.json`, `<comp>/input/sample_data/**` | own `submission_run/sub_*/` only |
+
+`permissionMode: dontAsk` in every agent: anything outside the allowlist is
+a **hard deny**, not a permission prompt — important for unattended runs.
+
+The implementer's pattern `<comp>/input/sample_data/**` does **not** allow
+reading `input/report.pdf` (different prefix), so the paper stays
+out of Phase 2 by construction, not just by honor system.
+
+Known limitation: agents with `Bash` access can in principle read any file
+their shell can reach. We mitigate by:
+- Giving Bash only to the three agents that genuinely need it
+  (orchestrator, validator-runner, submission-runner).
+- Scoping their Bash patterns narrowly (`Bash(python:*)`,
+  `Bash(python ./experiments/bundle_creation_test/bundle_validator.py:*)`,
+  `Bash(mkdir:*)`, etc.).
+- The planner, implementer, and reformatter have **no Bash at all** —
+  they operate purely through Read/Write/Edit and (for the planner +
+  implementer) MCP tools.
+
+---
+
+## Manifest schema
+
+```json
+{
+  "competition_sample_name": "style-trans-fair",
+  "run_id": "bf1c27b6_20260530_142233",
+  "branch": "experiment_test-bundle-creation",
+  "started_at": "2026-05-30T14:22:33Z",
+  "finished_at": "2026-05-30T14:38:01Z",
+  "expected_results": {
+    "sub_1": { "metric": "geometric_mean_accuracy_metric", "score": 0.0, "tolerance": 0.001 }
+  },
+  "steps": [
+    { "name": "plan",      "status": "pass", "agent_summary": "...", "artifacts": ["plan/implementation_plan.md"] },
+    { "name": "implement", "status": "pass", "slug": "style-trans-fair", "artifacts": ["bundle/.../<slug>.zip"] },
+    { "name": "validate",  "status": "pass", "exit_code": 0, "artifacts": ["validation/report.txt"] },
+    {
+      "name": "reformat_and_run", "status": "pass",
+      "submissions": [
+        {
+          "sub": "sub_1",
+          "reformat_status": "pass",
+          "interface_summary": "class model: def fit(...), def predict(...)",
+          "run_status": "pass",
+          "score": 0.0, "expected": 0.0, "delta": 0.0, "within_tolerance": true,
+          "artifacts": [
+            "reformatted_submission/sub_1/submission.py",
+            "submission_run/sub_1/score.json"
+          ]
+        }
+      ]
+    }
+  ],
+  "overall_status": "pass"
+}
+```
+
+On any failure, `overall_status` becomes `fail_at_<step_name>` (or
+`fail_at_reformat_and_run/sub_N` for a specific submission failure inside
+step 5) and the failing entry includes the subagent's verbatim error
+message. Step 5 fails as a whole if **any** submission fails — but the
+orchestrator runs all submissions before deciding, so the manifest shows
+per-sub results even on failure.
 
 ---
 
@@ -94,7 +202,7 @@ bash experiments/bundle_creation_test/setup.sh
 
 This creates relative symlinks `.claude/agents/<name>.md →
 ../../experiments/bundle_creation_test/agents/<name>.md` so Claude Code
-picks them up under their standard discovery path. It also makes sure
+picks them up under its standard discovery path. It also makes sure
 `.claude/skills/autocodabench-plan` is symlinked to
 `auto_codabench/skills/plan/` (the skill name and dir name differ).
 
@@ -105,18 +213,30 @@ picks them up under their standard discovery path. It also makes sure
 ## Adding a new competition sample
 
 ```bash
-mkdir -p experiments/bundle_creation_test/my-competition/input
-# put your paper / proposal PDF + any supporting text under input/
-cp /path/to/my_solution.py experiments/bundle_creation_test/my-competition/sample_submission.py
-cat > experiments/bundle_creation_test/my-competition/expected_result.json <<'JSON'
-{ "score": 0.873, "tolerance": 0.01, "metric": "accuracy" }
+COMP=my-competition
+mkdir -p experiments/bundle_creation_test/competitions/$COMP/{input,ground_truth/sample_submissions/sub_1/submission,ground_truth/bundle}
+# put your paper / proposal PDF under input/
+# put any public dataset under input/sample_data/
+# put the ground-truth Codabench bundle (if you have one) under ground_truth/bundle/  (off-limits to all agents — only for human comparison)
+# put sub_1's working submission code under ground_truth/sample_submissions/sub_1/submission/
+cat > experiments/bundle_creation_test/competitions/$COMP/ground_truth/sample_submissions/sub_1/expected_result.json <<'JSON'
+{
+  "metric": "<metric_name_the_bundle_uses>",
+  "score": <expected_float>,
+  "tolerance": 0.001,
+  "details": { "source": "where this expected value came from" }
+}
 JSON
 ```
 
-`expected_result.json` is **optional but recommended**. Without it,
-step 5b only checks "did the submission execute and produce a valid
-scores.json"; with it, the run is marked `pass` only if
-`|actual - expected| ≤ tolerance`.
+You can have multiple sub_N (sub_1, sub_2, sub_3, …) under
+`sample_submissions/`. The orchestrator iterates all of them in step 5
+and the manifest records a per-sub pass/fail.
+
+`expected_result.json` is **required** (without it the runner can't decide
+pass/fail). If the submission is non-deterministic, set a wider
+`tolerance` to allow for that. The `details` block is free-form — use it
+to record provenance: the raw Codabench stdout, predictions array, etc.
 
 ---
 
@@ -124,95 +244,28 @@ scores.json"; with it, the run is marked `pass` only if
 
 From a fresh Claude Code session in the repo root:
 
-> Run the bundle-creation experiment on `my-competition`.
+> Run the bundle-creation experiment on `style-trans-fair`.
 
 The main session will delegate to the `bundle-experiment-runner` agent (or
-you can invoke it explicitly with `/agents` → run-as → bundle-experiment-runner).
-The orchestrator:
+you can invoke it explicitly via the Task tool with
+`subagent_type=bundle-experiment-runner`). The orchestrator:
 
 1. Computes a `run_id` = `<short_sha>_<utc_ts>`.
-2. Creates `experiments/bundle_creation_test/my-competition/<run_id>/` and
-   writes an initial `manifest.json`.
-3. Spawns the 5 subagents in order, passing **paths only** — never content.
+2. Creates `experiments/bundle_creation_test/competitions/<comp>/<run_id>/`
+   and writes an initial `manifest.json`.
+3. Spawns the 5 step-agents in order. For step 5 it loops over every
+   `<comp>/ground_truth/sample_submissions/sub_*/`, spawning a reformatter
+   + runner pair per sub.
 4. After each subagent returns, parses its JSON final message into
    `manifest.steps[]` and updates `overall_status`.
-5. On the first failure, records the failed step and stops.
-6. On success, the experiment dir contains everything reviewable
-   independently: plan, bundle, validator report, reformatted submission,
-   and the score with its delta-from-expected.
+5. On the first failure in steps 1–4, records and stops. In step 5,
+   continues through all subs but marks `overall_status = "fail_at_..."`
+   if any sub fails.
+6. Prints a one-screen summary table.
 
-You can have multiple experiment runs per competition sample (one per
-`<run_id>` subdir) — they're keyed by branch SHA + timestamp so two runs
-on the same commit are still distinguishable by time.
-
----
-
-## Manifest schema
-
-```json
-{
-  "competition_sample_name": "my-competition",
-  "run_id": "abc1234_20260530_142233",
-  "branch": "experiment_test-bundle-creation",
-  "started_at": "2026-05-30T14:22:33Z",
-  "finished_at": "2026-05-30T14:38:01Z",
-  "expected_result": { "score": 0.873, "tolerance": 0.01, "metric": "accuracy" },
-  "steps": [
-    {
-      "name": "plan", "status": "pass",
-      "agent_summary": "...",
-      "artifacts": ["plan/implementation_plan.md"]
-    },
-    {
-      "name": "implement", "status": "pass",
-      "artifacts": ["bundle/<slug>/", "bundle/<slug>/<slug>.zip"]
-    },
-    {
-      "name": "validate", "status": "pass",
-      "exit_code": 0,
-      "artifacts": ["validation/report.txt"]
-    },
-    {
-      "name": "reformat", "status": "pass",
-      "interface_summary": "class Model: def fit(X, y) / def predict(X) → ndarray",
-      "artifacts": ["reformatted_submission/submission.py"]
-    },
-    {
-      "name": "run", "status": "pass",
-      "score": 0.871, "expected": 0.873, "delta": 0.002,
-      "within_tolerance": true,
-      "artifacts": ["submission_run/score.json", "submission_run/stdout.txt"]
-    }
-  ],
-  "overall_status": "pass"
-}
-```
-
-On failure, `overall_status` becomes `fail_at_<step_name>` and the
-failing step's entry includes the subagent's verbatim error message.
-
----
-
-## Permission model (TL;DR)
-
-| Agent | Tools | What it can read | What it can write |
-|---|---|---|---|
-| `bundle-experiment-runner` | Read, Write, Edit, Bash (narrow), Task | All of `experiments/bundle_creation_test/**`, `auto_codabench/runs/**` | `<run>/**` only |
-| `bundle-planner` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench + alex-mcp, WebFetch, WebSearch | `<comp>/input/**`, `auto_codabench/skills/**`, the current run's `plan/**` | `<run>/plan/**` only |
-| `bundle-implementer` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench | `<run>/plan/implementation_plan.md` (the **only** plan-side file), `auto_codabench/skills/**`, the current run's `bundle/**` | `<run>/bundle/**` only |
-| `bundle-validator-runner` | Read, Write, Bash (`python ./experiments/bundle_creation_test/bundle_validator.py:*`) | `<run>/bundle/**`, the validator script | `<run>/validation/**` only |
-| `submission-reformatter` | Read, Write, Edit, Glob, Grep | `<comp>/sample_submission.py`, `<run>/bundle/**` | `<run>/reformatted_submission/**` only |
-| `submission-runner` | Read, Write, Bash (narrow) | `<run>/bundle/**`, `<run>/reformatted_submission/**`, `<comp>/expected_result.json` | `<run>/submission_run/**` only |
-
-`permissionMode: dontAsk` in every agent: anything outside the allowlist is
-a hard deny, **not** a permission prompt — important for unattended runs.
-
-Known limitation: agents with `Bash` access can in principle read any file
-their shell can reach. We mitigate by giving Bash only to the two agents
-that genuinely need it (validator-runner, submission-runner) and scoping
-their Bash patterns narrowly (`Bash(python:*)`, `Bash(python ./experiments/bundle_creation_test/bundle_validator.py:*)`). The
-planner, implementer, and reformatter have **no Bash at all** — they
-operate purely through Read/Write/Edit and MCP tools.
+You can have multiple runs per competition sample (one per `<run_id>`
+subdir) — they're keyed by branch SHA + timestamp so two runs on the
+same commit are still distinguishable.
 
 ---
 
