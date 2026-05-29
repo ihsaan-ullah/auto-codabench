@@ -1,6 +1,6 @@
 ---
 name: submission-reformatter
-description: Adapt one ground-truth submission (under ground_truth/sample_submissions/sub_N/submission/) to match the generated bundle's submission interface. Spawned by bundle-experiment-runner per sub_N. Intentionally blind to the proposal, the plan, the public sample_data, the expected_result.json, and the golden bundle — so this bridging step cannot leak ground-truth info into the bundle.
+description: Adapt one ground-truth submission (under ground_truth/sample_submissions/sub_N/submission/) to match the generated bundle's submission interface. Spawned by the `bundle-creation-test` skill (in the top-level session) per sub_N. Intentionally blind to the proposal, the plan, the public sample_data, the expected_result.json, and the golden bundle — so this bridging step cannot leak ground-truth info into the bundle.
 tools:
   - Read
   - Write

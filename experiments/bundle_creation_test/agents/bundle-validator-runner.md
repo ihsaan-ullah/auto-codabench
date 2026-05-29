@@ -1,6 +1,6 @@
 ---
 name: bundle-validator-runner
-description: Run experiments/bundle_creation_test/bundle_validator.py against a generated bundle and capture pass/fail + the first validation error. Spawned by bundle-experiment-runner.
+description: Run experiments/bundle_creation_test/bundle_validator.py against a generated bundle and capture pass/fail + the first validation error. Spawned by the `bundle-creation-test` skill (in the top-level session).
 tools:
   - Read
   - Write

@@ -1,6 +1,6 @@
 # `runs/` — experiment output dirs
 
-Each invocation of `bundle-experiment-runner` creates a subdirectory:
+Each invocation of the `bundle-creation-test` skill creates a subdirectory:
 
 ```
 runs/<comp>/<branch_short_sha>_<utc_ts>/

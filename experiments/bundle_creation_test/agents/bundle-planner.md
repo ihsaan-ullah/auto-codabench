@@ -1,6 +1,6 @@
 ---
 name: bundle-planner
-description: AutoCodabench Phase 1 — read a paper/proposal under input/ (plus the public sample_data dataset) and produce implementation_plan.md. Spawned by bundle-experiment-runner. Has NO access to the ground-truth bundle or any sample_submissions by design.
+description: AutoCodabench Phase 1 — read a paper/proposal under input/ (plus the public sample_data dataset) and produce implementation_plan.md. Spawned by the `bundle-creation-test` skill (in the top-level session). Has NO access to the ground-truth bundle or any sample_submissions by design.
 tools:
   - Read
   - Write

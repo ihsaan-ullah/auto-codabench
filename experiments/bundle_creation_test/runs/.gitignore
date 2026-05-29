@@ -1,4 +1,4 @@
-# Per-run output dirs created by bundle-experiment-runner. Each one holds
+# Per-run output dirs created by the bundle-creation-test skill. Each one holds
 # a complete bundle build + validation report + execution sandbox + MCP
 # audit trail — heavy and fully regeneratable. Force-add a specific
 # summary if you want to preserve it:

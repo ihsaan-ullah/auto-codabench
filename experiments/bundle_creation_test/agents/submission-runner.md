@@ -1,6 +1,6 @@
 ---
 name: submission-runner
-description: Execute one reformatted submission against the bundle's scoring program, capture the score, and compare against the ground-truth's expected_result.json within tolerance. Spawned by bundle-experiment-runner per sub_N.
+description: Execute one reformatted submission against the bundle's scoring program, capture the score, and compare against the ground-truth's expected_result.json within tolerance. Spawned by the `bundle-creation-test` skill (in the top-level session) per sub_N.
 tools:
   - Read
   - Write

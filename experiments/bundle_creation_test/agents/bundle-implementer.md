@@ -1,6 +1,6 @@
 ---
 name: bundle-implementer
-description: AutoCodabench Phase 2 — read implementation_plan.md (the only plan-side file) plus the public sample_data, and produce a complete, validated Codabench bundle. Spawned by bundle-experiment-runner. Blind to the proposal paper and to every ground-truth artifact by design.
+description: AutoCodabench Phase 2 — read implementation_plan.md (the only plan-side file) plus the public sample_data, and produce a complete, validated Codabench bundle. Spawned by the `bundle-creation-test` skill (in the top-level session). Blind to the proposal paper and to every ground-truth artifact by design.
 tools:
   - Read
   - Write
