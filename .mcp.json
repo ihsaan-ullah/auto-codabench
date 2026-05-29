@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "autocodabench": {
+      "type": "stdio",
+      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
+      "args": [
+        "-m",
+        "auto_codabench.mcp_server.server"
+      ],
+      "env": {}
+    },
+    "alex-mcp": {
+      "type": "stdio",
+      "command": "/Users/ktgiahieu/miniconda3/envs/semantic-scholar/bin/python",
+      "args": [
+        "-m",
+        "alex_mcp.server"
+      ],
+      "env": {
+        "OPENALEX_MAILTO": "ktgiahieu@gmail.com"
+      }
+    }
+  }
+}

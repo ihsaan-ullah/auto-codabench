@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autocodabench"
+version = "0.1.0"
+description = "MCP server for authoring Codabench competition bundles entirely offline."
+readme = "auto_codabench/README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Khuong T.G. Hieu" }]
+license = "MIT"
+dependencies = [
+    # 2.14.7 specifically — looser constraints like `>=2.0.0,<3.0.0` let
+    # pip's solver pick a buggy 2.x release on HF where the OAuth-proxy
+    # submodule imports a name that doesn't exist in `auth.auth`.
+    "fastmcp==2.14.7",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.3.1", "pytest-asyncio>=0.21.0"]
+
+[project.scripts]
+autocodabench-mcp-server = "auto_codabench.mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["auto_codabench"]

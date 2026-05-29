@@ -1,0 +1,823 @@
+/* AutoCodabench: reorder the LOGIN form so Password appears above
+   the optional Your-name field. Scope: anything matching is also
+   `:not(.ac-pub-form)` so this rule never bleeds into the in-workspace
+   Codabench publish form (which uses the natural username-above-password
+   ordering people expect outside of a login context).
+
+   Final order on the login form:
+     [Password]          <- order 1
+     [Your name (opt.)]  <- order 2
+     [Sign In]           <- order 3
+
+   Uses :has() (CSS Selectors L4; supported in all evergreen browsers
+   2023+). If the browser doesn't support :has(), the form falls back
+   to DOM order (name first, then password) — still functional.
+*/
+
+form:has(input[type="password"]):not(.ac-pub-form) {
+    display: flex;
+    flex-direction: column;
+}
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[name="email"]),
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="email"]),
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="text"][autocomplete="username"]) {
+    order: 2;
+}
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(input[type="password"]) {
+    order: 1;
+}
+form:has(input[type="password"]):not(.ac-pub-form) > button,
+form:has(input[type="password"]):not(.ac-pub-form) > *:has(> button[type="submit"]) {
+    order: 3;
+}
+
+
+/* ============================================================
+ * Chat customizations — injected by web/public/chat.js.
+ *
+ * (1) Pulsing dots after "Running <operation>" step labels.
+ * (2) Inline help inside expanded tool-step panels.
+ *
+ * Both rely on data-attributes that chat.js sets idempotently
+ * on each MutationObserver tick.
+ * ============================================================ */
+
+/* (1) ----- pulsing dots ---------------------------------- */
+
+.ac-dots {
+    display: inline-block;
+    margin-left: 4px;
+    letter-spacing: 1px;
+    /* Keep the dots on the baseline; don't push the chip height. */
+    line-height: 1;
+}
+.ac-dots > span {
+    display: inline-block;
+    opacity: 0.25;
+    animation: ac-dot-pulse 1.2s ease-in-out infinite;
+}
+.ac-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.ac-dots > span:nth-child(3) { animation-delay: 0.30s; }
+
+@keyframes ac-dot-pulse {
+    0%, 60%, 100% { opacity: 0.25; }
+    30%           { opacity: 1;    }
+}
+
+/* (2) ----- inline help block inside expanded step panel ----
+ *
+ * Readability: explicit CanvasText / Canvas tokens so the box never
+ * becomes white-on-white in light mode or black-on-black in dark
+ * mode (the previous `color: inherit` was the bug). Both tokens are
+ * the user's OS-level chrome colors — they adapt to the system
+ * theme automatically.
+ */
+
+.ac-help-inline {
+    margin: 12px 4px 4px 4px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    background: rgba(127, 127, 127, 0.08);
+    color: CanvasText;
+    font-size: 12.5px;
+    line-height: 1.5;
+    /* Tighter on phones; otherwise the chip panel widens too much. */
+    max-width: 64ch;
+}
+.ac-help-inline .ac-help-title {
+    font-weight: 600;
+    font-size: 13.5px;
+    margin-bottom: 6px;
+    color: CanvasText;
+}
+.ac-help-inline p {
+    margin: 6px 0;
+    color: CanvasText;
+}
+.ac-help-inline code {
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(127, 127, 127, 0.18);
+    color: CanvasText;
+}
+.ac-help-inline b { color: CanvasText; }
+
+
+/* (3) ----- init banner + input lock during session startup -----
+ *
+ * chat.js injects `#ac-init-banner` the moment the chat page is
+ * rendered (before on_chat_start has even fired server-side) and
+ * keeps it up until READY_PHRASE appears. While the banner is up,
+ * the textarea also gets `.ac-input-locked`. Both go away together
+ * once the agent's greeting lands.
+ */
+
+#ac-init-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 99999;            /* above the login overlay + chat content */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
+    /* Slide-down on first appearance so it doesn't feel jarring. */
+    animation: ac-banner-in 0.25s ease-out;
+}
+#ac-init-banner span:not(.ac-init-spinner) {
+    max-width: 70ch;
+}
+#ac-init-banner b {
+    font-weight: 600;
+}
+
+.ac-init-spinner {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ac-spin 0.9s linear infinite;
+}
+@keyframes ac-spin   { to { transform: rotate(360deg); } }
+@keyframes ac-banner-in {
+    from { transform: translateY(-100%); opacity: 0; }
+    to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* The locked textarea — greyed + progress cursor. */
+textarea.ac-input-locked {
+    opacity: 0.55;
+    cursor: progress;
+    background: rgba(127, 127, 127, 0.10);
+}
+textarea.ac-input-locked::placeholder {
+    font-style: italic;
+}
+
+
+/* ============================================================
+ * Phase-switch action buttons.
+ *
+ * We can't target our cl.Action buttons by a stable class (Chainlit
+ * doesn't expose one), so we match by visible label text — the strings
+ * are fixed server-side in app.py's _on_switch_to_impl / etc. handlers.
+ * `:has()` is supported in every evergreen browser as of 2023.
+ *
+ * Three buttons styled:
+ *   - "START IMPLEMENTATION (irreversible)"  — big, orange/red, pulses.
+ *   - "YES — switch to IMPLEMENTATION"        — large, red, no pulse.
+ *   - "Cancel — keep planning"                — large, calm grey.
+ * ============================================================ */
+
+button:has(span:is(:contains)),
+button[aria-label*="START IMPLEMENTATION" i],
+button:has(*:not(script):not(style)) {
+    /* The :has(:contains) selector isn't standard, so we fall through
+       and rely on the `text starts with` JS tagger in chat.js — see
+       below. The selector above is a no-op safety net for browsers
+       that try to parse it; the real styling targets data attributes. */
+}
+
+/* Tagged by chat.js: a Chainlit action button whose label starts with
+ * "🛠 START IMPLEMENTATION". Pulsing border to drag the eye. */
+button[data-ac-impl-button="primary"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    padding: 14px 28px !important;
+    margin: 12px 0 !important;
+    font-size: 17px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.3px;
+    color: #fff !important;
+    background: linear-gradient(90deg, #d97706 0%, #dc2626 100%) !important;
+    border: 2px solid #fff !important;
+    border-radius: 10px !important;
+    box-shadow:
+        0 0 0 0 rgba(220, 38, 38, 0.6),
+        0 4px 18px rgba(220, 38, 38, 0.35) !important;
+    cursor: pointer !important;
+    animation: ac-pulse-cta 1.6s ease-in-out infinite;
+}
+button[data-ac-impl-button="primary"]:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+}
+@keyframes ac-pulse-cta {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6),
+                          0 4px 18px rgba(220, 38, 38, 0.35); }
+    50%      { box-shadow: 0 0 0 12px rgba(220, 38, 38, 0.0),
+                          0 6px 22px rgba(220, 38, 38, 0.45); }
+}
+
+/* The final-confirm "YES" button — same loud styling, no pulse (user
+ * has already seen the pulse; we want them deliberate now). */
+button[data-ac-impl-button="confirm"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 12px 26px !important;
+    margin: 10px 8px 10px 0 !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    color: #fff !important;
+    background: #dc2626 !important;
+    border: 2px solid #991b1b !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.30) !important;
+    cursor: pointer !important;
+}
+button[data-ac-impl-button="cancel"] {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 12px 22px !important;
+    margin: 10px 0 !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: CanvasText !important;
+    background: rgba(127, 127, 127, 0.10) !important;
+    border: 2px solid rgba(127, 127, 127, 0.35) !important;
+    border-radius: 8px !important;
+    cursor: pointer !important;
+}
+
+
+/* ============================================================
+ * Persistent "📁 Files" floating toggle (chat.js).
+ *
+ * Anchored to the right edge of the viewport, vertically centred,
+ * always reachable once at least one file chip exists. Click →
+ * simulates clicking the most-recent chip → Chainlit's element
+ * drawer slides open.
+ * ============================================================ */
+
+#ac-files-toggle {
+    position: fixed;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9998;       /* below the init banner (99999), above chat */
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, currentColor 25%, transparent);
+    background: color-mix(in oklab, Canvas 90%, currentColor 6%);
+    color: CanvasText;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+#ac-files-toggle:hover {
+    transform: translateY(-50%) translateX(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+#ac-files-toggle:active {
+    transform: translateY(-50%) translateX(0);
+}
+
+
+/* ============================================================
+ * Phase pills — slim, black-background indicators that sit in the
+ * Chainlit header strip, same row as Readme / New chat. Just three
+ * pills (Plan / Competition Creation); per-turn context-% and cost
+ * are surfaced in each assistant turn's footer, not in the header.
+ *
+ * Click an active pill: no-op (you're already there).
+ * Click a locked  pill: confirm → revert (discards downstream).
+ * Click the pending phase that's eligible to advance (state.next +
+ *   can_advance): triggers advance.
+ *
+ * The cl.Action buttons that actually trigger phase transitions
+ * live in a hidden chat message — chat.js click-simulates them.
+ * ============================================================ */
+
+.ac-phase-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    margin-right: 8px;
+    border-radius: 999px;
+    background: #0b0b0c;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1;
+}
+
+.ac-pp {
+    appearance: none;
+    border: 1px solid transparent;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: default;
+    color: rgba(255, 255, 255, 0.55);
+    background: transparent;
+    white-space: nowrap;
+    transition: background 0.12s ease-out, color 0.12s ease-out,
+                transform 0.10s ease-out;
+}
+
+/* Current phase: bright pill, accent ring. */
+.ac-pp-active {
+    background: #ffffff;
+    color: #0b0b0c;
+    border-color: #ffffff;
+    font-weight: 700;
+}
+
+/* Completed phase, click to revise. */
+.ac-pp-locked {
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.78);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.10);
+}
+.ac-pp-locked:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    transform: translateY(-0.5px);
+}
+
+/* Pending phase. Becomes clickable + accented when state.next +
+ * can_advance — the JS adds the same class but a ▶ glyph appears in
+ * the label, so the user has a visual cue without an extra button. */
+.ac-pp-pending {
+    color: rgba(255, 255, 255, 0.40);
+}
+.ac-pp-pending[title^="Click to advance"] {
+    color: #fff;
+    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
+    border-color: rgba(255, 255, 255, 0.18);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(37, 99, 235, 0.45);
+}
+.ac-pp-pending[title^="Click to advance"]:hover {
+    filter: brightness(1.08);
+    transform: translateY(-0.5px);
+}
+
+/* Red-outline pulse on the Readme button. Triggered by chat.js when
+ * the user clicks a phase pill that can't do anything yet — the
+ * implicit nudge to "check Readme to learn how the bar works".
+ * 3 short pulses over 3 s, then auto-stripped by chat.js. */
+@keyframes ac-readme-flash-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.8); outline-color: #dc2626; }
+    40%  { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);  outline-color: #dc2626; }
+    50%  { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);    outline-color: #dc2626; }
+    100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);    outline-color: #dc2626; }
+}
+.ac-readme-flash {
+    outline: 2px solid #dc2626 !important;
+    outline-offset: 2px !important;
+    border-radius: 6px !important;
+    animation: ac-readme-flash-pulse 1s ease-out 3 !important;
+}
+
+
+/* Hide the cl.Action buttons we use only as click targets for the
+ * phase pills. Labels like "AC_ADVANCE::kit" / "AC_REVERT::plan"
+ * are tagged in chat.js as data-ac-phase-nav="advance|revert" and
+ * hidden here — and so is their host message card via :has(). */
+button[data-ac-phase-nav] {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    border: 0 !important;
+    opacity: 0 !important;
+    pointer-events: auto !important; /* still clickable from JS */
+}
+*:has(> button[data-ac-phase-nav]),
+[class*="message"]:has(button[data-ac-phase-nav]) {
+    display: none !important;
+}
+
+
+/* ============================================================
+ * Persistent right workspace panel (sci-space style).
+ *
+ * Always visible during a chat. Top tab strip switches between
+ * notebook / transcript / cost / specs. Body of the chat is
+ * pushed left via padding-right so the panel doesn't overlap.
+ * ============================================================ */
+
+/* Open state — `data-state="open"` (default after JS init).
+ *
+ * Width-based transitions (not transform) so the collapsed state is
+ * actually 44 px wide on the page rather than a translated-off-screen
+ * 40 vw element; this avoids the "the panel still exists at 40 vw,
+ * just offscreen, and might intercept clicks" failure mode. */
+#ac-side-panel {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    /* 55vw clamped to [480, 900] px so the notebook has real reading
+     * room on wide monitors without devouring the chat on narrow ones. */
+    width: 55vw !important;
+    min-width: 480px !important;
+    max-width: 900px !important;
+    z-index: 10000 !important;             /* above Chainlit chrome */
+    display: flex !important;
+    flex-direction: column !important;
+    background: color-mix(in oklab, Canvas 96%, currentColor 2%) !important;
+    border-left: 1px solid color-mix(in oklab, currentColor 18%, transparent) !important;
+    box-shadow: -6px 0 22px rgba(0, 0, 0, 0.10);
+    transition: width 0.22s ease-out, min-width 0.22s ease-out,
+                max-width 0.22s ease-out !important;
+}
+
+/* COLLAPSED — sliver on the right edge, fully clickable to open.
+ * data-state="collapsed" is the source of truth; `.ac-collapsed` class
+ * is the legacy hook (kept in sync by chat.js). */
+#ac-side-panel[data-state="collapsed"],
+#ac-side-panel.ac-collapsed {
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    cursor: pointer !important;
+}
+
+/* Hide everything inside the panel except the vertical "📁 Workspace"
+ * tab button when collapsed. We use visibility:hidden + width tricks
+ * rather than display:none so Chainlit's React reconciler doesn't
+ * fight us on the layout each turn. */
+#ac-side-panel[data-state="collapsed"] .ac-tabs,
+#ac-side-panel[data-state="collapsed"] #ac-side-iframe,
+#ac-side-panel[data-state="collapsed"] .ac-side-footer,
+#ac-side-panel[data-state="collapsed"] .ac-side-title,
+#ac-side-panel[data-state="collapsed"] #ac-side-refresh,
+#ac-side-panel.ac-collapsed .ac-tabs,
+#ac-side-panel.ac-collapsed #ac-side-iframe,
+#ac-side-panel.ac-collapsed .ac-side-footer,
+#ac-side-panel.ac-collapsed .ac-side-title,
+#ac-side-panel.ac-collapsed #ac-side-refresh {
+    display: none !important;
+}
+
+#ac-side-panel[data-state="collapsed"] .ac-side-header,
+#ac-side-panel.ac-collapsed .ac-side-header {
+    flex-direction: column !important;
+    height: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    border-bottom: none !important;
+    background: transparent !important;
+}
+#ac-side-panel[data-state="collapsed"] .ac-side-actions,
+#ac-side-panel.ac-collapsed .ac-side-actions {
+    flex: 1 !important;
+    width: 44px !important;
+    height: 100% !important;
+}
+#ac-side-panel[data-state="collapsed"] #ac-side-collapse,
+#ac-side-panel.ac-collapsed #ac-side-collapse {
+    flex: 1 !important;
+    width: 44px !important;
+    height: 100% !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: linear-gradient(180deg,
+        color-mix(in oklab, Canvas 88%, currentColor 6%) 0%,
+        color-mix(in oklab, Canvas 82%, currentColor 10%) 100%) !important;
+    color: CanvasText !important;
+    cursor: pointer !important;
+    font-size: 12.5px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.6px !important;
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+    padding: 16px 0 !important;
+    line-height: 1.3 !important;
+}
+#ac-side-panel[data-state="collapsed"]:hover #ac-side-collapse,
+#ac-side-panel.ac-collapsed:hover #ac-side-collapse {
+    background: linear-gradient(180deg,
+        color-mix(in oklab, Canvas 78%, currentColor 12%) 0%,
+        color-mix(in oklab, Canvas 70%, currentColor 16%) 100%) !important;
+}
+
+.ac-side-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%);
+}
+.ac-side-title {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: CanvasText;
+}
+.ac-side-actions {
+    display: flex;
+    gap: 6px;
+}
+.ac-side-actions button {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+    background: Canvas;
+    color: CanvasText;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+.ac-side-actions button:hover {
+    background: color-mix(in oklab, Canvas 85%, currentColor 6%);
+}
+
+.ac-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 10px;
+    border-bottom: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+    overflow-x: auto;
+    background: color-mix(in oklab, Canvas 98%, currentColor 1%);
+}
+.ac-tab {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: CanvasText;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ac-tab:hover {
+    background: color-mix(in oklab, Canvas 88%, currentColor 4%);
+}
+.ac-tab-active {
+    background: color-mix(in oklab, Canvas 80%, currentColor 8%) !important;
+    border-color: color-mix(in oklab, currentColor 20%, transparent);
+    font-weight: 700;
+}
+
+#ac-side-iframe {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: Canvas;
+}
+
+/* ----------- Workspace footer (downloads + publish form) -----------
+ * Always present in the DOM; CSS toggles visibility via data-state
+ * on the footer + each section. Downloads appear as soon as anything
+ * downloadable lives in the manifest; the publish form is collapsed
+ * by default and the toggle row expands it.
+ * The footer also disappears when the right panel is collapsed
+ * (handled lower down with the other collapsed-state hides). */
+
+.ac-side-footer {
+    border-top: 1px solid color-mix(in oklab, currentColor 16%, transparent);
+    background: color-mix(in oklab, Canvas 96%, currentColor 3%);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, Helvetica, Arial, sans-serif;
+    font-size: 12.5px;
+    color: CanvasText;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+.ac-side-footer[data-state="hidden"] {
+    display: none;
+}
+
+.ac-foot-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: color-mix(in oklab, CanvasText 65%, transparent);
+    padding: 10px 14px 6px 14px;
+    user-select: none;
+}
+
+.ac-dl-section {
+    padding-bottom: 8px;
+    border-bottom: 1px solid color-mix(in oklab, currentColor 10%, transparent);
+}
+.ac-dl-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 0 12px 4px;
+}
+.ac-dl-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+    background: Canvas;
+    color: CanvasText !important;
+    text-decoration: none !important;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.1s ease-out, border-color 0.1s ease-out,
+                transform 0.1s ease-out;
+}
+.ac-dl-btn:hover {
+    background: color-mix(in oklab, Canvas 84%, currentColor 8%);
+    border-color: color-mix(in oklab, currentColor 34%, transparent);
+    transform: translateY(-0.5px);
+}
+.ac-dl-btn[data-kind="bundle"]:not(.ac-dl-disabled) {
+    border-color: #0969da;
+    background: color-mix(in oklab, #0969da 8%, Canvas);
+}
+.ac-dl-btn[data-kind="bundle"]:not(.ac-dl-disabled):hover {
+    background: color-mix(in oklab, #0969da 16%, Canvas);
+}
+
+/* Disabled (not-ready) state — rendered as <div> not <a>, so it's
+ * non-interactive by construction. Visually grayed but the row keeps
+ * its slot so the user sees the "competition bundle (.zip)" button
+ * exists and what it'll look like once Phase 2 finishes. */
+.ac-dl-btn.ac-dl-disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%) !important;
+    border-color: color-mix(in oklab, currentColor 18%, transparent) !important;
+    color: color-mix(in oklab, CanvasText 60%, transparent) !important;
+}
+.ac-dl-btn.ac-dl-disabled:hover {
+    transform: none !important;
+    background: color-mix(in oklab, Canvas 92%, currentColor 4%) !important;
+    border-color: color-mix(in oklab, currentColor 18%, transparent) !important;
+}
+.ac-dl-btn .ac-dl-label { flex: 1; min-width: 0; }
+.ac-dl-btn .ac-dl-size {
+    flex: 0 0 auto;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: color-mix(in oklab, CanvasText 55%, transparent);
+}
+
+/* Publish form — collapsed by default; click the title row to open. */
+.ac-pub-section {
+    padding-bottom: 12px;
+}
+.ac-pub-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.ac-pub-toggle:hover {
+    color: CanvasText;
+}
+.ac-pub-chev {
+    font-size: 12px;
+    transition: transform 0.15s ease-out;
+}
+.ac-pub-section[data-state="collapsed"] .ac-pub-form {
+    display: none;
+}
+.ac-pub-section[data-state="open"] .ac-pub-chev {
+    transform: rotate(180deg);
+}
+.ac-pub-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 14px 10px;
+}
+.ac-pub-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11.5px;
+    color: color-mix(in oklab, CanvasText 70%, transparent);
+    font-weight: 600;
+}
+.ac-pub-form input {
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, currentColor 26%, transparent);
+    background: Canvas;
+    color: CanvasText;
+    font-size: 13px;
+    font-family: inherit;
+}
+.ac-pub-form input:focus {
+    outline: none;
+    border-color: #0969da;
+    box-shadow: 0 0 0 3px color-mix(in oklab, #0969da 22%, transparent);
+}
+.ac-pub-submit {
+    margin-top: 4px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid #2563eb;
+    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+    transition: filter 0.1s ease-out, transform 0.1s ease-out;
+}
+.ac-pub-submit:hover:not(:disabled) {
+    filter: brightness(1.06);
+    transform: translateY(-0.5px);
+}
+.ac-pub-submit:disabled {
+    opacity: 0.6;
+    cursor: progress;
+    background: color-mix(in oklab, Canvas 78%, currentColor 12%);
+    border-color: color-mix(in oklab, currentColor 22%, transparent);
+    color: color-mix(in oklab, CanvasText 60%, transparent);
+    box-shadow: none;
+}
+.ac-pub-status {
+    min-height: 18px;
+    font-size: 12px;
+    color: color-mix(in oklab, CanvasText 75%, transparent);
+}
+.ac-pub-status .ac-pub-info { color: #0969da; font-weight: 500; }
+.ac-pub-status .ac-pub-ok   { color: #16a34a; font-weight: 700; }
+.ac-pub-status .ac-pub-err  { color: #dc2626; font-weight: 600; }
+.ac-pub-status .ac-pub-link {
+    display: inline-block;
+    margin-top: 4px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11.5px;
+    color: #0969da !important;
+    word-break: break-all;
+}
+
+/* When the bundle is ready, draw a one-time pulse around the publish
+ * toggle row so the user knows the panel just got useful. */
+.ac-pub-section[data-bundle-ready="yes"][data-state="collapsed"]
+        .ac-pub-toggle {
+    color: CanvasText;
+    animation: ac-pub-ready-pulse 1.4s ease-out 2;
+}
+@keyframes ac-pub-ready-pulse {
+    0%, 100% { background: transparent; }
+    50%      { background: color-mix(in oklab, #16a34a 14%, transparent); }
+}
+
+/* Reserve room on the right of the page so chat content isn't
+ * underneath the panel. Keep this in sync with #ac-side-panel
+ * `width` above (55vw, clamped to 480-900px). Toggle is added /
+ * removed by chat.js as the panel opens/collapses. */
+body.ac-side-active {
+    padding-right: min(900px, 55vw);
+}
+@media (max-width: 900px) {
+    body.ac-side-active { padding-right: 0; }
+    #ac-side-panel {
+        width: 100vw !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        height: 60vh;
+        top: auto;
+        bottom: 0;
+        border-top: 1px solid color-mix(in oklab, currentColor 18%, transparent);
+        border-left: none;
+    }
+}
