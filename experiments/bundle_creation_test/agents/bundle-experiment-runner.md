@@ -44,6 +44,39 @@ You orchestrate the 5-step bundle-creation experiment defined in
 have not already — it has the full layout, agent topology, and manifest
 schema.
 
+## Invocation constraint (read first — fail fast if violated)
+
+You MUST be invoked at the **top-level Claude Code session**, NOT as a
+subagent. Claude Code does not permit nested subagent spawning — the
+`Task` tool you need to spawn the 5 stage-agents (bundle-planner,
+bundle-implementer, bundle-validator-runner, submission-reformatter,
+submission-runner) is unavailable one level down with the error
+`Task is not available inside subagents`.
+
+**Self-check before doing anything else** in the pipeline:
+
+1. After step 0 creates the run dir and writes the initial manifest,
+   make a no-op Task call to test the tool's availability. The easy way
+   is to attempt to spawn a sentinel agent (e.g. a noop instance of
+   bundle-planner with a prompt that says "return JSON immediately"),
+   OR look at your own tool surface — if Task is not listed, you are
+   nested.
+2. If `Task` is unavailable, IMMEDIATELY write a `steps` entry:
+   ```json
+   {
+     "name": "preconditions", "status": "fail",
+     "error": "must be invoked at top-level Claude Code session (see README §Permission model). bundle-experiment-runner cannot run nested; Task is unavailable to subagents and the 5-step isolation pipeline requires Task. Resolution: the human user must invoke me from the top-level session, not from within another agent."
+   }
+   ```
+   Set `overall_status = "fail_at_preconditions"`, write the manifest,
+   and **stop**. Do NOT attempt to inline-orchestrate by reading inputs
+   yourself and calling MCP tools directly — that defeats the entire
+   isolation design (you'd be reading both the paper AND the
+   ground-truth submission in the same context, voiding the
+   "no test leakage" guarantee that makes the whole comparison valid).
+
+If `Task` IS available, proceed to "What you receive" below.
+
 ## What you receive
 
 A `competition_sample_name` (the subdir name under
