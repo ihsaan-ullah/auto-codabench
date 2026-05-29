@@ -22,14 +22,20 @@ or define their own.
 experiments/bundle_creation_test/
 ├── README.md                            # this file
 ├── bundle_validator.py                  # validator script (vendored, used by step 4)
-├── setup.sh                             # one-time: symlinks agents into .claude/agents/
-├── agents/                              # source of truth for the 6 subagent definitions
-│   ├── bundle-experiment-runner.md
-│   ├── bundle-planner.md
-│   ├── bundle-implementer.md
-│   ├── bundle-validator-runner.md
-│   ├── submission-reformatter.md
-│   └── submission-runner.md
+├── setup.sh                             # one-time: symlinks agents+skill into .claude/
+├── skills/
+│   └── bundle-creation-test/
+│       └── SKILL.md                     # ORCHESTRATOR — loaded into top-level conversation;
+│                                        #   it drives the 5-step pipeline and spawns the
+│                                        #   5 subagents below via the Task tool.
+│                                        #   Has to be a skill (not an agent) because the
+│                                        #   Task tool is unavailable inside subagents.
+├── agents/                              # the 5 stage subagent definitions
+│   ├── bundle-planner.md                #   Phase 1
+│   ├── bundle-implementer.md            #   Phase 2
+│   ├── bundle-validator-runner.md       #   step 4
+│   ├── submission-reformatter.md        #   step 5a
+│   └── submission-runner.md             #   step 5b
 └── competitions/                        # one subdir per competition sample
     └── <competition_sample_name>/       # e.g. style-trans-fair/
         ├── input/                       # accessible to planner; sample_data/ also to implementer + runner
@@ -90,10 +96,11 @@ experiments/bundle_creation_test/
 | 4 | Validate | `bundle-validator-runner` | `<run>/bundle/**` + `bundle_validator.py` | `<run>/validation/report.txt` |
 | 5 | Reformat + run per submission | `submission-reformatter` then `submission-runner`, **looped over every `<comp>/ground_truth/sample_submissions/sub_*/`** | reformatter: `sub_N/submission/**` + bundle interface; runner: reformatted submission + bundle + `sub_N/expected_result.json` | `<run>/reformatted_submission/sub_N/`, `<run>/submission_run/sub_N/score.json` |
 
-Every step is a **fresh subagent** spawned by `bundle-experiment-runner` via
-the Task tool. No two subagents share chat context, and each one is locked
-down by `tools` / `allowedTools` / `permissionMode: dontAsk` so it can
-**only** see the slice of disk relevant to its job. The motivating constraint:
+Every step is a **fresh subagent** spawned by the `bundle-creation-test`
+skill (loaded into the top-level Claude Code session) via the Task tool.
+No two subagents share chat context, and each one is locked down by
+`tools` / `allowedTools` / `permissionMode: dontAsk` so it can **only**
+see the slice of disk relevant to its job. The motivating constraint:
 
 - **Planner can read the paper AND sample_data**, but cannot read any
   ground-truth submission or its expected score (would let it overfit the
@@ -111,9 +118,12 @@ down by `tools` / `allowedTools` / `permissionMode: dontAsk` so it can
   every agent** — it exists for a human reviewer to compare the agents'
   output against a known-good reference.
 
-The orchestrator is the only agent with broad write access inside
-`<run>/`; it strictly passes file paths to subagents and never reads any
-forbidden inputs itself.
+The orchestrator (the `bundle-creation-test` skill loaded into the
+top-level conversation) has the broadest write access inside `<run>/`
+since it inherits the top-level session's tools; it strictly passes
+file paths to subagents and never reads any forbidden inputs itself.
+The hard rules at the top of `skills/bundle-creation-test/SKILL.md`
+codify that discipline.
 
 ---
 
@@ -121,7 +131,7 @@ forbidden inputs itself.
 
 | Agent | Tools | Read | Write |
 |---|---|---|---|
-| `bundle-experiment-runner` | Read, Write, Edit, Bash (narrow), Glob, Grep, Task | own `<run>/**` + `ground_truth/sample_submissions/*/expected_result.json` + `auto_codabench/runs/**` (for log fallback) | `<run>/**` only (run-id has hex prefix; `input/` and `ground_truth/` excluded by glob) |
+| `bundle-creation-test` (skill, runs in top-level session) | inherits top-level tools (Read, Write, Edit, Bash, Glob, Grep, Task, MCP) | broad — disciplined by the skill's hard rules to only `ls` paths in `input/`, only read `<run>/**` outputs + `ground_truth/sample_submissions/*/expected_result.json` for manifest | `runs/<comp>/<run_id>/**` only (per the skill's "write only inside run dir" rule) |
 | `bundle-planner` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench + alex-mcp, WebFetch, WebSearch | `<comp>/input/**` (paper + sample_data), `auto_codabench/skills/**`, own `plan/**` | own `plan/**` only |
 | `bundle-implementer` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench | `<run>/plan/implementation_plan.md` **only** from plan side; `<comp>/input/sample_data/**` (no paper); `auto_codabench/skills/**`; own `bundle/**` | own `bundle/**` only |
 | `bundle-validator-runner` | Read, Write, Bash (validator only) | own `bundle/**`, the validator script | own `validation/**` only |
@@ -246,9 +256,9 @@ From a fresh Claude Code session in the repo root:
 
 > Run the bundle-creation experiment on `style-trans-fair`.
 
-The main session will delegate to the `bundle-experiment-runner` agent (or
-you can invoke it explicitly via the Task tool with
-`subagent_type=bundle-experiment-runner`). The orchestrator:
+Claude Code's top-level session auto-loads the `bundle-creation-test`
+skill (because the user's wording matches its `description`), and the
+top-level Claude then follows the skill's recipe. The orchestrator:
 
 1. Computes a `run_id` = `<short_sha>_<utc_ts>`.
 2. Creates `experiments/bundle_creation_test/runs/<comp>/<run_id>/`
