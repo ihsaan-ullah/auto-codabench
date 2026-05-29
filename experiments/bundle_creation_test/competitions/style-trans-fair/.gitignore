@@ -1,0 +1,7 @@
+# Per-run output dirs created by bundle-experiment-runner. One dir per
+# experiment run, named <branch_short_sha>_<utc_ts> (hex prefix). Each
+# holds a full bundle build + validation report + execution sandbox —
+# heavy and reproducible from the agents, so we don't commit them.
+# If you want to preserve a specific run for posterity, force-add the
+# manifest only: `git add -f competitions/style-trans-fair/<run_id>/manifest.json`.
+[0-9a-f]*_*/
