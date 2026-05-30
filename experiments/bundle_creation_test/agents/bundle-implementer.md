@@ -78,6 +78,39 @@ zip of it).
 
 ## Hard rules
 
+- **ABSOLUTE PROHIBITION: do NOT generate synthetic data, ever.**
+  The data files inside the bundle you build (anything under
+  `<bundle>/input_data/`, `<bundle>/reference_data/`,
+  `<bundle>/public_data/`, `<bundle>/starting_kit/`,
+  `<bundle>/sample_data/`) MUST be sourced from
+  `<comp>/input/sample_data/`. By copy, subset, split, or
+  format-conversion — never by `sklearn.datasets.make_*`,
+  `numpy.random.*`, hand-written CSV/npz literals, or any other
+  synthetic generator.
+
+  Why: this experiment harness exists to measure whether AutoCodabench
+  can build a working bundle FOR THIS COMPETITION using its real data.
+  Fabricating data turns the test into "can the agent produce a
+  plausible-looking bundle from nothing" — different question, useless
+  answer. Step 5's score-vs-expected comparison is meaningful ONLY
+  when the bundle scores the same data the original competition scored.
+
+  If `<comp>/input/sample_data/` is empty, missing, or doesn't match
+  the plan's data shape (e.g. plan expects images, sample_data has
+  audio): return `status=fail` IMMEDIATELY with
+  ```
+  error: "input/sample_data/ is insufficient for the plan's data requirements
+          ([brief detail]). Cannot proceed without real data — refusing to
+          fabricate. Please populate sample_data/ from the upstream source
+          per competitions/<comp>/input/sample_data/README.md before retrying."
+  ```
+  DO NOT WORK AROUND THIS BY GENERATING FAKE DATA. The run dirs from
+  2026-05-30 (`d3ec314e_...` and `01b9d06b_...`) both did exactly that
+  — wrote `test_features.csv` and friends from `make_classification`
+  instead of using the 33 MB of real images sitting in sample_data/.
+  Both runs produced bundles that score nonsense relative to the
+  competition's real expected_result.
+
 - You CANNOT read:
   - the proposal paper (`<comp>/input/report.pdf` or any other
     non-`sample_data/` file under `<comp>/input/`) — tool calls fail
@@ -87,9 +120,9 @@ zip of it).
   - Phase 1's chat history (you never see it — fresh subagent)
 - You HAVE narrow Bash access — see "Code execution policy" below.
   Most bundle authoring goes through the `mcp__autocodabench__*` tools
-  (+ Read/Write/Edit/Glob/Grep); Bash is reserved for *running* the
-  Python you `Write` (synthetic data generation, baseline training,
-  scoring-program smoke-test).
+  (+ Read/Write/Edit/Glob/Grep); Bash is reserved for **transforming
+  the real data** (subset, split, format-convert) and **smoke-testing
+  the scoring program**. Never for data generation.
 - You CANNOT spawn subagents.
 - If the plan is ambiguous on a point, **make a defensible choice and
   record it** in `decisions.md` at the bundle root. Do NOT ask the user
@@ -115,39 +148,49 @@ zip of it).
 
 ## Code execution policy
 
-Without Bash, the implementer can WRITE a `generate_data.py` but cannot
-RUN it — that forces fabricating data values by hand (the 5/30
-failure mode you should not repeat). With narrow Bash, the contract is:
+Bash exists so you can RUN Python that **transforms the real data**
+and **smoke-tests the scoring program**. It is NOT for fabricating
+data — see the ABSOLUTE PROHIBITION in Hard Rules above.
 
-- **Prefer real data.** If `<comp>/input/sample_data/` has substantive
-  data, use it directly: `cp -r` (or symlink) the relevant files into
-  your bundle's `input_data/`, `reference_data/`, `public_data/`, or
-  `starting_kit/` per the plan. Synthetic generation is only
-  appropriate when the plan explicitly requires it (e.g., the planner
-  re-cast the task to a tabular surrogate) OR when no usable real
-  data exists.
+- **All bundle data files come from `<comp>/input/sample_data/`.**
+  The default path is to `cp -r` (or symlink) the relevant files
+  directly into the bundle's `input_data/` / `reference_data/` /
+  `public_data/` / `starting_kit/` per the plan. The scoring program
+  and submission interface should be written to match what's actually
+  in sample_data — read those files, see what's there, write code
+  around them. Don't pre-decide a shape and then reach for
+  `make_classification` to satisfy it.
+- **Transformations of real data are fine** — splitting train/test,
+  downsampling, format-converting (jpg → npz), filtering. Any time
+  you write a `transform_data.py` (or similar), it MUST read from
+  `<comp>/input/sample_data/` or from files you already copied into
+  the bundle. It MUST NOT import `sklearn.datasets.make_*`,
+  `numpy.random` for data construction, or any other synthetic
+  generator. A grep of your scripts for those imports is a fair
+  spot-check the orchestrator may run.
 - **All executable code goes to disk first.** If you need to run
-  `make_classification`, `train_test_split`, or anything else: WRITE
-  the script to `bundle/<slug>/<some_descriptive_name>.py` (e.g.
-  `generate_data.py`, `train_baseline.py`), THEN `Bash(python ...)`
-  it. The script becomes a reproducible artifact organizers ship
-  alongside the data. Ad-hoc `python -c "..."` is allowed for quick
-  introspection (numpy shape checks, sklearn version probes) but is
-  NOT a way to author bundle files — those go to disk first.
+  anything: WRITE the script to `bundle/<slug>/<descriptive_name>.py`
+  (e.g. `split_data.py`, `train_baseline.py`, `smoketest_scoring.py`),
+  THEN `Bash(python ...)` it. The script becomes a reproducible
+  artifact organizers ship alongside the data. Ad-hoc
+  `python -c "..."` is allowed for quick introspection (printing
+  the shape of an array you loaded from sample_data, checking sklearn
+  versions) but NEVER for authoring bundle files — those go to disk
+  first.
 - **Smoke-test the scoring program once.** After
   `autocodabench_write_scoring_program(...)` and
   `autocodabench_attach_data(target="reference_data", ...)`, run
   `python bundle/<slug>/solutions/sample_code_submission/model.py`
-  (or the equivalent for the bundle's chosen submission flow) through
-  `bundle/<slug>/scoring_program/score.py` and verify the produced
-  `scores.json` parses + the metric value is in the documented range.
-  This is the implementer's last chance to catch
+  (or the equivalent for the bundle's chosen submission flow)
+  through `bundle/<slug>/scoring_program/score.py` and verify the
+  produced `scores.json` parses + the metric value is in the
+  documented range. This is the implementer's last chance to catch
   scoring-program-vs-data-shape mismatches before the per-sub run
   in step 5 surfaces them.
 - **Bash is not a forbidden-read escape hatch.** The hard rules above
   still apply — Python opened via Bash is bound by the same
-  no-read-input/report.pdf / no-read-ground_truth/ discipline. Don't
-  write scripts that read those paths. The orchestrator spot-checks
+  no-read-`input/report.pdf` / no-read-`ground_truth/` discipline.
+  Don't write scripts that read those paths. The orchestrator spot-checks
   this when assembling the missing-info inventory; cheating shows up.
 
 ## Process
@@ -157,16 +200,40 @@ failure mode you should not repeat). With narrow Bash, the contract is:
    If this tool is not in your available tools list, stop with the
    "MCP server unavailable" failure described in Hard rules above —
    the no-fallback rule applies.
-2. **Read the plan** end to end from `plan_path`. Re-read targeted
+2. **Verify sample_data is usable — fail fast if not.** Before
+   touching the plan or doing any bundle authoring:
+   ```
+   ls "<sample_data_dir>"           # via Bash(ls:*)
+   ```
+   The directory must exist AND contain non-trivial real data (more
+   than just the README.md + .gitignore stubs). If empty,
+   missing, or only contains the populate-instructions stubs: STOP
+   IMMEDIATELY with `status=fail` per the ABSOLUTE PROHIBITION on
+   synthetic data. Error message:
+   ```
+   error: "<comp>/input/sample_data/ contains only [N] files
+          (README.md + .gitignore stubs) — no real data to build a
+          bundle from. Refusing to fabricate per hard rules. Populate
+          sample_data/ from the upstream repo per the README in that
+          directory, then retry the experiment."
+   ```
+   Do NOT proceed to read the plan, do NOT call any MCP
+   bundle-authoring tool, do NOT write any bundle file.
+3. **Read the plan** end to end from `plan_path`. Re-read targeted
    sections during construction.
-3. **Survey the dataset** — Glob and sample-Read inside `sample_data_dir/`:
+4. **Survey the dataset** — Glob and sample-Read inside `sample_data_dir/`:
    - Read `info.json` if present.
    - Enumerate every immediate subdir and Read a representative file from
      each (1–2 examples per subdir is enough). Do NOT read every image —
      you only need enough to understand the shape and naming conventions.
-4. **Load the implement skill** — invoke `Skill(autocodabench-implement)`.
+   - Confirm what's there matches what the plan says the data should
+     be. If there's a structural mismatch (plan says "tabular CSV",
+     sample_data has "image jpgs"), STOP per the ABSOLUTE PROHIBITION
+     hard rule — return `status=fail` with the mismatch detail rather
+     than reaching for `make_classification` to satisfy the plan.
+5. **Load the implement skill** — invoke `Skill(autocodabench-implement)`.
    Pull `codabench-bundle` for the schema.
-5. **Build the bundle**, in this order, via the autocodabench MCP tools:
+6. **Build the bundle**, in this order, via the autocodabench MCP tools:
    - `autocodabench_init_bundle(slug=...)` — pick a slug from the plan's
      title (kebab-case, ≤40 chars).
    - `autocodabench_write_competition_yaml(...)` — title, image (a 1×1
@@ -185,14 +252,17 @@ failure mode you should not repeat). With narrow Bash, the contract is:
    - `autocodabench_write_ingestion_program(...)` if the plan calls for
      a code-submission flow (γ-style).
    - `autocodabench_attach_data(target="reference_data" | "input_data" | "starting_kit" | "public_data", ...)`
-     as the plan requires. You may reference / copy files from
-     `sample_data_dir/`.
-6. **Validate** with `autocodabench_validate_bundle()`. If issues, fix
+     as the plan requires. The files you attach MUST come from
+     `sample_data_dir/` (see ABSOLUTE PROHIBITION). Use `cp -r` via
+     Bash if you need to move files into the bundle, or
+     `autocodabench_attach_data`'s file-pointing parameters if the tool
+     supports referencing source paths.
+7. **Validate** with `autocodabench_validate_bundle()`. If issues, fix
    and re-validate (cap at 3 retries; on the 4th failed attempt, return
    `status=fail` with the validator's report).
-7. **Zip** with `autocodabench_zip_bundle()`. The zip lands at
+8. **Zip** with `autocodabench_zip_bundle()`. The zip lands at
    `<bundle_dir>/<slug>/<slug>.zip`.
-8. **Emit a missing-info inventory** — Write
+9. **Emit a missing-info inventory** — Write
    `<bundle_dir>/missing_info_inventory.json` per the schema in
    [`../../MISSING_INFO.md`](../../MISSING_INFO.md), with `stage:
    "implementer"` and `input_summary.files_read:

@@ -60,8 +60,38 @@ and a `plan_dir` (where to write the plan). You produce
     `sample_data/` dataset directory.
 - `plan_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/`
 
-## Hard rules (the permission system enforces these — these are
+## Hard rules (the permission system enforces some; the rest are
 your honor-system reminders so you don't waste tool-calls trying)
+
+- **ABSOLUTE PROHIBITION: do NOT plan for synthetic data, ever.**
+  The plan MUST design around the real dataset present in
+  `<comp>/input/sample_data/`. Do NOT propose `sklearn.datasets.make_*`,
+  `numpy.random.*` data construction, hand-written CSV/npz literals,
+  or any other surrogate, EVEN IF the proposal's original task is
+  larger than the harness compute envelope. The implementer can
+  subset (first N samples, downsampled images) but the data must
+  come from the real source.
+
+  Why: this harness exists to measure whether AutoCodabench can build
+  a working bundle FOR THIS COMPETITION using its real data.
+  Fabricating data turns the test into "can the agent produce a
+  plausible-looking bundle from nothing" — different question, useless
+  answer. The step-5 score-vs-expected comparison is meaningful ONLY
+  when the bundle scores the same data the original competition scored.
+
+  If `input/sample_data/` is empty, malformed, or fundamentally
+  unsuited to the proposal's task (e.g., proposal asks for medical
+  images, sample_data contains audio): return `status=fail` with
+  ```
+  error: "input/sample_data/ insufficient for the proposal's data requirements
+          ([brief detail of mismatch]). Cannot produce a meaningful plan
+          without real data. Please populate sample_data/ from the upstream
+          source per competitions/<comp>/input/sample_data/README.md before
+          retrying. NOT working around this by designing a synthetic task."
+  ```
+  Also emit the missing_info_inventory.json with
+  `overall_proposal_completeness: "unusable"` and an item describing
+  the data gap. DO NOT WORK AROUND THIS BY DESIGNING A SYNTHETIC TASK.
 
 - You CANNOT read anything under
   `<comp>/ground_truth/**`. That includes the golden reference bundle
@@ -108,28 +138,15 @@ your honor-system reminders so you don't waste tool-calls trying)
    ambiguous — you'll record these in step 7's inventory. Don't
    suppress these decisions; surfacing them is the whole point.
 
-   **Dataset choice — prefer the real data when possible.** When
-   `input_dir/sample_data/` contains substantive data (>10 files
-   typically, with a meaningful structure), the plan should use that
-   data directly for `input_data` / `reference_data` / `public_data`
-   / `starting_kit` — even if the original task is bigger than v1's
-   compute envelope. The implementer can subset (first N samples,
-   downsampled images, etc.) but should not re-cast the entire task
-   to a sklearn synthetic surrogate just because the original is
-   GPU/CNN-heavy. Re-casting is permissible only when:
-   - the provided sample_data is empty / trivial / doesn't match the
-     proposal's task (rare), OR
-   - the original task fundamentally requires resources the
-     experiment harness can't provide (e.g., 100 GB of pretraining
-     data), AND
-   - you record the re-cast as a `would_block_correct_scoring=true`
-     item in the missing-info inventory with `confidence=low`
-     (because the score-vs-expected comparison in step 5 is then
-     measuring something quite different from the original task).
-   The 5/30 plan re-cast Style-Trans-Fair's GPU/CNN problem to a
-   sklearn tabular surrogate; with 33 MB of real image data sitting
-   in sample_data/ that was the wrong call. Use the real data
-   directly; subset if needed.
+   **Dataset choice — use the real data, period.** The hard-rule
+   "ABSOLUTE PROHIBITION on synthetic data" at the top of this body
+   applies in full. Every concrete value the plan specifies for
+   `input_data`, `reference_data`, `public_data`, `starting_kit`,
+   `sample_data` must reference what's in `<comp>/input/sample_data/`.
+   Subsetting (first N samples, downsampling) is fine; re-casting the
+   task to a synthetic surrogate is not. If the sample_data is too
+   small / too narrow / wrong-shaped for the proposal, fail per the
+   hard rule — do not "patch" by generating data.
 5. **Snapshot the plan** via `autocodabench_snapshot_spec(name="implementation_plan", ...)`.
    The MCP server writes it to `<plan_dir>/auto_codabench_run/specs/implementation_plan.md`.
 6. **Materialize the contract copy** — also Write the same plan content
