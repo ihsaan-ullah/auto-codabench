@@ -217,7 +217,47 @@ dirs in `auto_codabench/runs/` whose mtime is between `started_at` and
 `now` and `cp -r` them into the step's dir. Use `stat -f %m` on macOS
 or `stat -c %Y` on Linux.
 
-### 7. Finalize
+### 7. Aggregate the missing-info inventories
+
+This step turns per-stage inventories into one run-level report that
+downstream meta-analysis consumes. The schema is defined in
+[`MISSING_INFO.md`](../../MISSING_INFO.md); read it first if you have
+not already — it specifies the controlled vocabulary, per-item shape,
+and aggregated-report shape.
+
+Process:
+
+1. Read both stage inventories (if they exist):
+   - `runs/<comp>/<run_id>/plan/missing_info_inventory.json`
+     (always present unless the planner stage hard-failed before
+     emitting it).
+   - `runs/<comp>/<run_id>/bundle/missing_info_inventory.json`
+     (present if the implementer stage ran).
+2. If neither exists (e.g., plan stage hard-failed pre-emit), write a
+   stub `missing_info_report.json` with an empty `items: []` and a
+   `narrative_summary` explaining why the data is missing. Do NOT
+   skip this step — the meta-analysis pipeline needs the file to
+   exist for every run (it can group runs by "had inventory" vs
+   "didn't" to surface pre-emit failure patterns).
+3. Concatenate the items from both stages into a single `items`
+   array. Re-tag each item with its `stage` field (the per-stage
+   inventories already do this, but double-check). Re-ID items so
+   ids are unique across the merged list (e.g.
+   `planner_miss_001`, `implementer_miss_001`).
+4. Compute the totals block per the schema. The totals are what most
+   meta-analysis queries hit first; they MUST match the items array's
+   actual contents (no silent fudging).
+5. Write a `narrative_summary` (1–3 sentences). Lead with the count
+   of critical / high-stakes items. Call out any
+   `would_block_correct_scoring == true` items by name. Mention
+   overall_proposal_completeness if available.
+6. Write `runs/<comp>/<run_id>/missing_info_report.json` per the
+   aggregated-report shape in MISSING_INFO.md.
+7. Add a `missing_info_summary` block to `manifest.json` with the
+   top-line numbers (just `totals` from the report — keeps manifest
+   compact while the full report sits alongside).
+
+### 8. Finalize
 
 - Set `finished_at` to current ISO-UTC.
 - Set `overall_status = "pass"` if every step (incl. every sub_N in
@@ -232,12 +272,18 @@ Experiment: <comp> · run_id: <run_id> · status: pass | fail_at_<step>
 
 | step       | status | notes                                                          |
 |------------|--------|----------------------------------------------------------------|
-| plan       | pass   | sections: task, data, metric, baseline, rules, ethics, schedule|
-| implement  | pass   | slug: <slug>, bundle <N> KB, validator-clean=true              |
+| plan       | pass   | 7 sections, N citations, M info gaps (X critical)              |
+| implement  | pass   | slug: <slug>, bundle <N> KB, validator-clean=true, K plan-gaps |
 | validate   | pass   | exit 0                                                         |
 | sub_1      | pass   | actual 0.000, expected 0.000, Δ 0.000 (within 0.001 tolerance) |
 | sub_2      | pass   | actual 0.303, expected 0.303, Δ 0.000 (within 0.001 tolerance) |
 | ...        | ...    |                                                                |
+
+Missing-info report: <M+K> items total
+  by impact:    bundle_functionality=A, deployment_polish=B, participant_experience=C
+  by severity:  critical=X, important=Y, nice_to_have=Z, best_practice=W
+  would_block_correct_scoring: <count> ← high-stakes inferences worth a human pass
+Full report: runs/<comp>/<run_id>/missing_info_report.json
 
 run dir: ./experiments/bundle_creation_test/runs/<comp>/<run_id>/
 ```

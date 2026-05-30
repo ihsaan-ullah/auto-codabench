@@ -73,13 +73,42 @@ your honor-system reminders so you don't waste tool-calls trying)
 4. **Run the plan** — follow the skill's 7-section roadmap (task / data
    / metric / baseline / rules / ethics / schedule). Cite OpenAlex /
    PubMed via the `alex-mcp` tools wherever you assert something the
-   reader might want to check. If you make a design choice the input
-   leaves open, name the choice and the reason in the plan.
+   reader might want to check. **As you go**, mentally tag every
+   decision you make where the proposal was unclear, silent, or
+   ambiguous — you'll record these in step 7's inventory. Don't
+   suppress these decisions; surfacing them is the whole point.
 5. **Snapshot the plan** via `autocodabench_snapshot_spec(name="implementation_plan", ...)`.
    The MCP server writes it to `<plan_dir>/auto_codabench_run/specs/implementation_plan.md`.
 6. **Materialize the contract copy** — also Write the same plan content
    to `<plan_dir>/implementation_plan.md`. This is the file the next
    subagent reads; it MUST exist at that exact path.
+7. **Emit the missing-info inventory** — Write
+   `<plan_dir>/missing_info_inventory.json` per the schema in
+   [`../../MISSING_INFO.md`](../../MISSING_INFO.md). Read that file
+   before writing the inventory; it defines the controlled vocabulary
+   for `section`, `severity`, `impact_area`, and `resolution.action`,
+   plus the per-item shape and the meta-analysis target.
+
+   This is a **first-class deliverable**, not an afterthought. The
+   orchestrator aggregates inventories across runs to surface
+   patterns ("proposals miss output_format 60% of the time"). The
+   meta-analysis is a major reason this harness exists.
+
+   Concretely, every decision you made in step 4 that wasn't directly
+   stated in the proposal becomes one `items[]` entry:
+   - inferred from context clues elsewhere in the proposal
+     (`resolution.action = "inferred"`)
+   - filled with a default from the autocodabench / Codabench
+     conventions (`resolution.action = "default_applied"`)
+   - left as a TODO in the plan for the implementer
+     (`resolution.action = "deferred"`)
+   - explicitly omitted (`resolution.action = "omitted"`)
+
+   Aim for ~5–20 items on a typical proposal. Zero items is
+   suspicious — either the proposal was exhaustive (rare) or you
+   didn't look hard enough. Include `trace` (the verbatim quote /
+   page reference) whenever you can; it makes cross-run meta-analysis
+   far more useful.
 
 ## Final message (parsed by orchestrator)
 
@@ -89,15 +118,30 @@ A single fenced JSON object. Schema:
 {
   "status": "pass" | "fail",
   "plan_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md",
+  "missing_info_inventory_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/missing_info_inventory.json",
   "sections_covered": ["task", "data", "metric", "baseline", "rules", "ethics", "schedule"],
   "citations_count": <int>,
-  "open_questions": ["..."],
-  "decisions_made_under_ambiguity": ["short bullet of choice + why"],
+  "missing_info_counts": {
+    "total": <int>,
+    "by_severity": { "critical": <int>, "important": <int>, "nice_to_have": <int>, "best_practice": <int> },
+    "by_impact_area": { "bundle_functionality": <int>, "deployment_polish": <int>, "participant_experience": <int> },
+    "by_resolution_action": { "inferred": <int>, "default_applied": <int>, "deferred": <int>, "omitted": <int> },
+    "would_block_correct_scoring_count": <int>
+  },
+  "overall_proposal_completeness": "high" | "medium" | "low" | "unusable",
   "dataset_summary": "<one-line description of sample_data's shape: e.g. 'images at content/<id>.jpg paired with stylized/<id>.jpg, 9 tasks under tasks/'>",
   "error": null | "if status=fail, the reason"
 }
 ```
 
+The orchestrator uses `missing_info_inventory_path` to ingest your
+full inventory for the aggregated report; the inline
+`missing_info_counts` give it a fast preview for the summary table
+without having to parse the JSON file synchronously.
+
 If the input is so thin you cannot produce a usable plan (e.g. report.pdf
 unreadable, no usable task description), return `status: "fail"` with a
-clear `error` rather than fabricating.
+clear `error` rather than fabricating. Even in that case, still emit
+the missing_info_inventory.json — with `overall_proposal_completeness:
+"unusable"` and items describing what was missing — so the meta-analysis
+captures the failure mode.

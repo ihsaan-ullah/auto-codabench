@@ -94,6 +94,25 @@ zip of it).
    `status=fail` with the validator's report).
 7. **Zip** with `autocodabench_zip_bundle()`. The zip lands at
    `<bundle_dir>/<slug>/<slug>.zip`.
+8. **Emit a missing-info inventory** — Write
+   `<bundle_dir>/missing_info_inventory.json` per the schema in
+   [`../../MISSING_INFO.md`](../../MISSING_INFO.md), with `stage:
+   "implementer"` and `input_summary.files_read:
+   ["plan/implementation_plan.md"]`. Your inventory will typically be
+   smaller than the planner's (the plan is far more constrained than
+   the free-form proposal) and will skew toward
+   `section: "infrastructure"`, `section: "submission_format"`, and
+   `section: "other"`. Common items:
+   - Plan said "use a placeholder image" but didn't specify format →
+     defaulted to 1×1 PNG (`section: infrastructure`, `field:
+     placeholder_image_format`).
+   - Plan didn't specify `submission_rule` → defaulted to `Force_Last`
+     (`section: submission_format`).
+   - Plan listed phases without exact dates → applied a 1-year
+     default window (`section: phases`).
+   It's perfectly fine for this inventory to have **zero items** when
+   the planner produced a thorough plan with no implementer-side
+   ambiguity. Don't fabricate gaps to look thorough.
 
 ## Final message (parsed by orchestrator)
 
@@ -103,10 +122,16 @@ zip of it).
   "slug": "...",
   "bundle_dir": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/",
   "zip_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/<slug>.zip",
+  "missing_info_inventory_path": "./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/missing_info_inventory.json",
   "validation_summary": "<one-line: 'ok, 0 issues' or 'N issues remain after 3 retries'>",
   "decisions": ["short bullets of choices made under ambiguity"],
   "submission_interface": "<one-line description: e.g. 'class model exposing fit(X, y) and predict(X) returning ndarray of shape (n_samples, n_tasks)'>",
   "uses_ingestion_program": true | false,
+  "missing_info_counts": {
+    "total": <int>,
+    "by_section": { "infrastructure": <int>, "submission_format": <int>, "other": <int> },
+    "by_resolution_action": { "inferred": <int>, "default_applied": <int>, "deferred": <int>, "omitted": <int> }
+  },
   "error": null | "..."
 }
 ```

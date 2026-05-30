@@ -21,8 +21,14 @@ or define their own.
 ```
 experiments/bundle_creation_test/
 ├── README.md                            # this file
+├── MISSING_INFO.md                      # schema + conventions for the missing-info inventory
+│                                        #   logged by planner/implementer and aggregated by the skill;
+│                                        #   read this before changing any of the inventory shapes.
 ├── bundle_validator.py                  # validator script (vendored, used by step 4)
 ├── setup.sh                             # one-time: symlinks agents+skill into .claude/
+├── scripts/
+│   └── aggregate_missing_info.py        # cross-run meta-analysis over missing_info_report.json files
+│                                        #   (see MISSING_INFO.md §"Meta-analysis pattern" for jq alternatives)
 ├── skills/
 │   └── bundle-creation-test/
 │       └── SKILL.md                     # ORCHESTRATOR — loaded into top-level conversation;
