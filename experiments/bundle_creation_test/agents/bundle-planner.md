@@ -63,6 +63,43 @@ and a `plan_dir` (where to write the plan). You produce
 ## Hard rules (the permission system enforces some; the rest are
 your honor-system reminders so you don't waste tool-calls trying)
 
+- **ABSOLUTE PROHIBITION: do NOT re-scope the task to fit a perceived
+  envelope.** The plan MUST faithfully mirror the proposal's task as
+  stated. If the proposal describes a GPU/CNN image-classification
+  problem with code-submission, the plan must specify GPU/CNN image
+  classification with code-submission. Do NOT re-cast it to
+  CPU/sklearn tabular result-submission "because the v1 envelope is
+  smaller" or "to make smoke-testing easier" — those are runtime
+  concerns belonging to Codabench's docker_image (which carries
+  whatever GPU/CUDA the original needs) and to the step-5 runner
+  (which will fail at the right place if its environment can't host
+  the bundle).
+
+  Specifically, the plan must NOT change:
+  - the **modality** (image stays image; tabular stays tabular)
+  - the **submission type** (code-submission via ingestion_program
+    stays code-submission; result-submission stays result-submission)
+  - the **architecture family in the baseline** (CNN stays CNN;
+    transformer stays transformer; sklearn stays sklearn)
+  - the **metric** (whatever the proposal names — not your
+    well-behaved alternative)
+  - the **task type** (multi-label classification stays multi-label;
+    regression stays regression)
+
+  Subsetting / downsampling for tractability is fine when it
+  preserves the modality and task (e.g., "1000 images instead of
+  100k" — still images, still classification). Re-casting to a
+  fundamentally different problem is not.
+
+  Why this is non-negotiable: the experiment harness exists to
+  measure whether AutoCodabench can build the bundle the proposal
+  asks for. A re-scoped bundle answers a different question. The
+  step-5 score-vs-expected comparison is meaningful ONLY when the
+  bundle solves the original task. If the original task requires
+  resources the harness can't provide, the bundle will fail at
+  step 5 (correct outcome) — DO NOT pre-empt that failure by
+  changing the bundle.
+
 - **ABSOLUTE PROHIBITION: do NOT plan for synthetic data, ever.**
   The plan MUST design around the real dataset present in
   `<comp>/input/sample_data/`. Do NOT propose `sklearn.datasets.make_*`,

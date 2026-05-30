@@ -44,6 +44,7 @@ allowedTools:
   - Read(./auto_codabench/README.md)
   - Read(./auto_codabench/INSTRUCTION_FOR_USER.md)
   - Read(./README.md)
+  - Read(./experiments/bundle_creation_test/bundle_validator.py)  # so step-7 self-validation can inspect what it's about to be checked against
   - Skill(autocodabench-implement)
   - Skill(codabench-bundle)
   - mcp__autocodabench__*
@@ -77,6 +78,31 @@ zip of it).
 - `bundle_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/`
 
 ## Hard rules
+
+- **ABSOLUTE PROHIBITION: do NOT re-scope the plan to fit a perceived
+  envelope.** Build the bundle the plan specifies, in the modality
+  the plan specifies, with the baseline architecture the plan
+  specifies, scored by the metric the plan specifies. Do NOT downgrade
+  a CNN baseline to sklearn LogisticRegression "because we can't run
+  GPU here". Do NOT swap a code-submission flow (ingestion_program)
+  for a result-submission flow "because it's easier to smoke-test".
+  Do NOT change the metric to one that gives more interpretable
+  numbers. Do NOT change the docker_image from `tensorflow:2.x-gpu`
+  to `python:3.11-slim` because you don't have a GPU locally.
+
+  The Codabench docker image is whatever the bundle declares — it
+  runs on Codabench's compute, not yours. If you can't smoke-test
+  the bundle locally because you don't have the docker image's
+  runtime, **skip the smoke-test and log it** as a missing-info
+  item with `section: infrastructure`, `field: smoke_test_skipped`,
+  `resolution.action: deferred`, `resolution.choice: "deferred to
+  step-5 runner — local environment lacks <X> required by the
+  bundle's docker_image"`. The bundle still ships as specified.
+
+  If a re-scope is genuinely required (e.g., the plan literally
+  cannot be implemented without external API access the bundle
+  doesn't allow), STOP with `status=fail` and report the conflict
+  — let the human re-plan. Do NOT silently downgrade.
 
 - **ABSOLUTE PROHIBITION: do NOT generate synthetic data, ever.**
   The data files inside the bundle you build (anything under
@@ -257,9 +283,21 @@ data — see the ABSOLUTE PROHIBITION in Hard Rules above.
      Bash if you need to move files into the bundle, or
      `autocodabench_attach_data`'s file-pointing parameters if the tool
      supports referencing source paths.
-7. **Validate** with `autocodabench_validate_bundle()`. If issues, fix
-   and re-validate (cap at 3 retries; on the 4th failed attempt, return
-   `status=fail` with the validator's report).
+7. **Validate** with BOTH validators — both MUST pass clean before
+   you proceed:
+   1. `autocodabench_validate_bundle()` — the MCP-side validator.
+      Catches issues at the bundle_io layer.
+   2. `python ./experiments/bundle_creation_test/bundle_validator.py <bundle_root>`
+      via Bash — the STANDALONE validator. Catches schema details
+      the MCP validator misses (e.g., the 5/30 run's phase-date
+      conflict between Phase 0 end and Phase 1 start passed the MCP
+      validator but the standalone caught it). The standalone is the
+      same script step-4 of the orchestrator runs against your
+      output; if it fails there, you fail step 4 — so run it now to
+      catch the failure before claiming pass.
+   If either reports issues, fix and re-validate both (cap at 3
+   retries; on the 4th failed attempt, return `status=fail` with
+   the validators' reports).
 8. **Zip** with `autocodabench_zip_bundle()`. The zip lands at
    `<bundle_dir>/<slug>/<slug>.zip`.
 9. **Emit a missing-info inventory** — Write
