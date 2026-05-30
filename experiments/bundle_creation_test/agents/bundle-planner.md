@@ -10,6 +10,24 @@ tools:
   - WebFetch
   - WebSearch
   - Skill
+  # MCP tool names must be enumerated here (the `tools:` field is the
+  # actual capability whitelist; `allowedTools:` below is path/arg scoping
+  # for those capabilities). Wildcards (mcp__autocodabench__*) do NOT work
+  # in `tools:` — Claude Code only matches exact tool names. Without these
+  # explicit entries, the subagent has zero access to MCP servers even
+  # when the parent session does (this is what the 2026-05-30 run hit).
+  - mcp__autocodabench__autocodabench_open_run
+  - mcp__autocodabench__autocodabench_current_run
+  - mcp__autocodabench__autocodabench_log_event
+  - mcp__autocodabench__autocodabench_snapshot_spec
+  - mcp__alex-mcp__search_works
+  - mcp__alex-mcp__retrieve_author_works
+  - mcp__alex-mcp__search_authors
+  - mcp__alex-mcp__autocomplete_authors
+  - mcp__alex-mcp__search_orcid_authors
+  - mcp__alex-mcp__get_orcid_publications
+  - mcp__alex-mcp__search_pubmed
+  - mcp__alex-mcp__pubmed_author_sample
 allowedTools:
   - Read(./experiments/bundle_creation_test/competitions/*/input/**)
   - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/**)
@@ -51,6 +69,18 @@ your honor-system reminders so you don't waste tool-calls trying)
 - You CANNOT read other competitions' runs or plans.
 - You CANNOT spawn subagents (no Task in your tool list).
 - You CANNOT run shell commands (no Bash).
+- **No silent MCP fallback.** If `mcp__autocodabench__*` tools are not
+  in your available tools list at step 2, DO NOT proceed by writing
+  `implementation_plan.md` and `missing_info_inventory.json` to disk
+  with Write and skipping `autocodabench_open_run`/`autocodabench_snapshot_spec`.
+  Without those MCP calls there's no audit trail under
+  `auto_codabench_run/`, which breaks downstream meta-analysis. Return
+  immediately with `status=fail`,
+  `error="MCP autocodabench server unavailable in subagent sandbox —
+  check the agent's tools: list includes mcp__autocodabench__*
+  entries and that the parent session has the MCP server registered."`
+  (Same wording the implementer uses for the symmetric failure — keeps
+  meta-analysis grouping clean.)
 
 ## Process
 

@@ -8,6 +8,26 @@ tools:
   - Glob
   - Grep
   - Skill
+  # MCP tool names must be enumerated here (the `tools:` field is the
+  # actual capability whitelist; `allowedTools:` below is path/arg scoping
+  # for those capabilities). Wildcards (mcp__autocodabench__*) do NOT work
+  # in `tools:` — Claude Code only matches exact tool names. Without these
+  # explicit entries, the subagent has zero access to autocodabench's
+  # bundle-authoring tools — it would fall back to writing yaml by hand
+  # and miss the autocodabench_validate_bundle pre-check (which is what
+  # the 2026-05-30 run did, shipping a missing-leaderboard-index defect).
+  - mcp__autocodabench__autocodabench_open_run
+  - mcp__autocodabench__autocodabench_current_run
+  - mcp__autocodabench__autocodabench_log_event
+  - mcp__autocodabench__autocodabench_init_bundle
+  - mcp__autocodabench__autocodabench_write_competition_yaml
+  - mcp__autocodabench__autocodabench_write_page
+  - mcp__autocodabench__autocodabench_write_scoring_program
+  - mcp__autocodabench__autocodabench_write_ingestion_program
+  - mcp__autocodabench__autocodabench_write_solution
+  - mcp__autocodabench__autocodabench_attach_data
+  - mcp__autocodabench__autocodabench_validate_bundle
+  - mcp__autocodabench__autocodabench_zip_bundle
 allowedTools:
   - Read(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/plan/implementation_plan.md)
   - Read(./experiments/bundle_creation_test/competitions/*/input/sample_data/**)
@@ -54,11 +74,32 @@ zip of it).
 - If the plan is ambiguous on a point, **make a defensible choice and
   record it** in `decisions.md` at the bundle root. Do NOT ask the user
   — you are running unattended.
+- **No hand-build fallback.** If you cannot see `mcp__autocodabench__*`
+  tools at the start of step 1 (e.g. the MCP server isn't registered in
+  your sandbox), DO NOT write `competition.yaml`, `scoring_program/`,
+  etc. by hand using Write/Edit. The autocodabench MCP tools are the
+  reference implementation; writing yaml by hand will reliably miss
+  schema details that the validator catches (it did exactly that on
+  2026-05-30: missing leaderboard-level `index`). Instead, return
+  immediately with `status=fail`, `error="MCP server unavailable in
+  subagent sandbox — cannot author bundle per skill body. Check the
+  agent's tools: list includes the required mcp__autocodabench__*
+  entries and that the parent session has the MCP server registered."`
+  This surfaces an environment defect cleanly instead of producing a
+  silently-broken bundle.
+- **Validator is mandatory before claiming pass.** Step 6 calls
+  `autocodabench_validate_bundle()` and MUST succeed (exit 0, zero
+  issues) before you return `status=pass`. A "manual lint" or visual
+  inspection does NOT substitute — the validator catches schema
+  defects (like the leaderboard-index issue) that humans miss.
 
 ## Process
 
 1. **Open the MCP run** with
    `autocodabench_open_run(run_dir="<bundle_dir>/auto_codabench_run")`.
+   If this tool is not in your available tools list, stop with the
+   "MCP server unavailable" failure described in Hard rules above —
+   the no-fallback rule applies.
 2. **Read the plan** end to end from `plan_path`. Re-read targeted
    sections during construction.
 3. **Survey the dataset** — Glob and sample-Read inside `sample_data_dir/`:
