@@ -107,6 +107,29 @@ your honor-system reminders so you don't waste tool-calls trying)
    decision you make where the proposal was unclear, silent, or
    ambiguous — you'll record these in step 7's inventory. Don't
    suppress these decisions; surfacing them is the whole point.
+
+   **Dataset choice — prefer the real data when possible.** When
+   `input_dir/sample_data/` contains substantive data (>10 files
+   typically, with a meaningful structure), the plan should use that
+   data directly for `input_data` / `reference_data` / `public_data`
+   / `starting_kit` — even if the original task is bigger than v1's
+   compute envelope. The implementer can subset (first N samples,
+   downsampled images, etc.) but should not re-cast the entire task
+   to a sklearn synthetic surrogate just because the original is
+   GPU/CNN-heavy. Re-casting is permissible only when:
+   - the provided sample_data is empty / trivial / doesn't match the
+     proposal's task (rare), OR
+   - the original task fundamentally requires resources the
+     experiment harness can't provide (e.g., 100 GB of pretraining
+     data), AND
+   - you record the re-cast as a `would_block_correct_scoring=true`
+     item in the missing-info inventory with `confidence=low`
+     (because the score-vs-expected comparison in step 5 is then
+     measuring something quite different from the original task).
+   The 5/30 plan re-cast Style-Trans-Fair's GPU/CNN problem to a
+   sklearn tabular surrogate; with 33 MB of real image data sitting
+   in sample_data/ that was the wrong call. Use the real data
+   directly; subset if needed.
 5. **Snapshot the plan** via `autocodabench_snapshot_spec(name="implementation_plan", ...)`.
    The MCP server writes it to `<plan_dir>/auto_codabench_run/specs/implementation_plan.md`.
 6. **Materialize the contract copy** — also Write the same plan content

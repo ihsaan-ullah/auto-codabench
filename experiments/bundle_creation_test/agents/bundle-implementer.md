@@ -8,6 +8,11 @@ tools:
   - Glob
   - Grep
   - Skill
+  - Bash    # narrow patterns below — required to actually RUN python scripts
+            # for data generation, baseline training, and scoring-program
+            # smoke-tests. Without Bash the implementer can write code but
+            # can't execute it, which forced the 5/30 run to fabricate
+            # data values by hand. See "Code execution policy" in the body.
   # MCP tool names must be enumerated here (the `tools:` field is the
   # actual capability whitelist; `allowedTools:` below is path/arg scoping
   # for those capabilities). Wildcards (mcp__autocodabench__*) do NOT work
@@ -42,6 +47,18 @@ allowedTools:
   - Skill(autocodabench-implement)
   - Skill(codabench-bundle)
   - mcp__autocodabench__*
+  # Narrow Bash patterns — execution capability is required to RUN data
+  # generators, baselines, and the scoring program; the patterns are
+  # scoped to the implementer's own run dir and the public sample_data.
+  # Anything that needs Bash MUST first be Written to disk so it's
+  # auditable; ad-hoc `python -c "..."` is also allowed for quick
+  # introspection (e.g. checking sklearn versions, sanity-printing
+  # array shapes).
+  - Bash(python:*)
+  - Bash(mkdir -p ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**:*)
+  - Bash(cp:*)
+  - Bash(ls:*)
+  - Bash(rm -rf ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle/**/__pycache__:*)
 permissionMode: dontAsk
 ---
 
@@ -68,8 +85,11 @@ zip of it).
   - any ground-truth submission (`<comp>/ground_truth/sample_submissions/**`)
   - any other run's plan or bundle
   - Phase 1's chat history (you never see it — fresh subagent)
-- You CANNOT run shell commands (no Bash). All bundle work goes through
-  the `mcp__autocodabench__*` tools (+ Read/Write/Edit/Glob/Grep).
+- You HAVE narrow Bash access — see "Code execution policy" below.
+  Most bundle authoring goes through the `mcp__autocodabench__*` tools
+  (+ Read/Write/Edit/Glob/Grep); Bash is reserved for *running* the
+  Python you `Write` (synthetic data generation, baseline training,
+  scoring-program smoke-test).
 - You CANNOT spawn subagents.
 - If the plan is ambiguous on a point, **make a defensible choice and
   record it** in `decisions.md` at the bundle root. Do NOT ask the user
@@ -92,6 +112,43 @@ zip of it).
   issues) before you return `status=pass`. A "manual lint" or visual
   inspection does NOT substitute — the validator catches schema
   defects (like the leaderboard-index issue) that humans miss.
+
+## Code execution policy
+
+Without Bash, the implementer can WRITE a `generate_data.py` but cannot
+RUN it — that forces fabricating data values by hand (the 5/30
+failure mode you should not repeat). With narrow Bash, the contract is:
+
+- **Prefer real data.** If `<comp>/input/sample_data/` has substantive
+  data, use it directly: `cp -r` (or symlink) the relevant files into
+  your bundle's `input_data/`, `reference_data/`, `public_data/`, or
+  `starting_kit/` per the plan. Synthetic generation is only
+  appropriate when the plan explicitly requires it (e.g., the planner
+  re-cast the task to a tabular surrogate) OR when no usable real
+  data exists.
+- **All executable code goes to disk first.** If you need to run
+  `make_classification`, `train_test_split`, or anything else: WRITE
+  the script to `bundle/<slug>/<some_descriptive_name>.py` (e.g.
+  `generate_data.py`, `train_baseline.py`), THEN `Bash(python ...)`
+  it. The script becomes a reproducible artifact organizers ship
+  alongside the data. Ad-hoc `python -c "..."` is allowed for quick
+  introspection (numpy shape checks, sklearn version probes) but is
+  NOT a way to author bundle files — those go to disk first.
+- **Smoke-test the scoring program once.** After
+  `autocodabench_write_scoring_program(...)` and
+  `autocodabench_attach_data(target="reference_data", ...)`, run
+  `python bundle/<slug>/solutions/sample_code_submission/model.py`
+  (or the equivalent for the bundle's chosen submission flow) through
+  `bundle/<slug>/scoring_program/score.py` and verify the produced
+  `scores.json` parses + the metric value is in the documented range.
+  This is the implementer's last chance to catch
+  scoring-program-vs-data-shape mismatches before the per-sub run
+  in step 5 surfaces them.
+- **Bash is not a forbidden-read escape hatch.** The hard rules above
+  still apply — Python opened via Bash is bound by the same
+  no-read-input/report.pdf / no-read-ground_truth/ discipline. Don't
+  write scripts that read those paths. The orchestrator spot-checks
+  this when assembling the missing-info inventory; cheating shows up.
 
 ## Process
 
