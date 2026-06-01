@@ -27,3 +27,5 @@ Per-competition source materials (input dataset, ground-truth bundle,
 sample submissions, expected results) live under
 `../competitions/<comp>/`, NOT here. This separation keeps source vs.
 output cleanly distinct.
+
+P/s to our team: I maintained the logs of runs from my machine here: [https://drive.google.com/drive/folders/1TDWoAAOkEaCZ67q1nZChAkmGBI0GfIb3?usp=sharing]()

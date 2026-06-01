@@ -11,6 +11,14 @@ allowedTools:
   - Read(./experiments/bundle_creation_test/competitions/*/ground_truth/sample_submissions/*/expected_result.json)
   - Read(./experiments/bundle_creation_test/competitions/*/input/sample_data/**)
   - Write(./experiments/bundle_creation_test/runs/*/[0-9a-f]*/submission_run/**)
+  # Python invocations go through `conda run -n <env_name> python ...`
+  # — the orchestrator's step-5b prepared a per-run env and the agent
+  # is told the env_name in its prompt. Direct `python ...` is also
+  # allowed (e.g. for parsing scores.json or sanity-printing) but the
+  # scoring program / submission MUST run inside the cloned env so
+  # they see the installed deps.
+  - Bash(conda run -n acb-run-* python:*)
+  - Bash(conda run -n acb-run-* which:*)
   - Bash(python:*)
   - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/bundle:*)
   - Bash(ls ./experiments/bundle_creation_test/runs/*/[0-9a-f]*/reformatted_submission:*)
@@ -30,6 +38,10 @@ program locally and write the score + comparison to disk.
 - `submission_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
 - `expected_result_path`: `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/expected_result.json`
 - `out_dir`: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/`
+- `env_name`: the conda env the orchestrator prepared in step 5b (e.g.
+  `acb-run-02969776_20260530`). The bundle's scoring program and the
+  submission's model code MUST be executed inside this env so they see
+  the deps it installed.
 
 ## Hard rules
 
@@ -40,8 +52,17 @@ program locally and write the score + comparison to disk.
     original code — your input is the *reformatted* version)
   - `<comp>/ground_truth/bundle/**` (the golden bundle)
   - any other run's outputs
-- All Python invocations through `python:*` Bash patterns. No package
-  installs (no `pip`), no shell escapes.
+- **All scoring-program and submission invocations go through
+  `conda run -n <env_name> python ...`** — never bare `python` for those.
+  The orchestrator prepared the env in step 5b; you are a pure
+  executor and have **no permission to pip install** anything. If a
+  `ModuleNotFoundError` surfaces during the run, capture it verbatim
+  in stderr.txt and return `status=fail` with the import name in
+  `error` — that's a step-5b defect (incomplete requirements) for the
+  orchestrator to surface, not yours to patch. Bare `python ...` is
+  allowed only for orchestrator-side helpers (parsing scores.json,
+  sanity-printing array shapes) where the cloned env isn't relevant.
+- No `pip`, no `conda install`, no shell escapes.
 - All file writes inside `<out_dir>/`. The sandbox you create lives at
   `<out_dir>/sandbox/`.
 
@@ -65,10 +86,14 @@ program locally and write the score + comparison to disk.
      submission to produce predictions, then `score.py` consumes them.
    The bundle's own `solutions/sample_code_submission/` (canonical
    example) should be runnable as documentation of the flow.
-3. **Run** with `python` inside the sandbox. Capture stdout, stderr,
-   exit code, wall-clock duration. Write to `<out_dir>/stdout.txt`,
-   `<out_dir>/stderr.txt`. Tee the relevant bits into
-   `<out_dir>/run_log.txt`.
+3. **Run** with `conda run -n <env_name> python ...` inside the sandbox.
+   Capture stdout, stderr, exit code, wall-clock duration. Write to
+   `<out_dir>/stdout.txt`, `<out_dir>/stderr.txt`. Tee the relevant bits
+   into `<out_dir>/run_log.txt`. If exit code is non-zero AND the stderr
+   tail contains `ModuleNotFoundError: No module named '<X>'`, this is
+   diagnostically valuable — surface `<X>` verbatim in the final
+   message's `error` field so the orchestrator can attribute the
+   failure to step-5b's requirements rather than a bundle defect.
 4. **Parse the score.** The scoring program writes `scores.json` or
    `scores.txt` to its output dir per Codabench convention. Read it,
    pull out the primary metric (the leaderboard's first column key in

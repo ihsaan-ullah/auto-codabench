@@ -75,7 +75,7 @@ SHORT_SHA=$(git rev-parse --short=8 HEAD)
 UTC_TS=$(date -u +%Y%m%d_%H%M%S)
 RUN_ID="${SHORT_SHA}_${UTC_TS}"
 BRANCH=$(git branch --show-current)
-mkdir -p experiments/bundle_creation_test/runs/<comp>/${RUN_ID}/{plan,bundle,validation,reformatted_submission,submission_run}
+mkdir -p experiments/bundle_creation_test/runs/<comp>/${RUN_ID}/{plan,bundle,validation,reformatted_submission,env,submission_run}
 ```
 
 (The run_id starts with a hex character — this matches the
@@ -158,14 +158,20 @@ Prompt:
 
 Stop on fail.
 
-### 5. Per-submission reformat + run (loop over every sub_N)
+### 5. Per-submission reformat → prepare env → run
+
+This phase is split into THREE separate manifest entries
+(`reformat_all`, `prepare_env`, `run_all`) so failure attribution is
+clean: a missing pip package isn't a bundle defect, a bad metric in
+`score.py` isn't an env problem, and a mis-shaped reformatted
+submission isn't either. Each sub-step's failure stops the phase at
+its boundary with its own `fail_at_<name>` value.
+
+#### 5a. Reformat all subs (manifest entry: `reformat_all`)
 
 For each `sub_N` directory under
-`<comp>/ground_truth/sample_submissions/`:
-
-#### 5a. Spawn `submission-reformatter` via Task
-
-Prompt:
+`<comp>/ground_truth/sample_submissions/`, spawn
+`submission-reformatter` via Task:
 
 > Reformat the ground-truth submission code under
 > `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/submission/`
@@ -174,40 +180,136 @@ Prompt:
 > (or whatever the bundle's submission interface is — read the bundle).
 > Output to `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`.
 
-#### 5b. Spawn `submission-runner` via Task
+Run **all** reformatters before moving on (don't short-circuit on the
+first failure — the user wants to see the full pattern across subs).
+Aggregate into one steps entry:
 
-Prompt:
+```json
+{
+  "name": "reformat_all",
+  "status": "pass" | "fail",
+  "submissions": [
+    { "sub": "sub_1", "reformat_status": "pass", "interface_summary": "...", "artifacts": ["reformatted_submission/sub_1/..."] }
+  ]
+}
+```
+
+`status = pass` iff every sub's `reformat_status == "pass"`. On fail:
+`overall_status = "fail_at_reformat_all"`. Skip 5b and 5c and jump to
+the post-pipeline steps (6 fallback log copy, 7 missing-info aggregate,
+8 finalize) — the env-prep is wasted work without reformatted code to
+scan, and there's nothing to run.
+
+#### 5b. Prepare execution env (manifest entry: `prepare_env`)
+
+A per-run conda env cloned from `base`, with all bundle + submission
+deps installed via `uv`. The 6/30 run hit a `ModuleNotFoundError:
+skimage` here because the submission's deep-learning deps aren't in
+base; this step is what makes that go away.
+
+Choose env name from the run_id: `ENV_NAME="acb-run-${RUN_ID:0:16}"`
+(truncate so conda accepts it).
+
+Run in sequence (record stdout/stderr to `<run_root>/env/`):
+
+```bash
+RUN_ROOT="./experiments/bundle_creation_test/runs/<comp>/<run_id>"
+ENV_NAME="acb-run-${RUN_ID:0:16}"
+ENV_LOG="$RUN_ROOT/env"
+mkdir -p "$ENV_LOG"
+
+# 1. Clone base
+conda create -n "$ENV_NAME" --clone base -y \
+  > "$ENV_LOG/clone.stdout" 2> "$ENV_LOG/clone.stderr"
+
+# 2. Resolve the cloned env's python
+ENV_PYTHON=$(conda run -n "$ENV_NAME" which python)
+
+# 3. Collect requirements (bundle reqs + AST-scan of reformatted subs)
+python ./experiments/bundle_creation_test/scripts/collect_env_requirements.py \
+  --bundle-dir "$RUN_ROOT/bundle/<slug>/" \
+  --reformatted-dir "$RUN_ROOT/reformatted_submission/" \
+  > "$ENV_LOG/requirements.txt"
+
+# 4. Install with uv (Rust binary; targets the cloned env via --python
+#    without needing to be installed inside it). Fall back to plain
+#    pip if `uv` is not on PATH.
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --python "$ENV_PYTHON" -r "$ENV_LOG/requirements.txt" \
+    > "$ENV_LOG/install.stdout" 2> "$ENV_LOG/install.stderr"
+  INSTALL_METHOD="uv"
+else
+  conda run -n "$ENV_NAME" pip install -r "$ENV_LOG/requirements.txt" \
+    > "$ENV_LOG/install.stdout" 2> "$ENV_LOG/install.stderr"
+  INSTALL_METHOD="pip"
+fi
+```
+
+Append manifest entry:
+
+```json
+{
+  "name": "prepare_env",
+  "status": "pass" | "fail",
+  "env_name": "<ENV_NAME>",
+  "requirements_path": "env/requirements.txt",
+  "package_count": <int>,
+  "install_method": "uv" | "pip",
+  "duration_s": <float>,
+  "error": null | "<first stderr line / exit-code summary>"
+}
+```
+
+Failure conditions (any of): conda clone exits non-zero; the collect
+script exits non-zero or emits an empty requirements file when the
+bundle has non-empty ingestion/scoring requirements; install exits
+non-zero. On fail: `overall_status = "fail_at_prepare_env"`, skip 5c,
+proceed to steps 6+. **Do NOT attempt recovery** — env-prep failure is
+the experiment's diagnostic data, not something to paper over.
+
+#### 5c. Run all subs (manifest entry: `run_all`)
+
+For each `sub_N` under `<run_root>/reformatted_submission/`, spawn
+`submission-runner` via Task with the env name from 5b passed in:
 
 > Execute the reformatted submission at
 > `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
 > through the scoring program in
 > `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/scoring_program/`.
+>
+> env_name: `<ENV_NAME>` — the conda env prepared in step 5b. Wrap
+> every python invocation in `conda run -n <env_name> python ...`. You
+> do NOT have permission to pip install; if a dep is missing, that's a
+> step-5b defect, not a step-5c one — surface the ModuleNotFoundError
+> and let the orchestrator stop the phase.
+>
 > Compare against
 > `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/expected_result.json`.
 > Write artifacts to
 > `./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/`.
 
-Aggregate into a single `steps` entry:
+Run **all** subs before deciding pass/fail (same rationale as 5a —
+the full pattern across subs is what the user wants to see). Aggregate
+into one steps entry:
 
 ```json
 {
-  "name": "reformat_and_run",
+  "name": "run_all",
   "status": "pass" | "fail",
   "submissions": [
     {
       "sub": "sub_1",
-      "reformat_status": "...", "interface_summary": "...",
-      "run_status": "...", "score": ..., "expected": ..., "delta": ..., "within_tolerance": ...,
-      "artifacts": ["reformatted_submission/sub_1/...", "submission_run/sub_1/score.json"]
+      "run_status": "pass", "score": 0.0, "expected": 0.0, "delta": 0.0, "within_tolerance": true,
+      "artifacts": ["submission_run/sub_1/score.json"]
     }
   ]
 }
 ```
 
-The top-level `status` is `pass` iff every sub_N's
-`run_status == "pass"` AND every `within_tolerance == true`. Otherwise
-`fail`. **Run all subs before deciding** — partial failure should not
-skip the remaining subs; the user wants to see the full pattern.
+`status = pass` iff every sub has `run_status == "pass"` AND
+`within_tolerance == true`. On fail:
+`overall_status = "fail_at_run_all/sub_N"` (record the first failing
+sub for quick lookup).
 
 ### 6. Fallback log copy (only if needed)
 
@@ -259,9 +361,15 @@ Process:
 
 ### 8. Finalize
 
+- **Cleanup the conda env** (if 5b created one): `conda env remove -n
+  "$ENV_NAME" -y`. Do this whether 5b passed or failed — the env is
+  per-run scratch and the manifest preserves its `requirements.txt`
+  for reproducibility. On removal failure: log to manifest's
+  `prepare_env.env_removed_at = null`, but do NOT change
+  overall_status (env hygiene is best-effort, not a correctness gate).
 - Set `finished_at` to current ISO-UTC.
-- Set `overall_status = "pass"` if every step (incl. every sub_N in
-  step 5) passed, else `fail_at_<first_failed_step>`.
+- Set `overall_status = "pass"` if every step (incl. 5a/5b/5c and
+  every sub_N in 5c) passed, else `fail_at_<first_failed_step>`.
 - Write the final `manifest.json`.
 - Write `run_report.md` (next section) — this is the human-readable
   twin of `manifest.json` + `missing_info_report.json` and is the
@@ -304,17 +412,22 @@ headings verbatim so meta-analysis tools can grep across reports:
 
 ## Summary table
 
-| step       | status | notes |
-|------------|--------|-------|
-| plan       | {pass|fail|—} | {one-line: sections covered, citation count, info-gap counts (X critical, Y would-block-scoring), completeness} |
-| implement  | {pass|fail|—} | {one-line: slug, bundle size, validator-clean=Y/N, plan-gap count} |
-| validate   | {pass|fail|—} | {one-line: exit code, first error if any} |
-| sub_<N>    | {pass|fail|—} | {one-line per sub_N: actual vs expected, delta, within_tolerance} |
-| ...        | ...    | ... |
+| step         | status | notes |
+|--------------|--------|-------|
+| plan         | {pass|fail|—} | {one-line: sections covered, citation count, info-gap counts (X critical, Y would-block-scoring), completeness} |
+| implement    | {pass|fail|—} | {one-line: slug, bundle size, validator-clean=Y/N, plan-gap count, scoring+ingestion requirements.txt present=Y/N} |
+| validate     | {pass|fail|—} | {one-line: exit code, first error if any} |
+| reformat_all | {pass|fail|—} | {one-line: N subs reformatted, interface adapted to, first failure if any} |
+| prepare_env  | {pass|fail|—} | {one-line: env name, package count, install method (uv/pip), duration; first stderr line if fail} |
+| run_all      | {pass|fail|—} | {one-line: K/N subs passed within tolerance} |
+| sub_<N>      | {pass|fail|—} | {one-line per sub_N: actual vs expected, delta, within_tolerance} |
+| ...          | ...    | ... |
 
 (Rows for stages that never ran show status `—` and a "not reached"
 note. Don't omit them — the table's row pattern is part of the
-contract for cross-run rendering.)
+contract for cross-run rendering. `prepare_env`'s "not reached"
+typically means `reformat_all` failed; `run_all`'s typically means
+`prepare_env` failed.)
 
 ---
 
@@ -383,6 +496,7 @@ planner's rationale verbatim.)
 - Bundle zip: `bundle/{slug}/{slug}.zip` ({"produced by implementer" | "produced by orchestrator fallback" | "not produced"})
 - Validation report: `validation/report.txt`
 - Reformatted submissions: `reformatted_submission/` ({K} subs)
+- Env prep: `env/requirements.txt` ({M} packages), `env/install.stdout`, `env/install.stderr` (install_method: {uv|pip|—})
 - Submission runs: `submission_run/` ({K} subs)
 - Missing-info report: `missing_info_report.json` ({N} items)
 - Manifest: `manifest.json`
@@ -405,14 +519,17 @@ the chat against what landed on disk.
 ```
 Experiment: <comp> · run_id: <run_id> · status: pass | fail_at_<step>
 
-| step       | status | notes                                                          |
-|------------|--------|----------------------------------------------------------------|
-| plan       | pass   | 7 sections, N citations, M info gaps (X critical)              |
-| implement  | pass   | slug: <slug>, bundle <N> KB, validator-clean=true, K plan-gaps |
-| validate   | pass   | exit 0                                                         |
-| sub_1      | pass   | actual 0.000, expected 0.000, Δ 0.000 (within 0.001 tolerance) |
-| sub_2      | pass   | actual 0.303, expected 0.303, Δ 0.000 (within 0.001 tolerance) |
-| ...        | ...    |                                                                |
+| step         | status | notes                                                             |
+|--------------|--------|-------------------------------------------------------------------|
+| plan         | pass   | 7 sections, N citations, M info gaps (X critical)                 |
+| implement    | pass   | slug: <slug>, bundle <N> KB, validator-clean=true, K plan-gaps    |
+| validate     | pass   | exit 0                                                            |
+| reformat_all | pass   | N/N subs adapted to <interface_summary>                           |
+| prepare_env  | pass   | env acb-run-<...>, M packages via uv, <D>s                        |
+| run_all      | pass   | K/N subs within tolerance                                         |
+| sub_1        | pass   | actual 0.000, expected 0.000, Δ 0.000 (within 0.001 tolerance)    |
+| sub_2        | pass   | actual 0.303, expected 0.303, Δ 0.000 (within 0.001 tolerance)    |
+| ...          | ...    |                                                                   |
 
 Missing-info report: <M+K> items total
   by impact:    bundle_functionality=A, deployment_polish=B, participant_experience=C

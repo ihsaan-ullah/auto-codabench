@@ -27,8 +27,13 @@ experiments/bundle_creation_test/
 ├── bundle_validator.py                  # validator script (vendored, used by step 4)
 ├── setup.sh                             # one-time: symlinks agents+skill into .claude/
 ├── scripts/
-│   └── aggregate_missing_info.py        # cross-run meta-analysis over missing_info_report.json files
-│                                        #   (see MISSING_INFO.md §"Meta-analysis pattern" for jq alternatives)
+│   ├── aggregate_missing_info.py        # cross-run meta-analysis over missing_info_report.json files
+│   │                                    #   (see MISSING_INFO.md §"Meta-analysis pattern" for jq alternatives)
+│   └── collect_env_requirements.py      # called by SKILL.md step 5b — unions
+│                                        #   bundle's per-program requirements.txt
+│                                        #   files with AST-scanned imports from the
+│                                        #   reformatted submissions; output piped to
+│                                        #   `uv pip install -r -`.
 ├── skills/
 │   └── bundle-creation-test/
 │       └── SKILL.md                     # ORCHESTRATOR — loaded into top-level conversation;
@@ -82,6 +87,12 @@ experiments/bundle_creation_test/
             ├── reformatted_submission/
             │   └── sub_<N>/             # one subdir per ground-truth submission
             │       └── submission.py
+            ├── env/                     # step-5b env-prep artifacts (cloned conda env
+            │   ├── requirements.txt     #   itself lives in conda's envs/ dir, not here;
+            │   ├── clone.stdout         #   the run dir keeps the logs that reproduce it)
+            │   ├── clone.stderr
+            │   ├── install.stdout
+            │   └── install.stderr
             └── submission_run/
                 └── sub_<N>/             # one subdir per ground-truth submission
                     ├── sandbox/         # ephemeral execution workspace
@@ -100,7 +111,9 @@ experiments/bundle_creation_test/
 | 2 | Plan | `bundle-planner` | `<comp>/input/**` (incl. sample_data) | `<run>/plan/implementation_plan.md` |
 | 3 | Implement | `bundle-implementer` | `<run>/plan/implementation_plan.md` + `<comp>/input/sample_data/**` only | `<run>/bundle/<slug>/...` + `.zip` |
 | 4 | Validate | `bundle-validator-runner` | `<run>/bundle/**` + `bundle_validator.py` | `<run>/validation/report.txt` |
-| 5 | Reformat + run per submission | `submission-reformatter` then `submission-runner`, **looped over every `<comp>/ground_truth/sample_submissions/sub_*/`** | reformatter: `sub_N/submission/**` + bundle interface; runner: reformatted submission + bundle + `sub_N/expected_result.json` | `<run>/reformatted_submission/sub_N/`, `<run>/submission_run/sub_N/score.json` |
+| 5a | Reformat all subs | `submission-reformatter`, **looped over every `<comp>/ground_truth/sample_submissions/sub_*/`** | `sub_N/submission/**` + bundle interface | `<run>/reformatted_submission/sub_N/` |
+| 5b | Prepare execution env | _(orchestrator, no subagent)_ | bundle's per-program `requirements.txt` + AST-scan of `<run>/reformatted_submission/**` | `<run>/env/` (logs); conda env `acb-run-<short_run_id>` |
+| 5c | Run all subs | `submission-runner`, looped per sub, executing via `conda run -n <env_name> python …` | reformatted submission + bundle + `sub_N/expected_result.json` | `<run>/submission_run/sub_N/score.json` |
 
 Every step is a **fresh subagent** spawned by the `bundle-creation-test`
 skill (loaded into the top-level Claude Code session) via the Task tool.
@@ -142,7 +155,7 @@ codify that discipline.
 | `bundle-implementer` | Read, Write, Edit, Glob, Grep, Skill, MCP autocodabench | `<run>/plan/implementation_plan.md` **only** from plan side; `<comp>/input/sample_data/**` (no paper); `auto_codabench/skills/**`; own `bundle/**` | own `bundle/**` only |
 | `bundle-validator-runner` | Read, Write, Bash (validator only) | own `bundle/**`, the validator script | own `validation/**` only |
 | `submission-reformatter` | Read, Write, Edit, Glob, Grep | `<comp>/ground_truth/sample_submissions/*/submission/**`, own `bundle/**` | own `reformatted_submission/sub_*/` only |
-| `submission-runner` | Read, Write, Bash (narrow) | own `bundle/**`, own `reformatted_submission/**`, `<comp>/ground_truth/sample_submissions/*/expected_result.json`, `<comp>/input/sample_data/**` | own `submission_run/sub_*/` only |
+| `submission-runner` | Read, Write, Bash (narrow — incl. `conda run -n acb-run-* python:*`, NO pip/conda-install) | own `bundle/**`, own `reformatted_submission/**`, `<comp>/ground_truth/sample_submissions/*/expected_result.json`, `<comp>/input/sample_data/**` | own `submission_run/sub_*/` only |
 
 `permissionMode: dontAsk` in every agent: anything outside the allowlist is
 a **hard deny**, not a permission prompt — important for unattended runs.
@@ -177,23 +190,29 @@ their shell can reach. We mitigate by:
     "sub_1": { "metric": "geometric_mean_accuracy_metric", "score": 0.0, "tolerance": 0.001 }
   },
   "steps": [
-    { "name": "plan",      "status": "pass", "agent_summary": "...", "artifacts": ["plan/implementation_plan.md"] },
-    { "name": "implement", "status": "pass", "slug": "style-trans-fair", "artifacts": ["bundle/.../<slug>.zip"] },
-    { "name": "validate",  "status": "pass", "exit_code": 0, "artifacts": ["validation/report.txt"] },
+    { "name": "plan",         "status": "pass", "agent_summary": "...", "artifacts": ["plan/implementation_plan.md"] },
+    { "name": "implement",    "status": "pass", "slug": "style-trans-fair", "artifacts": ["bundle/.../<slug>.zip"] },
+    { "name": "validate",     "status": "pass", "exit_code": 0, "artifacts": ["validation/report.txt"] },
     {
-      "name": "reformat_and_run", "status": "pass",
+      "name": "reformat_all", "status": "pass",
       "submissions": [
-        {
-          "sub": "sub_1",
-          "reformat_status": "pass",
-          "interface_summary": "class model: def fit(...), def predict(...)",
-          "run_status": "pass",
+        { "sub": "sub_1", "reformat_status": "pass", "interface_summary": "class model: def fit(...), def predict(...)",
+          "artifacts": ["reformatted_submission/sub_1/submission.py"] }
+      ]
+    },
+    {
+      "name": "prepare_env",  "status": "pass",
+      "env_name": "acb-run-02969776_20260530",
+      "requirements_path": "env/requirements.txt",
+      "package_count": 14, "install_method": "uv", "duration_s": 23.4,
+      "error": null
+    },
+    {
+      "name": "run_all",      "status": "pass",
+      "submissions": [
+        { "sub": "sub_1", "run_status": "pass",
           "score": 0.0, "expected": 0.0, "delta": 0.0, "within_tolerance": true,
-          "artifacts": [
-            "reformatted_submission/sub_1/submission.py",
-            "submission_run/sub_1/score.json"
-          ]
-        }
+          "artifacts": ["submission_run/sub_1/score.json"] }
       ]
     }
   ],
@@ -201,12 +220,13 @@ their shell can reach. We mitigate by:
 }
 ```
 
-On any failure, `overall_status` becomes `fail_at_<step_name>` (or
-`fail_at_reformat_and_run/sub_N` for a specific submission failure inside
-step 5) and the failing entry includes the subagent's verbatim error
-message. Step 5 fails as a whole if **any** submission fails — but the
-orchestrator runs all submissions before deciding, so the manifest shows
-per-sub results even on failure.
+On any failure, `overall_status` becomes `fail_at_<step_name>` —
+`fail_at_reformat_all`, `fail_at_prepare_env`, or
+`fail_at_run_all/sub_N` for the three new sub-phases of step 5.
+`prepare_env` is the only one of the three that can stop the pipeline
+before its loop completes; both `reformat_all` and `run_all` run every
+sub before deciding the aggregate status, so the manifest shows the
+full per-sub pattern even when one sub fails.
 
 ---
 
@@ -223,6 +243,30 @@ picks them up under its standard discovery path. It also makes sure
 `auto_codabench/skills/plan/` (the skill name and dir name differ).
 
 `.claude/` stays gitignored apart from the symlinks pointing back here.
+
+### Host runtime expectations
+
+Step 5b prepares the per-run execution env via:
+
+- `conda` — clones `base` into `acb-run-<short_run_id>`. Required.
+- `uv` — installs pip packages into the cloned env (`uv pip install
+  --python <env>/bin/python -r ...`). Strongly recommended for speed;
+  the orchestrator falls back to `conda run -n <env> pip install ...`
+  if `uv` is not on PATH (slower; recorded in the manifest's
+  `prepare_env.install_method` field).
+
+Install hints:
+
+```bash
+# uv (one-liner; see https://docs.astral.sh/uv/ for alternatives)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+The bundle's `docker_image` declares the *real* Codabench runtime;
+this conda+uv env is the harness's local stand-in so the pipeline can
+score the bundle without docker. The bundle ships as specified to real
+Codabench either way — see `agents/bundle-implementer.md`'s
+BASELINE FAITHFULNESS rule.
 
 ---
 
@@ -269,14 +313,32 @@ top-level Claude then follows the skill's recipe. The orchestrator:
 1. Computes a `run_id` = `<short_sha>_<utc_ts>`.
 2. Creates `experiments/bundle_creation_test/runs/<comp>/<run_id>/`
    and writes an initial `manifest.json`.
-3. Spawns the 5 step-agents in order. For step 5 it loops over every
-   `<comp>/ground_truth/sample_submissions/sub_*/`, spawning a reformatter
-   + runner pair per sub.
+3. Spawns the step-agents in order. Step 5 is now three sub-phases:
+   - **5a `reformat_all`** — loop over `sub_*/`, spawn the reformatter
+     for each, run all before deciding pass/fail.
+   - **5b `prepare_env`** — clone `base` conda env to
+     `acb-run-<short_run_id>`, union the bundle's per-program
+     `requirements.txt` files with AST-scanned imports from the
+     reformatted submissions, and install with `uv pip install
+     --python <env>/bin/python` (falls back to `pip` if `uv` isn't
+     on PATH). Logs go to `<run>/env/`.
+   - **5c `run_all`** — loop over `sub_*/`, spawn the runner for
+     each. Every python invocation is wrapped in
+     `conda run -n acb-run-<...> python ...` so the bundle's scoring
+     program and the submission's model code see the deps step 5b
+     installed.
 4. After each subagent returns, parses its JSON final message into
    `manifest.steps[]` and updates `overall_status`.
-5. On the first failure in steps 1–4, records and stops. In step 5,
-   continues through all subs but marks `overall_status = "fail_at_..."`
-   if any sub fails.
+5. Stops on the first failure in steps 1–4. In step 5, each sub-phase
+   (5a / 5b / 5c) decides its own pass/fail and can stop the pipeline:
+   5a and 5c finish their loops before deciding (the manifest shows
+   the full per-sub pattern even on failure); 5b is single-shot. After
+   any 5a/5b/5c failure, the orchestrator skips the rest of step 5 and
+   proceeds to steps 6+ (fallback log copy, missing-info aggregate,
+   finalize, run_report.md).
+6. On finalize, removes the conda env (`conda env remove -n
+   acb-run-<...> -y`); the env's `requirements.txt` is preserved in
+   `<run>/env/` so the runtime is reproducible from logs.
 6. Prints a one-screen summary table.
 
 You can have multiple runs per competition sample (one per `<run_id>`

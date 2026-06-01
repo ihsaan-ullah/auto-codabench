@@ -172,6 +172,34 @@ zip of it).
   inspection does NOT substitute — the validator catches schema
   defects (like the leaderboard-index issue) that humans miss.
 
+- **Per-program `requirements.txt` are mandatory.** Whenever you call
+  `autocodabench_write_scoring_program(...)`, you MUST also Write
+  `<bundle>/<slug>/scoring_program/requirements.txt`. Whenever you call
+  `autocodabench_write_ingestion_program(...)`, you MUST also Write
+  `<bundle>/<slug>/ingestion_program/requirements.txt`. One pip package
+  per line; pin versions only when the plan explicitly names them;
+  otherwise leave unpinned and let pip resolve. Include every
+  non-stdlib top-level import the program's `.py` files actually use
+  (e.g. `numpy`, `pandas`, `scikit-learn`) — do not list stdlib
+  modules (`os`, `json`, `pathlib`, …), do not list packages you don't
+  use. An empty file is acceptable if the program is pure-stdlib;
+  prefer that over a missing file.
+
+  These files are Codabench-native — they ship with the bundle to
+  real Codabench and are what its docker_image-on-top-of-pip resolver
+  uses. They are ALSO consumed by the experiment harness's step-5b
+  env prep, which is why their presence is mandatory here:
+  the orchestrator's `conda create --clone base` then
+  `uv pip install -r <union>` step reads these to materialise a
+  runtime; missing them forces the harness to fall back to
+  AST-scanning the submission code, which is strictly less reliable.
+  Submission-side runtime deps (e.g. `tensorflow`, `scikit-image`
+  used by the participant's model) do NOT belong in either
+  requirements.txt — those are the bundle's `docker_image`'s job on
+  real Codabench, and the harness handles them via the submission
+  scan. List only what `scoring_program/score.py` (or
+  `ingestion_program/ingestion.py`) themselves import.
+
 ## Code execution policy
 
 Bash exists so you can RUN Python that **transforms the real data**
@@ -268,6 +296,10 @@ data — see the ABSOLUTE PROHIBITION in Hard Rules above.
    - `autocodabench_write_page(kind="overview" | "evaluation" | "terms" | "data", ...)` × 4
    - `autocodabench_write_scoring_program(...)` — implement the metric the
      plan specifies; produce `scoring_program/score.py` + `metadata.yaml`.
+     Immediately after, **Write
+     `<bundle>/<slug>/scoring_program/requirements.txt`** listing every
+     non-stdlib top-level import `score.py` uses (one per line). Empty
+     file if pure-stdlib; never omit the file.
    - `autocodabench_write_solution(...)` — produces
      `solutions/sample_code_submission/model.py`. **This file IS the
      submission interface contract.** Define a clear class with explicit
@@ -276,15 +308,18 @@ data — see the ABSOLUTE PROHIBITION in Hard Rules above.
      read THIS file (and the ingestion_program if present) to know how
      to wrap each ground-truth submission. Be precise.
    - `autocodabench_write_ingestion_program(...)` if the plan calls for
-     a code-submission flow (γ-style).
+     a code-submission flow (γ-style). Immediately after, **Write
+     `<bundle>/<slug>/ingestion_program/requirements.txt`** listing every
+     non-stdlib top-level import `ingestion.py` uses (one per line).
+     Empty file if pure-stdlib; never omit the file.
    - `autocodabench_attach_data(target="reference_data" | "input_data" | "starting_kit" | "public_data", ...)`
      as the plan requires. The files you attach MUST come from
      `sample_data_dir/` (see ABSOLUTE PROHIBITION). Use `cp -r` via
      Bash if you need to move files into the bundle, or
      `autocodabench_attach_data`'s file-pointing parameters if the tool
      supports referencing source paths.
-7. **Validate** with BOTH validators — both MUST pass clean before
-   you proceed:
+7. **Validate** with BOTH validators AND check requirements.txt
+   presence — all three MUST pass clean before you proceed:
    1. `autocodabench_validate_bundle()` — the MCP-side validator.
       Catches issues at the bundle_io layer.
    2. `python ./experiments/bundle_creation_test/bundle_validator.py <bundle_root>`
@@ -295,9 +330,17 @@ data — see the ABSOLUTE PROHIBITION in Hard Rules above.
       same script step-4 of the orchestrator runs against your
       output; if it fails there, you fail step 4 — so run it now to
       catch the failure before claiming pass.
-   If either reports issues, fix and re-validate both (cap at 3
-   retries; on the 4th failed attempt, return `status=fail` with
-   the validators' reports).
+   3. **Requirements presence check** via Bash:
+      ```
+      ls <bundle_root>/scoring_program/requirements.txt
+      ls <bundle_root>/ingestion_program/requirements.txt  # only if ingestion_program/ exists
+      ```
+      Both files MUST exist (even if empty) per the Hard rule above.
+      The orchestrator's step-5b env prep depends on them; missing
+      either is a self-validation failure here.
+   If any of the three reports issues, fix and re-validate all three
+   (cap at 3 retries; on the 4th failed attempt, return `status=fail`
+   with the validators' reports).
 8. **Zip** with `autocodabench_zip_bundle()`. The zip lands at
    `<bundle_dir>/<slug>/<slug>.zip`.
 9. **Emit a missing-info inventory** — Write
