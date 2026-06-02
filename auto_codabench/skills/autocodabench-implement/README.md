@@ -13,14 +13,31 @@ Drives Phase 2 of an AutoCodabench session:
 2. Writes the Codabench bundle via the MCP `autocodabench_write_*`
    tools — `competition.yaml`, scoring program, solution / starting
    kit, four pages, data attachments.
-3. Validates via `autocodabench_validate_bundle`. Re-validates on
-   failure (the skill caps at 3 retries) until clean.
-4. Zips via `autocodabench_zip_bundle`. Surfaces the download link via
-   the workspace panel.
-5. Optional: uploads to Codabench when the user types
+3. **Lints** via `autocodabench_validate_bundle`. Fixes issues until
+   clean.
+4. **Prepares a per-run conda env** via
+   `autocodabench_prepare_run_env` (clone base + install per-program
+   `requirements.txt` via `uv` or pip).
+5. **Self-validates at runtime**: runs the bundle's OWN baseline via
+   `autocodabench_run_baseline_submission`, then executes the
+   starting-kit notebook via `autocodabench_run_starting_kit`.
+   Iterates on runtime errors (install missing packages via
+   `autocodabench_install_env_extras`, edit broken API call sites in
+   the bundle), capped at 5 / 4 attempts respectively. STRICT: both
+   must succeed or the skill exits with `validate_runtime: false` and
+   the bundle is NOT zipped.
+6. Zips via `autocodabench_zip_bundle` (only on full pass).
+7. Optional: uploads to Codabench when the user types
    "publish" / "upload" in chat. The web UI's **Publish form** is the
    canonical upload path and bypasses the LLM entirely — this skill
    defers to the form unless the user explicitly asks in chat.
+
+The runtime self-validation step exists because a bundle that lints
+clean but whose own baseline can't run is a broken bundle. The class
+of failure caught here (missing PyPI deps, Keras-2-vs-Keras-3 API
+breaks, λ-vs-γ submission protocol mix-ups) would otherwise only
+surface on Codabench's compute workers, hours after the user
+believed the bundle was done.
 
 ## Why it's a *driver*, not a *knowledge* skill
 
@@ -49,9 +66,10 @@ explicit user request).
 
 - The scoring program defines the `scores.json` keys.
 - The solution defines the submission-interface contract (this is also
-  what the experiment harness's reformatter agent reads to bridge a
-  ground-truth `sample_submission.py` to whatever the bundle declared
-  — see [`experiments/bundle_creation_test/agents/submission-reformatter.md`](../../../experiments/bundle_creation_test/agents/submission-reformatter.md)).
+  what the bundle-creation-test experiment's
+  `autocodabench-reformat-and-run` skill reads to bridge a ground-truth
+  `submission.py` to whatever the bundle declared — see
+  [`auto_codabench/skills/autocodabench-reformat-and-run/SKILL.md`](../autocodabench-reformat-and-run/SKILL.md)).
 - The pages reference the metric and data sources declared above.
 - `competition.yaml` is written **last** because its `tasks:` and
   `leaderboards:` blocks reference all the above. Writing it first
@@ -99,11 +117,19 @@ deterministically and never burns LLM cost on a 4-step REST flow.
 
 - Reads only: `<run>/specs/implementation_plan.md`
 - Knowledge it cites: [`codabench-bundle`](../codabench-bundle/README.md), [`competition-design`](../competition-design/README.md)
-- MCP tools used: every `autocodabench_*` except `_snapshot_spec`
-  (the plan is locked). See [package README → MCP tools](../../README.md#mcp-tools).
+- MCP tools used:
+  - file-writers: `init_bundle`, `write_competition_yaml`,
+    `write_scoring_program`, `write_ingestion_program`,
+    `write_solution`, `write_page`, `attach_data`,
+    `validate_bundle`, `zip_bundle`, `upload_bundle`
+  - runtime self-validation: `prepare_run_env`,
+    `install_env_extras`, `run_baseline_submission`,
+    `run_starting_kit`, `remove_run_env`
+  - run-state: `current_run`, `log_event`
 - Phase orchestrator in code:
   [`web/app.py`](../../../web/app.py) →
   `_advance_to_phase(PHASE_BUNDLE)`
 - Phase 2 produces:
-  `<run>/bundles/<slug>/{competition.yaml, scoring_program/, solution/, pages/, <slug>.zip}`
+  `<run>/bundles/<slug>/{competition.yaml, scoring_program/, solution/, pages/, README.ipynb, <slug>.zip}`
+  + `<run>/run_logs/<slug>/{env,baseline,starting_kit}/`
 - Package map: [`auto_codabench/README.md`](../../README.md)

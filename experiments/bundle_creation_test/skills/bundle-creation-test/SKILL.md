@@ -1,402 +1,346 @@
 ---
 name: bundle-creation-test
-description: End-to-end bundle-creation test experiment runner. Load this skill when the user says something like "run the bundle-creation experiment on <competition_sample_name>" or "test the autocodabench bundle pipeline against <comp>". You orchestrate a 5-step pipeline (plan → implement → validate → reformat → run+compare) by spawning 5 isolated stage subagents via the Task tool and writing a per-step manifest under `experiments/bundle_creation_test/runs/<comp>/<run_id>/`. This skill MUST run in the top-level Claude Code session (it spawns subagents — subagents themselves cannot spawn further subagents).
+description: End-to-end bundle-creation test experiment runner. Load this skill when the user says something like "run the bundle-creation experiment on <competition_sample_name>" or "test the autocodabench bundle pipeline against <comp>". You orchestrate a SHELL-OUT pipeline (plan → implement+self-validate → per-sub reformat+run → log-audit → finalize) by invoking `claude -p` for each phase against the auto_codabench/ skills, with a single log-audit subagent per ground-truth submission via the Task tool. MUST run at top-level (Task tool required for log auditors).
 ---
 
 You are running the bundle-creation-test experiment harness defined in
-[`experiments/bundle_creation_test/README.md`](../../README.md). Read that
-file first if you have not already — it has the full layout, agent
-topology, and manifest schema.
+[`experiments/bundle_creation_test/README.md`](../../README.md). Read
+that file first if you have not — it has the full layout and rationale
+for the shell-out-driven architecture.
 
-## What this skill does (and why it's a skill, not an agent)
+## What this skill does
 
-You — the top-level Claude Code session, with this skill loaded — are the
-orchestrator. You receive a `competition_sample_name` from the user's
-message (e.g. `style-trans-fair`), compute a `run_id`, create the run
-dir, and sequence five subagents via the Task tool. The five subagents
-ARE agents (in `.claude/agents/`) because each one needs an isolated
-context with scoped permissions. The orchestrator is NOT an agent
-because:
+You — the top-level Claude Code session — are the orchestrator. You
+receive a `competition_sample_name` (e.g. `style-trans-fair`), compute
+a `run_id`, create the run dir, and drive five phases:
 
-- the orchestrator needs the `Task` tool to spawn the five subagents
-- Claude Code's `Task` is **unavailable inside subagents** (one level
-  down) — so an "orchestrator agent" can only ever sit at the top level
-- skills, by contrast, are loaded into the top-level conversation by
-  design — they are instructions Claude follows, not isolated contexts.
-  When this skill is loaded, the Task tool stays available, the
-  isolation chain works, and the architecture composes.
+1. **Preconditions** — verify the competition dir is well-formed; record expected scores.
+2. **Plan** (shell-out) — `claude -p "/autocodabench-plan ..."` produces `specs/implementation_plan.md`.
+3. **Implement + self-validate** (shell-out) — `claude -p "/autocodabench-implement ..."` writes the bundle, lints it, runs its OWN baseline + starting-kit notebook in a per-run conda env, iterates on runtime errors until both pass. STRICT: if the implementer can't get its own bundle to run, the experiment fails here.
+4. **Score each ground-truth submission** (per sub_N): shell-out `claude -p "/autocodabench-reformat-and-run ..."` to adapt the GT code to the bundle's interface and run it through scoring; then spawn a `submission-log-auditor` SUBAGENT to compare the produced score to the GT's `expected_result.json` (within tolerance).
+5. **Finalize** — aggregate missing-info, write `manifest.json` + `run_report.md`, clean up the per-run conda env.
 
-If you ever find yourself in a context where `Task` is missing, you are
-not at the top level — stop, report `fail_at_preconditions` with the
-error "must be invoked at top-level Claude Code session", and let the
-human re-invoke from the right place.
+The shell-out architecture exists because subagents cannot spawn
+further subagents (Task is depth-limited at 1). `claude -p` invocations
+are independent root-level Claude sessions — each one has fresh
+subagent depth and can drive its own inner iteration loops (the
+`autocodabench-implement` skill's runtime-validation loop, the
+`autocodabench-reformat-and-run` skill's adapter loop). The
+orchestrator only spawns ONE kind of in-process subagent: the
+log-auditor (lightweight, no recursion needed).
 
 ## Hard rules — data leakage prevention
 
 These exist because the whole experiment is only valid if the
-isolation chain holds. Violating them invalidates the comparison
-between the agent-generated bundle's score and the expected_result.
+isolation chain holds.
 
-- **You MUST NOT read `<comp>/input/**`** — not even to "summarise for a
-  subagent". The `bundle-planner` subagent reads it; you pass only its
-  path. Top-level reading would leak the paper's design intent into the
-  prompt you craft for downstream subagents.
-- **You MUST NOT read `<comp>/ground_truth/bundle/**`** — that's the
-  golden reference bundle, reserved for human comparison.
-- **You MUST NOT read `<comp>/ground_truth/sample_submissions/*/submission/**`** —
-  the `submission-reformatter` subagent reads it. Only its sibling
-  `expected_result.json` is readable by you (for recording in the
-  manifest).
-- **You MUST NOT pass content from one subagent into another** as part
-  of the prompt. Pass file paths; let each subagent read what its own
-  `allowedTools` permit. This is the whole point of the isolation
-  design.
+- **You MUST NOT read `<comp>/input/**`** — that's planner-only.
+- **You MUST NOT read `<comp>/ground_truth/bundle/**`** — the golden
+  reference, reserved for human comparison.
+- **You MUST NOT read `<comp>/ground_truth/sample_submissions/*/submission/**`**
+  — that's reformat-and-run-only.
+- **You MAY read `<comp>/ground_truth/sample_submissions/*/expected_result.json`**
+  — for recording in the manifest AND for handing to the
+  log-auditor. Don't paste its score into any `claude -p` prompt.
+- **You MUST NOT pass content from one shell-out into another**
+  except via on-disk paths. The point of the shell-out architecture
+  is each phase reads files; you don't paraphrase them.
 - **Write only inside `runs/<comp>/<run_id>/`.** Source materials under
   `competitions/<comp>/` are immutable from your perspective.
 - **Single-invocation rule**: one skill activation = one experiment run.
-  Compute one `run_id`, create one dir, run all steps. If the user
-  wants 3 runs, they ask 3 times.
-- **No retries inside a step.** If a subagent fails in steps 1–4,
-  record the failure in `manifest.json` and stop with
-  `overall_status = "fail_at_<step>"`. Step 5 is special — see below.
+- **No retries inside a phase.** Phases 1/2/3 each get one shot. If
+  they fail, record `fail_at_<phase>` and stop. (The shell-outs
+  themselves run their own internal iteration loops — but the
+  orchestrator does NOT re-spawn them.)
+- **Synthetic data is forbidden.** If the implementer or
+  reformat-and-run reports it generated stand-in data because the
+  real source was inaccessible, fail the run with
+  `fail_at_synthetic_data_detected`. Do NOT mask this — the whole
+  experiment is invalid if the bundle silently runs on toy data
+  when the proposal specified a real dataset.
 
 ## What you receive
 
-A `competition_sample_name` (the subdir name under
+A `competition_sample_name` (the subdir under
 `experiments/bundle_creation_test/competitions/`). Example:
 `style-trans-fair`.
 
+---
+
 ## Pipeline
 
-### 0. Compute run_id and create the run dir
+### 0. Compute `run_id` and create the run dir
 
 ```bash
 SHORT_SHA=$(git rev-parse --short=8 HEAD)
 UTC_TS=$(date -u +%Y%m%d_%H%M%S)
 RUN_ID="${SHORT_SHA}_${UTC_TS}"
 BRANCH=$(git branch --show-current)
-mkdir -p experiments/bundle_creation_test/runs/<comp>/${RUN_ID}/{plan,bundle,validation,reformatted_submission,env,submission_run}
+COMP=<competition_sample_name>
+REPO_ROOT="$(pwd)"
+COMP_DIR="${REPO_ROOT}/experiments/bundle_creation_test/competitions/${COMP}"
+RUN_ROOT="${REPO_ROOT}/experiments/bundle_creation_test/runs/${COMP}/${RUN_ID}"
+
+mkdir -p "${RUN_ROOT}"/{specs,bundles,run_logs,reformat_run,log_audit}
 ```
 
-(The run_id starts with a hex character — this matches the
-`runs/*/[0-9a-f]*/...` glob each stage agent's `allowedTools` uses.)
+Resolve `${COMP_DIR}` and `${RUN_ROOT}` to absolute paths once and reuse
+them — never use relative `../../../` walks in the `claude -p` prompts.
+Shell-outs run with their own cwd; relative paths quietly point at the
+wrong place.
 
-Write `experiments/bundle_creation_test/runs/<comp>/<run_id>/manifest.json`:
+Write `<RUN_ROOT>/meta.json` (the MCP server's `open_run` will
+*adopt* this dir when shell-outs set `AUTOCODABENCH_RUN_DIR` to it):
 
 ```json
 {
-  "competition_sample_name": "<comp>",
-  "run_id": "<run_id>",
-  "branch": "<branch>",
+  "branch_id": "<BRANCH>",
+  "runtime_id": "<RUN_ID>",
+  "started_at": "<iso-utc>",
+  "slug": null,
+  "experiment": "bundle_creation_test",
+  "competition": "<COMP>"
+}
+```
+
+Write `<RUN_ROOT>/manifest.json`:
+
+```json
+{
+  "competition_sample_name": "<COMP>",
+  "run_id": "<RUN_ID>",
+  "branch": "<BRANCH>",
   "started_at": "<iso-utc>",
   "finished_at": null,
   "expected_results": {},
-  "steps": [],
+  "phases": [],
   "overall_status": "in_progress"
 }
 ```
 
 ### 1. Preconditions
 
-- `<comp>/input/` exists and is non-empty:
-  `ls experiments/bundle_creation_test/competitions/<comp>/input/`
-  returns at least one entry. You can ls but **NOT read** those entries.
-- Discover ground-truth submissions:
-  `ls experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/`
-  returns at least one `sub_N` dir.
-- For each `sub_N`, read `sub_N/expected_result.json`, validate it has
-  the keys `metric` / `score` / `tolerance`, and populate
-  `manifest.expected_results[sub_N]`. If a sub_N is missing its
-  expected_result.json or it's malformed: precondition failure for
-  that sub.
-- On any precondition failure: write
-  `overall_status = "fail_at_preconditions"`, add a step entry with
-  the error, exit.
+- `<comp>/input/` exists and is non-empty (you can `ls` it but **NOT
+  read** its files).
+- `<comp>/ground_truth/sample_submissions/` has at least one `sub_N/`.
+- For each `sub_N`, read `sub_N/expected_result.json` and validate it
+  has `metric` / `score` / `tolerance`. Populate
+  `manifest.expected_results[sub_N]`.
+- On any precondition failure: `overall_status = "fail_at_preconditions"`,
+  add a phase entry, exit.
 
-### 2. Spawn `bundle-planner` via Task
-
-Prompt (substitute `<comp>` and `<run_id>` literally):
-
-> Run AutoCodabench Phase 1.
->
-> input_dir: `./experiments/bundle_creation_test/competitions/<comp>/input/`
-> plan_dir:  `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/`
->
-> Use `run_dir=./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/auto_codabench_run`
-> when calling `autocodabench_open_run`. Write the final plan as
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md`.
-> Your final message MUST be the JSON object specified in your skill body.
-
-When it returns, parse its JSON final message. Append a `steps` entry:
-`{name: "plan", status, started_at, finished_at, agent_summary, artifacts}`.
-If `status == "fail"`, set `overall_status = "fail_at_plan"` and stop.
-
-### 3. Spawn `bundle-implementer` via Task
-
-Prompt:
-
-> Run AutoCodabench Phase 2.
->
-> plan_path:  `./experiments/bundle_creation_test/runs/<comp>/<run_id>/plan/implementation_plan.md`
-> sample_data_dir: `./experiments/bundle_creation_test/competitions/<comp>/input/sample_data/` (read-only reference for dataset shape)
-> bundle_dir: `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/`
->
-> Use `run_dir=./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/auto_codabench_run`
-> for the MCP open_run call. Final message: the JSON object specified
-> in your skill body.
-
-Stop on fail.
-
-### 4. Spawn `bundle-validator-runner` via Task
-
-Prompt:
-
-> Run `bundle_validator.py` against the bundle at
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/`
-> (you'll find the slug by listing `<run>/bundle/`). Write report to
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/validation/report.txt`.
-
-Stop on fail.
-
-### 5. Per-submission reformat → prepare env → run
-
-This phase is split into THREE separate manifest entries
-(`reformat_all`, `prepare_env`, `run_all`) so failure attribution is
-clean: a missing pip package isn't a bundle defect, a bad metric in
-`score.py` isn't an env problem, and a mis-shaped reformatted
-submission isn't either. Each sub-step's failure stops the phase at
-its boundary with its own `fail_at_<name>` value.
-
-#### 5a. Reformat all subs (manifest entry: `reformat_all`)
-
-For each `sub_N` directory under
-`<comp>/ground_truth/sample_submissions/`, spawn
-`submission-reformatter` via Task:
-
-> Reformat the ground-truth submission code under
-> `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/submission/`
-> to match the interface at
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/solutions/sample_code_submission/model.py`
-> (or whatever the bundle's submission interface is — read the bundle).
-> Output to `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`.
-
-Run **all** reformatters before moving on (don't short-circuit on the
-first failure — the user wants to see the full pattern across subs).
-Aggregate into one steps entry:
-
-```json
-{
-  "name": "reformat_all",
-  "status": "pass" | "fail",
-  "submissions": [
-    { "sub": "sub_1", "reformat_status": "pass", "interface_summary": "...", "artifacts": ["reformatted_submission/sub_1/..."] }
-  ]
-}
-```
-
-`status = pass` iff every sub's `reformat_status == "pass"`. On fail:
-`overall_status = "fail_at_reformat_all"`. Skip 5b and 5c and jump to
-the post-pipeline steps (6 fallback log copy, 7 missing-info aggregate,
-8 finalize) — the env-prep is wasted work without reformatted code to
-scan, and there's nothing to run.
-
-#### 5b. Prepare execution env (manifest entry: `prepare_env`)
-
-A per-run conda env cloned from `base`, with all bundle + submission
-deps installed via `uv`. The 6/30 run hit a `ModuleNotFoundError:
-skimage` here because the submission's deep-learning deps aren't in
-base; this step is what makes that go away.
-
-Choose env name from the run_id: `ENV_NAME="acb-run-${RUN_ID:0:16}"`
-(truncate so conda accepts it).
-
-Run in sequence (record stdout/stderr to `<run_root>/env/`):
+### 2. Plan (shell-out)
 
 ```bash
-RUN_ROOT="./experiments/bundle_creation_test/runs/<comp>/<run_id>"
-ENV_NAME="acb-run-${RUN_ID:0:16}"
-ENV_LOG="$RUN_ROOT/env"
-mkdir -p "$ENV_LOG"
+PLAN_PROMPT='Run AutoCodabench Phase 1 in NON-INTERACTIVE mode.
 
-# 1. Clone base
-conda create -n "$ENV_NAME" --clone base -y \
-  > "$ENV_LOG/clone.stdout" 2> "$ENV_LOG/clone.stderr"
+input_dir:   '"${COMP_DIR}/input/"'
+output:      save the plan via autocodabench_snapshot_spec(name="implementation_plan.md", ...).
 
-# 2. Resolve the cloned env's python
-ENV_PYTHON=$(conda run -n "$ENV_NAME" which python)
+The proposal paper / design doc is under input_dir. Read it directly,
+infer the 7 design sections of the Codabench competition (task, data,
+metric, baseline, rules, ethics, schedule), and write the full plan
+without asking any questions. Make sensible decisions for ambiguous
+fields and document each in an "Assumptions" section at the end of
+the plan.
 
-# 3. Collect requirements (bundle reqs + AST-scan of reformatted subs)
-python ./experiments/bundle_creation_test/scripts/collect_env_requirements.py \
-  --bundle-dir "$RUN_ROOT/bundle/<slug>/" \
-  --reformatted-dir "$RUN_ROOT/reformatted_submission/" \
-  > "$ENV_LOG/requirements.txt"
+When done, emit a single JSON object as your last message with shape:
+  { "status": "pass" | "fail",
+    "plan_path": "specs/implementation_plan.md",
+    "sections_covered": ["1.task", "2.data", "3.metric", "4.baseline", "5.rules", "6.ethics", "7.schedule"],
+    "info_gaps_count": <int>,
+    "error": null | "..." }
+'
 
-# 4. Install with uv (Rust binary; targets the cloned env via --python
-#    without needing to be installed inside it). Fall back to plain
-#    pip if `uv` is not on PATH.
-if command -v uv >/dev/null 2>&1; then
-  uv pip install --python "$ENV_PYTHON" -r "$ENV_LOG/requirements.txt" \
-    > "$ENV_LOG/install.stdout" 2> "$ENV_LOG/install.stderr"
-  INSTALL_METHOD="uv"
-else
-  conda run -n "$ENV_NAME" pip install -r "$ENV_LOG/requirements.txt" \
-    > "$ENV_LOG/install.stdout" 2> "$ENV_LOG/install.stderr"
-  INSTALL_METHOD="pip"
-fi
+AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
+claude --print --dangerously-skip-permissions "${PLAN_PROMPT}" \
+  > "${RUN_ROOT}/plan_session.log" 2>&1
 ```
 
-Append manifest entry:
+Parse the JSON object from the last line of `plan_session.log` (the
+shell-out's final assistant message). Append a phase entry:
+`{name: "plan", status, started_at, finished_at, agent_summary, artifacts}`.
+If `status == "fail"` or the file `specs/implementation_plan.md`
+doesn't exist after the shell-out: `overall_status = "fail_at_plan"`,
+stop.
+
+**No retries.** A failed plan is a defect to investigate, not to
+paper over.
+
+### 3. Implement + self-validate (shell-out)
+
+```bash
+IMPL_PROMPT='Run AutoCodabench Phase 2 in NON-INTERACTIVE mode.
+
+plan_path:    '"specs/implementation_plan.md"'
+sample_data:  '"${COMP_DIR}/input/sample_data/"' (read-only reference for dataset shape; do not copy data outside this path into the bundle)
+
+Per your skill body:
+  1. Read the plan (autocodabench_current_run → Read specs/implementation_plan.md).
+  2. Write the full bundle (init + scoring + ingestion if γ-style + solution + pages + data + competition.yaml).
+  3. Lint via autocodabench_validate_bundle. Fix any issues.
+  4. Prepare the per-run conda env via autocodabench_prepare_run_env.
+  5. Run the bundle baseline via autocodabench_run_baseline_submission. Iterate up to 5 attempts on runtime errors (install extras for ModuleNotFoundError; edit bundle code for API breaks).
+  6. Run the starting-kit notebook via autocodabench_run_starting_kit. Iterate up to 4 attempts.
+  7. STRICT: both 5 and 6 must finish ok before you zip. If either fails after the attempt cap, do not zip, emit the failure-shape JSON.
+
+When done, emit a single JSON object as your last message with shape:
+  { "status": "pass" | "fail",
+    "slug": "<bundle slug>",
+    "bundle_dir": "<absolute path>",
+    "zip_path": "<absolute path | null>",
+    "validate_bundle": <bool>,
+    "validate_runtime": <bool>,
+    "env_name": "<...>",
+    "baseline_status": "pass" | "fail",
+    "baseline_scores": { ... } | null,
+    "baseline_attempts_used": <int>,
+    "notebook_status": "pass" | "fail",
+    "notebook_cells_executed": <int> | null,
+    "notebook_attempts_used": <int>,
+    "info_gaps_count": <int>,
+    "error": null | "..." }
+'
+
+AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
+claude --print --dangerously-skip-permissions "${IMPL_PROMPT}" \
+  > "${RUN_ROOT}/implement_session.log" 2>&1
+```
+
+Parse the final JSON. Append a phase entry. If `status == "fail"` or
+`validate_runtime == false`: `overall_status = "fail_at_implement"`,
+record the failure, skip phase 4. (We still proceed to phases 5/6 so
+the missing-info report and run_report.md land — those are the
+forensic artifacts.)
+
+If success, record:
+- `slug` → `manifest.bundle_slug`
+- `env_name` → `manifest.env_name` (for cleanup at finalize)
+- `bundle_dir` → `manifest.bundle_dir`
+
+### 4. Score each ground-truth submission (per sub_N)
+
+Only runs if phase 3 succeeded. For each `sub_N` under
+`<comp>/ground_truth/sample_submissions/`:
+
+#### 4a. Reformat + run (shell-out)
+
+```bash
+SUB="sub_N"
+SUB_DIR="${COMP_DIR}/ground_truth/sample_submissions/${SUB}/submission/"
+OUT_DIR="${RUN_ROOT}/reformat_run/${SUB}/"
+mkdir -p "${OUT_DIR}"
+
+RFR_PROMPT='Run AutoCodabench Reformat-and-Run NON-INTERACTIVE.
+
+bundle_dir:     '"${BUNDLE_DIR}"'
+submission_dir: '"${SUB_DIR}"'
+env_name:       '"${ENV_NAME}"'
+out_dir:        '"${OUT_DIR}"'
+
+Per your skill body: probe the env, learn the bundle interface, adapt
+the submission to the bundle, run via autocodabench_run_user_submission,
+iterate up to 4 attempts. You have no access to expected_result.json
+or any other ground-truth metadata.
+
+Emit a single JSON object as your last message with the shape your
+skill body specifies (status, attempts_used, final_attempt_dir,
+logs_dir, scores, stage_failed, error, extras_installed,
+adapter_notes).
+'
+
+AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
+claude --print --dangerously-skip-permissions "${RFR_PROMPT}" \
+  > "${RUN_ROOT}/reformat_run/${SUB}/session.log" 2>&1
+```
+
+The shell-out writes `${OUT_DIR}/final.json` and `${OUT_DIR}/attempt_<K>/`.
+
+Parse the JSON. **Do not skip on failure** — even a failed
+reformat-and-run is a valid input to the log auditor (it'll report
+"no score produced"). Move directly to 4b.
+
+#### 4b. Audit (Task → `submission-log-auditor`)
+
+Spawn the auditor:
+
+> Audit one submission's reformat-and-run output against its expected
+> result.
+>
+> sub_label:             `${SUB}`
+> reformat_run_dir:      `${OUT_DIR}` (contains `final.json`, `attempt_<K>/`, `session.log`)
+> bundle_run_logs_dir:   `<RUN_ROOT>/run_logs/<slug>/<sub_label>.attempt_<K>/` (the sandbox + stdout/stderr for the final attempt)
+> expected_result_path:  `<comp>/ground_truth/sample_submissions/<SUB>/expected_result.json`
+> out_path:              `<RUN_ROOT>/log_audit/<SUB>/verdict.json`
+>
+> Your final message: the JSON object specified in your skill body.
+
+When the auditor returns, parse its JSON. Aggregate per-sub into a
+phase entry:
 
 ```json
 {
-  "name": "prepare_env",
-  "status": "pass" | "fail",
-  "env_name": "<ENV_NAME>",
-  "requirements_path": "env/requirements.txt",
-  "package_count": <int>,
-  "install_method": "uv" | "pip",
-  "duration_s": <float>,
-  "error": null | "<first stderr line / exit-code summary>"
-}
-```
-
-Failure conditions (any of): conda clone exits non-zero; the collect
-script exits non-zero or emits an empty requirements file when the
-bundle has non-empty ingestion/scoring requirements; install exits
-non-zero. On fail: `overall_status = "fail_at_prepare_env"`, skip 5c,
-proceed to steps 6+. **Do NOT attempt recovery** — env-prep failure is
-the experiment's diagnostic data, not something to paper over.
-
-#### 5c. Run all subs (manifest entry: `run_all`)
-
-For each `sub_N` under `<run_root>/reformatted_submission/`, spawn
-`submission-runner` via Task with the env name from 5b passed in:
-
-> Execute the reformatted submission at
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/reformatted_submission/<sub_N>/`
-> through the scoring program in
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/bundle/<slug>/scoring_program/`.
->
-> env_name: `<ENV_NAME>` — the conda env prepared in step 5b. Wrap
-> every python invocation in `conda run -n <env_name> python ...`. You
-> do NOT have permission to pip install; if a dep is missing, that's a
-> step-5b defect, not a step-5c one — surface the ModuleNotFoundError
-> and let the orchestrator stop the phase.
->
-> Compare against
-> `./experiments/bundle_creation_test/competitions/<comp>/ground_truth/sample_submissions/<sub_N>/expected_result.json`.
-> Write artifacts to
-> `./experiments/bundle_creation_test/runs/<comp>/<run_id>/submission_run/<sub_N>/`.
-
-Run **all** subs before deciding pass/fail (same rationale as 5a —
-the full pattern across subs is what the user wants to see). Aggregate
-into one steps entry:
-
-```json
-{
-  "name": "run_all",
+  "name": "score_submissions",
   "status": "pass" | "fail",
   "submissions": [
     {
       "sub": "sub_1",
-      "run_status": "pass", "score": 0.0, "expected": 0.0, "delta": 0.0, "within_tolerance": true,
-      "artifacts": ["submission_run/sub_1/score.json"]
+      "reformat_run_status": "pass" | "fail",
+      "reformat_attempts_used": <int>,
+      "audit_status": "pass" | "fail",
+      "scores": <dict | null>,
+      "expected_score": <float>,
+      "actual_score": <float | null>,
+      "tolerance": <float>,
+      "delta": <float | null>,
+      "within_tolerance": <bool | null>,
+      "error": null | "..."
     }
   ]
 }
 ```
 
-`status = pass` iff every sub has `run_status == "pass"` AND
-`within_tolerance == true`. On fail:
-`overall_status = "fail_at_run_all/sub_N"` (record the first failing
-sub for quick lookup).
+`status = "pass"` iff every sub's `audit_status == "pass"` AND
+`within_tolerance == true`. On fail: `overall_status =
+"fail_at_score_submissions/sub_N"` (record the first failing sub).
 
-### 6. Fallback log copy (only if needed)
+### 5. Aggregate the missing-info inventories
 
-If a step's `auto_codabench_run/` subdir is empty (the MCP server fell
-back to the default `auto_codabench/runs/<id>/` location), find run
-dirs in `auto_codabench/runs/` whose mtime is between `started_at` and
-`now` and `cp -r` them into the step's dir. Use `stat -f %m` on macOS
-or `stat -c %Y` on Linux.
+Per [`MISSING_INFO.md`](../../MISSING_INFO.md). The plan-side
+inventory lives at `<RUN_ROOT>/specs/missing_info_inventory.json` (if
+the planner emitted it); the implement-side at
+`<RUN_ROOT>/bundles/<slug>/missing_info_inventory.json` (ditto). If
+neither exists (planner hard-failed pre-emit), write a stub
+`missing_info_report.json` with empty `items: []`.
 
-### 7. Aggregate the missing-info inventories
+Concatenate, re-tag with `stage`, re-ID, compute totals,
+narrative_summary. Write
+`<RUN_ROOT>/missing_info_report.json` per the aggregated schema.
 
-This step turns per-stage inventories into one run-level report that
-downstream meta-analysis consumes. The schema is defined in
-[`MISSING_INFO.md`](../../MISSING_INFO.md); read it first if you have
-not already — it specifies the controlled vocabulary, per-item shape,
-and aggregated-report shape.
+Add a `missing_info_summary` block to `manifest.json` with the
+`totals` from the report.
 
-Process:
+### 6. Finalize
 
-1. Read both stage inventories (if they exist):
-   - `runs/<comp>/<run_id>/plan/missing_info_inventory.json`
-     (always present unless the planner stage hard-failed before
-     emitting it).
-   - `runs/<comp>/<run_id>/bundle/missing_info_inventory.json`
-     (present if the implementer stage ran).
-2. If neither exists (e.g., plan stage hard-failed pre-emit), write a
-   stub `missing_info_report.json` with an empty `items: []` and a
-   `narrative_summary` explaining why the data is missing. Do NOT
-   skip this step — the meta-analysis pipeline needs the file to
-   exist for every run (it can group runs by "had inventory" vs
-   "didn't" to surface pre-emit failure patterns).
-3. Concatenate the items from both stages into a single `items`
-   array. Re-tag each item with its `stage` field (the per-stage
-   inventories already do this, but double-check). Re-ID items so
-   ids are unique across the merged list (e.g.
-   `planner_miss_001`, `implementer_miss_001`).
-4. Compute the totals block per the schema. The totals are what most
-   meta-analysis queries hit first; they MUST match the items array's
-   actual contents (no silent fudging).
-5. Write a `narrative_summary` (1–3 sentences). Lead with the count
-   of critical / high-stakes items. Call out any
-   `would_block_correct_scoring == true` items by name. Mention
-   overall_proposal_completeness if available.
-6. Write `runs/<comp>/<run_id>/missing_info_report.json` per the
-   aggregated-report shape in MISSING_INFO.md.
-7. Add a `missing_info_summary` block to `manifest.json` with the
-   top-line numbers (just `totals` from the report — keeps manifest
-   compact while the full report sits alongside).
+- **Clean up the per-run conda env**: invoke
+  `autocodabench_remove_run_env(env_name)` if `manifest.env_name` is
+  populated. Best-effort — failure logs to manifest but doesn't
+  change `overall_status`.
+- Set `finished_at` = ISO-UTC now.
+- Set `overall_status = "pass"` iff every phase passed AND every
+  sub_N's `within_tolerance == true`. Otherwise
+  `fail_at_<first_failed_phase>`.
+- Write final `manifest.json`.
+- Write `run_report.md` per the template below.
 
-### 8. Finalize
+### 7. Write `run_report.md` (human-readable run summary)
 
-- **Cleanup the conda env** (if 5b created one): `conda env remove -n
-  "$ENV_NAME" -y`. Do this whether 5b passed or failed — the env is
-  per-run scratch and the manifest preserves its `requirements.txt`
-  for reproducibility. On removal failure: log to manifest's
-  `prepare_env.env_removed_at = null`, but do NOT change
-  overall_status (env hygiene is best-effort, not a correctness gate).
-- Set `finished_at` to current ISO-UTC.
-- Set `overall_status = "pass"` if every step (incl. 5a/5b/5c and
-  every sub_N in 5c) passed, else `fail_at_<first_failed_step>`.
-- Write the final `manifest.json`.
-- Write `run_report.md` (next section) — this is the human-readable
-  twin of `manifest.json` + `missing_info_report.json` and is the
-  single file a reviewer opens to understand the run.
-- Print the one-paragraph summary + the table from "Output format to
-  the user" below.
+This is the primary deliverable for a human reviewer. Write it every
+run, especially on failure. Path:
+`<RUN_ROOT>/run_report.md`.
 
-### 9. Write `run_report.md` (human-readable run summary)
-
-This file is the primary deliverable for human reviewers. The
-structured forms (`manifest.json`, `missing_info_report.json`) are for
-machines and meta-analysis; `run_report.md` is for a person who wants
-to understand one run in one screen without parsing JSON.
-
-Path: `runs/<comp>/<run_id>/run_report.md`. Write it EVERY run, even
-on failure (especially on failure — the report is more useful when
-the manifest's `overall_status` is non-pass).
-
-The content is sourced entirely from data you already have:
-- the manifest you just wrote (steps + status + timing)
-- the missing_info_report.json you wrote in step 7
-- each subagent's verbatim JSON final message (from Task results)
-- any environment notes you noticed across the subagent reports
-  (e.g., "implementer reported MCP unavailable and fell back to X")
-
-Use this template — fill in everything in braces, preserve section
-headings verbatim so meta-analysis tools can grep across reports:
+Template (fill in everything in braces; keep section headings
+verbatim for grep-across-runs):
 
 ```markdown
 # Run report — bundle-creation-test
@@ -405,50 +349,39 @@ headings verbatim so meta-analysis tools can grep across reports:
 **Run ID:** {run_id}
 **Branch:** {branch}
 **Started:** {started_at}
-**Finished:** {finished_at} ({duration_human, e.g. "6m 4s"})
+**Finished:** {finished_at} ({duration_human})
 **Overall status:** {overall_status}
 
 ---
 
 ## Summary table
 
-| step         | status | notes |
-|--------------|--------|-------|
-| plan         | {pass|fail|—} | {one-line: sections covered, citation count, info-gap counts (X critical, Y would-block-scoring), completeness} |
-| implement    | {pass|fail|—} | {one-line: slug, bundle size, validator-clean=Y/N, plan-gap count, scoring+ingestion requirements.txt present=Y/N} |
-| validate     | {pass|fail|—} | {one-line: exit code, first error if any} |
-| reformat_all | {pass|fail|—} | {one-line: N subs reformatted, interface adapted to, first failure if any} |
-| prepare_env  | {pass|fail|—} | {one-line: env name, package count, install method (uv/pip), duration; first stderr line if fail} |
-| run_all      | {pass|fail|—} | {one-line: K/N subs passed within tolerance} |
-| sub_<N>      | {pass|fail|—} | {one-line per sub_N: actual vs expected, delta, within_tolerance} |
-| ...          | ...    | ... |
+| phase                 | status | notes |
+|-----------------------|--------|-------|
+| preconditions         | {pass|fail|—} | {one-line: K subs discovered} |
+| plan                  | {pass|fail|—} | {sections covered, citations, info-gap count, X critical} |
+| implement+selfvalidate| {pass|fail|—} | {slug, validate_bundle=Y/N, validate_runtime=Y/N, baseline_attempts=K/5, notebook_attempts=K/4} |
+| score_submissions     | {pass|fail|—} | {K/N subs within tolerance} |
+| sub_<N>               | {pass|fail|—} | {reformat_attempts=K/4, actual vs expected, Δ, within_tolerance} |
+| ...                   | ...    | ... |
 
-(Rows for stages that never ran show status `—` and a "not reached"
-note. Don't omit them — the table's row pattern is part of the
-contract for cross-run rendering. `prepare_env`'s "not reached"
-typically means `reformat_all` failed; `run_all`'s typically means
-`prepare_env` failed.)
+(Rows for phases that never ran show status `—` and a "not reached" note.)
 
 ---
 
 ## What happened
 
-{1–3 paragraphs of orchestrator's analysis. What each step did, what
-passed, what failed and why. If status is `fail_at_<step>`, explicitly
-state what the failure means and why no recovery was attempted (per
-the skill's no-retry-inside-a-step rule). Be concrete about the defect
-(e.g. "leaderboard at position 0 missing 'index'") rather than
-hand-wavy ("validator failed").}
+{1–3 paragraphs of analysis. Per failure, explicitly state what the
+defect was and why no recovery was attempted. Concrete: "the
+implementer's baseline run failed at attempt 5/5 with abseil ABI
+deadlock between TF 2.21 and pyarrow's libarrow.2400.dylib".}
 
 ---
 
 ## Environment notes
 
-{Anything subagents reported in their JSON `notes` or `error` fields
-that looks like environment / configuration issues worth a human's
-attention. Examples: "MCP server absent from subagent sandbox",
-"Skill() call returned no body", "Bash blocked by permissionMode".
-If everything was nominal, write: "No environment anomalies reported."}
+{Anything the shell-outs surfaced in `notes` / `error` that's worth
+flagging. If none: "No environment anomalies reported."}
 
 ---
 
@@ -462,42 +395,28 @@ If everything was nominal, write: "No environment anomalies reported."}
 - would_block_correct_scoring: {K} — high-stakes inferences worth a human pass
 - would_have_asked_user_if_interactive: {Q}
 
-### Highest-stakes items (would_block_correct_scoring == true)
+### Highest-stakes items
 
-(Pulled directly from missing_info_report.json. Cap at the top 10;
-if more, add "and N more — see missing_info_report.json". If zero,
-write "None — all inferences were judged low-stakes.")
+(Top 10 from missing_info_report.json by would_block_correct_scoring,
+or "None" if zero.)
 
 1. **{section}.{field}** ({severity}, confidence={conf})
    - Missing: {what_was_missing}
    - Filled: {resolution.choice}
    - Rationale: {resolution.rationale}
-2. ...
-
----
-
-## Headline inferences (highest-impact non-blocking)
-
-(Top 3–5 items where `would_block_correct_scoring=false` but the
-choice still meaningfully shaped the bundle — e.g., the GPU/CNN
-→ CPU/sklearn re-casting in the 5/30 run. Cap at 5; quote the
-planner's rationale verbatim.)
-
-1. **{section}.{field}**: {choice} — {short rationale}
 
 ---
 
 ## Artifacts
 
-- Plan: `plan/implementation_plan.md`
-- Plan audit trail: `plan/auto_codabench_run/` ({"populated" | "empty — MCP unavailable to planner subagent"})
-- Bundle: `bundle/{slug}/` ({size_kb} KB)
-- Bundle audit trail: `bundle/auto_codabench_run/` ({"populated" | "empty — MCP unavailable to implementer subagent"})
-- Bundle zip: `bundle/{slug}/{slug}.zip` ({"produced by implementer" | "produced by orchestrator fallback" | "not produced"})
-- Validation report: `validation/report.txt`
-- Reformatted submissions: `reformatted_submission/` ({K} subs)
-- Env prep: `env/requirements.txt` ({M} packages), `env/install.stdout`, `env/install.stderr` (install_method: {uv|pip|—})
-- Submission runs: `submission_run/` ({K} subs)
+- Plan: `specs/implementation_plan.md`
+- Plan session log: `plan_session.log`
+- Bundle: `bundles/{slug}/` ({size_kb} KB)
+- Bundle zip: `bundles/{slug}.zip` ({"produced" | "not produced — runtime validation failed"})
+- Implement session log: `implement_session.log`
+- Per-sub reformat runs: `reformat_run/sub_<N>/` (session.log + attempt_<K>/ + final.json)
+- Per-sub audits: `log_audit/sub_<N>/verdict.json`
+- Bundle run_logs: `run_logs/{slug}/` (env, baseline, starting_kit, sub_<N>.attempt_<K>/)
 - Missing-info report: `missing_info_report.json` ({N} items)
 - Manifest: `manifest.json`
 
@@ -508,33 +427,22 @@ planner's rationale verbatim.)
 `./experiments/bundle_creation_test/runs/{comp}/{run_id}/`
 ```
 
-Write the final report to disk, THEN print the summary table to the
-user. The summary table to the user is essentially the same content
-as the report's "Summary table" + "Missing-info summary" sections —
-keeping them in sync lets reviewers cross-reference what they saw in
-the chat against what landed on disk.
-
-## Output format to the user
+Then print the same summary table to the chat:
 
 ```
-Experiment: <comp> · run_id: <run_id> · status: pass | fail_at_<step>
+Experiment: <comp> · run_id: <run_id> · status: pass | fail_at_<phase>
 
-| step         | status | notes                                                             |
-|--------------|--------|-------------------------------------------------------------------|
-| plan         | pass   | 7 sections, N citations, M info gaps (X critical)                 |
-| implement    | pass   | slug: <slug>, bundle <N> KB, validator-clean=true, K plan-gaps    |
-| validate     | pass   | exit 0                                                            |
-| reformat_all | pass   | N/N subs adapted to <interface_summary>                           |
-| prepare_env  | pass   | env acb-run-<...>, M packages via uv, <D>s                        |
-| run_all      | pass   | K/N subs within tolerance                                         |
-| sub_1        | pass   | actual 0.000, expected 0.000, Δ 0.000 (within 0.001 tolerance)    |
-| sub_2        | pass   | actual 0.303, expected 0.303, Δ 0.000 (within 0.001 tolerance)    |
-| ...          | ...    |                                                                   |
+| phase                  | status | notes                                                              |
+|------------------------|--------|--------------------------------------------------------------------|
+| preconditions          | pass   | <N> subs discovered                                                |
+| plan                   | pass   | 7 sections, <K> citations, <M> info gaps (<X> critical)            |
+| implement+selfvalidate | pass   | slug:<slug>, baseline 1/5, notebook 1/4, env:<env>                 |
+| score_submissions      | pass   | <K>/<N> subs within tolerance                                      |
+| sub_1                  | pass   | reformat 1/4; actual 0.000, expected 0.000, Δ 0.000 (within 0.001) |
+| ...                    | ...    |                                                                    |
 
 Missing-info report: <M+K> items total
-  by impact:    bundle_functionality=A, deployment_polish=B, participant_experience=C
-  by severity:  critical=X, important=Y, nice_to_have=Z, best_practice=W
-  would_block_correct_scoring: <count> ← high-stakes inferences worth a human pass
+  ...
 Full report: runs/<comp>/<run_id>/missing_info_report.json
 
 run dir: ./experiments/bundle_creation_test/runs/<comp>/<run_id>/

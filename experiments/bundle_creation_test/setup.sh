@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# Symlink the experiment's agent definitions and required skills into
-# .claude/ so Claude Code picks them up under its standard discovery paths.
-# Idempotent: re-running is safe.
+# Symlink the experiment's orchestrator skill, the auto_codabench/
+# skills it shells out to, and the experiment's one in-process subagent
+# definition into .claude/ so Claude Code picks them up under its
+# standard discovery paths. Idempotent.
 #
-# .claude/ itself is gitignored — the source of truth for these agents and
-# skills lives in experiments/bundle_creation_test/ (tracked). Symlinks
-# are local only.
+# .claude/ itself is gitignored — the source of truth for these skills
+# lives in experiments/bundle_creation_test/ and auto_codabench/.
 
 set -euo pipefail
 
-# Resolve repo root regardless of where the script is invoked from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 mkdir -p .claude/agents .claude/skills
 
-echo "=== linking stage-agent definitions into .claude/agents/ ==="
-# The 5 step-agents the orchestrator skill spawns via Task. The
-# orchestrator itself is a SKILL (see next section), not an agent — it
-# needs the Task tool, which is unavailable inside subagents.
+echo "=== linking agent definitions into .claude/agents/ ==="
+# Only one in-process subagent now (the log auditor). Phases 2/3/4a
+# are shell-outs, not subagents, and their definitions live in
+# auto_codabench/skills/ as skills rather than agents.
 for f in experiments/bundle_creation_test/agents/*.md; do
     name="$(basename "$f")"
     target="../../experiments/bundle_creation_test/agents/${name}"
@@ -28,11 +27,9 @@ for f in experiments/bundle_creation_test/agents/*.md; do
     printf "  %-44s -> %s\n" "${link}" "${target}"
 done
 
-# Sweep up any stale .claude/agents/ symlinks whose source dir no longer
-# exists. Without this, removing a tracked agent file leaves a dangling
-# symlink in .claude/agents/.
 echo
 echo "=== sweeping stale agent symlinks ==="
+# Without this, removing a tracked agent file leaves a dangling symlink.
 for link in .claude/agents/*.md; do
     [ -L "$link" ] || continue
     target_abs="$(readlink "$link" 2>/dev/null || true)"
@@ -43,19 +40,21 @@ for link in .claude/agents/*.md; do
 done
 
 echo
-echo "=== linking the orchestrator skill + autocodabench skills into .claude/skills/ ==="
-# Two sources:
-#   1. The bundle-creation-test orchestrator skill lives inside this experiment.
-#   2. The autocodabench-* / competition-design / codabench-bundle skills
-#      live in auto_codabench/ and are loaded by the stage agents via Skill(...).
-#
-# Each entry is "<skill_name>:<src_dir_relative_to_repo_root>".
+echo "=== linking skills into .claude/skills/ ==="
+# Five skills the experiment depends on:
+#   - bundle-creation-test:           the orchestrator (this experiment owns it)
+#   - autocodabench-plan:             phase 2 shell-out target (auto_codabench/)
+#   - autocodabench-implement:        phase 3 shell-out target (auto_codabench/)
+#   - autocodabench-reformat-and-run: phase 4a shell-out target (auto_codabench/)
+#   - codabench-bundle:               schema reference loaded by implement
+#   - competition-design:             design reference loaded by plan
 SKILLS=(
     "bundle-creation-test:experiments/bundle_creation_test/skills/bundle-creation-test"
     "autocodabench-plan:auto_codabench/skills/plan"
     "autocodabench-implement:auto_codabench/skills/autocodabench-implement"
-    "competition-design:auto_codabench/skills/competition-design"
+    "autocodabench-reformat-and-run:auto_codabench/skills/autocodabench-reformat-and-run"
     "codabench-bundle:auto_codabench/skills/codabench-bundle"
+    "competition-design:auto_codabench/skills/competition-design"
 )
 for entry in "${SKILLS[@]}"; do
     skill_name="${entry%%:*}"
@@ -66,24 +65,27 @@ for entry in "${SKILLS[@]}"; do
         echo "  SKIP ${skill_name}: ${src} not found on disk"
         continue
     fi
-    if [[ -e "${link}" || -L "${link}" ]]; then
-        # If it's already a symlink to the right place, leave it.
-        if [[ "$(readlink "${link}" 2>/dev/null || true)" == "${target}" ]]; then
-            printf "  %-40s (already linked)\n" "${link}"
-            continue
-        fi
-        # Otherwise replace.
+    if [[ -L "${link}" ]] && [[ "$(readlink "${link}" 2>/dev/null || true)" == "${target}" ]]; then
+        printf "  %-44s (already linked)\n" "${link}"
+        continue
     fi
     ln -sfn "${target}" "${link}"
-    printf "  %-40s -> %s\n" "${link}" "${target}"
+    printf "  %-44s -> %s\n" "${link}" "${target}"
 done
 
 echo
 echo "=== done ==="
 echo "Verify with:  ls -la .claude/agents/ .claude/skills/"
 echo
-echo "Then in Claude Code top-level session, ask:"
+echo "Then in a top-level Claude Code session, ask:"
 echo '  "Run the bundle-creation experiment on <competition_sample_name>"'
-echo "and Claude will load the bundle-creation-test skill, which then"
-echo "spawns bundle-planner, bundle-implementer, bundle-validator-runner,"
-echo "submission-reformatter, and submission-runner via the Task tool."
+echo
+echo "The orchestrator (bundle-creation-test skill) will:"
+echo "  1. Compute run_id, create runs/<comp>/<run_id>/, snapshot expected_results."
+echo "  2. claude --print /autocodabench-plan ...          → specs/implementation_plan.md"
+echo "  3. claude --print /autocodabench-implement ...     → bundles/<slug>/ (validated + runtime-tested)"
+echo "  4. for each sub_N:"
+echo "       claude --print /autocodabench-reformat-and-run ...  → reformat_run/sub_N/final.json"
+echo "       Task submission-log-auditor ...                     → log_audit/sub_N/verdict.json"
+echo "  5. Aggregate missing-info → missing_info_report.json"
+echo "  6. Finalize manifest, remove conda env, write run_report.md"

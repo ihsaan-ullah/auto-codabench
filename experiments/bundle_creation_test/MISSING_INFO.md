@@ -1,7 +1,8 @@
 # Missing-information inventory — structure + conventions
 
 A competition proposal almost never spells out every detail needed to
-build a working bundle. The bundle-planner agent has to fill gaps —
+build a working bundle. The plan-phase shell-out (running the
+`autocodabench-plan` skill) has to fill gaps —
 sometimes by inferring from context, sometimes by applying sensible
 defaults, sometimes by punting. Each gap-filling decision is a piece of
 **reproducible forensic data** that is more valuable than the
@@ -19,11 +20,12 @@ implementation_plan.md itself for two reasons:
    targeted improvements to the autocodabench-plan skill itself.
 
 This file is the **source of truth** for what gets logged, in what
-shape, and how it's aggregated. Both the planner and implementer
-subagents reference it. The orchestrator skill aggregates per these
-conventions. Any tool reading these JSONs (meta-analysis, dashboards,
-regression detection) treats this schema as stable contract — version
-it in the file when changing.
+shape, and how it's aggregated. Both the plan-phase and
+implement-phase shell-outs (the `autocodabench-plan` and
+`autocodabench-implement` skills) reference it. The orchestrator
+skill aggregates per these conventions. Any tool reading these JSONs
+(meta-analysis, dashboards, regression detection) treats this schema
+as stable contract — version it in the file when changing.
 
 ---
 
@@ -42,12 +44,11 @@ still be parseable by tools that handle `schema_version` lookups.
 
 ```
 runs/<comp>/<run_id>/
-├── plan/
+├── specs/
 │   ├── implementation_plan.md
-│   └── missing_info_inventory.json      ← written by bundle-planner
-├── bundle/
-│   └── <slug>/...
-│       └── missing_info_inventory.json  ← written by bundle-implementer (smaller — gaps in the PLAN, not the proposal)
+│   └── missing_info_inventory.json      ← written by the plan-phase shell-out (autocodabench-plan)
+├── bundles/<slug>/
+│   └── missing_info_inventory.json      ← written by the implement-phase shell-out (autocodabench-implement; smaller — gaps in the PLAN, not the proposal)
 └── missing_info_report.json             ← written by the orchestrator skill, aggregates the two above + adds run-level totals
 ```
 
