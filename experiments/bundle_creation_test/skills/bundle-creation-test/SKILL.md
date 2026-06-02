@@ -153,16 +153,44 @@ When done, emit a single JSON object as your last message with shape:
 '
 
 AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
-claude --print --dangerously-skip-permissions "${PLAN_PROMPT}" \
-  > "${RUN_ROOT}/plan_session.log" 2>&1
+claude --print --dangerously-skip-permissions \
+       --output-format stream-json --verbose --input-format text \
+       "${PLAN_PROMPT}" \
+       < /dev/null \
+       > "${RUN_ROOT}/plan_session.jsonl" 2> "${RUN_ROOT}/plan_session.stderr"
 ```
 
-Parse the JSON object from the last line of `plan_session.log` (the
-shell-out's final assistant message). Append a phase entry:
-`{name: "plan", status, started_at, finished_at, agent_summary, artifacts}`.
-If `status == "fail"` or the file `specs/implementation_plan.md`
-doesn't exist after the shell-out: `overall_status = "fail_at_plan"`,
-stop.
+**How to invoke this shell-out** (read carefully — getting this
+wrong is the most common harness friction):
+
+- **Always launch with `run_in_background: true`.** Plan shell-outs
+  take 5–30 minutes; the foreground Bash tool's 2-minute default
+  timeout will kill them.
+- **`< /dev/null` is required.** `claude --print` waits 3 seconds
+  for stdin even when a prompt arg is given — redirect to skip the
+  wait.
+- **`--output-format stream-json --verbose`** emits one JSON line
+  per session event (`type: system|user|assistant|result`). The
+  text-mode default buffers everything until exit, which masks
+  progress and leaves you blind to mid-run failures.
+- **After launching, do NOT poll.** No `sleep`, no `tail`, no
+  `BashOutput` peeks. The harness will notify you when the
+  background process exits. Sleeping a few hundred ms and then
+  checking the log is wasted budget and the harness will block it
+  anyway.
+- **When you receive the completion notification**, parse the result
+  line: `tail -n 50 ${RUN_ROOT}/plan_session.jsonl | grep '"type":"result"' | tail -n 1`
+  gives you a single JSON object with `subtype`, `is_error`,
+  `result` (the final assistant text), `num_turns`, `total_cost_usd`.
+  The inner JSON payload your prompt requested is inside `.result`
+  (the assistant message body, last paragraph of which is the
+  JSON object you asked for).
+
+Parse the JSON object from `.result`. Append a phase entry:
+`{name: "plan", status, started_at, finished_at, num_turns, total_cost_usd, agent_summary, artifacts}`.
+If `status == "fail"`, `is_error == true`, or the file
+`specs/implementation_plan.md` doesn't exist after the shell-out:
+`overall_status = "fail_at_plan"`, stop.
 
 **No retries.** A failed plan is a defect to investigate, not to
 paper over.
@@ -203,9 +231,19 @@ When done, emit a single JSON object as your last message with shape:
 '
 
 AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
-claude --print --dangerously-skip-permissions "${IMPL_PROMPT}" \
-  > "${RUN_ROOT}/implement_session.log" 2>&1
+claude --print --dangerously-skip-permissions \
+       --output-format stream-json --verbose --input-format text \
+       "${IMPL_PROMPT}" \
+       < /dev/null \
+       > "${RUN_ROOT}/implement_session.jsonl" 2> "${RUN_ROOT}/implement_session.stderr"
 ```
+
+Same invocation discipline as phase 2: `run_in_background: true`,
+`< /dev/null`, `stream-json --verbose`, no polling. Wait for harness
+notification, then grep the result line. Implement shell-outs are
+the longest in the pipeline (bundle write + lint + env clone +
+baseline run + notebook run, often 15–45 minutes) — budget for it
+and don't be tempted to peek.
 
 Parse the final JSON. Append a phase entry. If `status == "fail"` or
 `validate_runtime == false`: `overall_status = "fail_at_implement"`,
@@ -250,9 +288,16 @@ adapter_notes).
 '
 
 AUTOCODABENCH_RUN_DIR="${RUN_ROOT}" \
-claude --print --dangerously-skip-permissions "${RFR_PROMPT}" \
-  > "${RUN_ROOT}/reformat_run/${SUB}/session.log" 2>&1
+claude --print --dangerously-skip-permissions \
+       --output-format stream-json --verbose --input-format text \
+       "${RFR_PROMPT}" \
+       < /dev/null \
+       > "${RUN_ROOT}/reformat_run/${SUB}/session.jsonl" \
+       2> "${RUN_ROOT}/reformat_run/${SUB}/session.stderr"
 ```
+
+Same invocation discipline (`run_in_background: true`, `< /dev/null`,
+`stream-json --verbose`, no polling).
 
 The shell-out writes `${OUT_DIR}/final.json` and `${OUT_DIR}/attempt_<K>/`.
 
@@ -268,7 +313,7 @@ Spawn the auditor:
 > result.
 >
 > sub_label:             `${SUB}`
-> reformat_run_dir:      `${OUT_DIR}` (contains `final.json`, `attempt_<K>/`, `session.log`)
+> reformat_run_dir:      `${OUT_DIR}` (contains `final.json`, `attempt_<K>/`, `session.jsonl`)
 > bundle_run_logs_dir:   `<RUN_ROOT>/run_logs/<slug>/<sub_label>.attempt_<K>/` (the sandbox + stdout/stderr for the final attempt)
 > expected_result_path:  `<comp>/ground_truth/sample_submissions/<SUB>/expected_result.json`
 > out_path:              `<RUN_ROOT>/log_audit/<SUB>/verdict.json`
@@ -410,11 +455,11 @@ or "None" if zero.)
 ## Artifacts
 
 - Plan: `specs/implementation_plan.md`
-- Plan session log: `plan_session.log`
+- Plan session log: `plan_session.jsonl`
 - Bundle: `bundles/{slug}/` ({size_kb} KB)
 - Bundle zip: `bundles/{slug}.zip` ({"produced" | "not produced — runtime validation failed"})
-- Implement session log: `implement_session.log`
-- Per-sub reformat runs: `reformat_run/sub_<N>/` (session.log + attempt_<K>/ + final.json)
+- Implement session log: `implement_session.jsonl`
+- Per-sub reformat runs: `reformat_run/sub_<N>/` (session.jsonl + attempt_<K>/ + final.json)
 - Per-sub audits: `log_audit/sub_<N>/verdict.json`
 - Bundle run_logs: `run_logs/{slug}/` (env, baseline, starting_kit, sub_<N>.attempt_<K>/)
 - Missing-info report: `missing_info_report.json` ({N} items)

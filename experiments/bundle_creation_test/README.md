@@ -66,7 +66,7 @@ experiments/bundle_creation_test/
             ├── tool_calls/              # full MCP request/response snapshots
             ├── specs/                   # plan-phase output
             │   └── implementation_plan.md
-            ├── plan_session.log         # claude --print stdout for phase 2
+            ├── plan_session.jsonl         # claude --print stdout for phase 2
             ├── bundles/<slug>/          # implementer's bundle (validates + zips here)
             │   ├── competition.yaml
             │   ├── scoring_program/    (with requirements.txt)
@@ -76,7 +76,7 @@ experiments/bundle_creation_test/
             │   ├── reference_data/  input_data/  public_data/
             │   ├── README.ipynb         # the starting-kit notebook
             │   └── <slug>.zip           # produced only if validate_runtime=true
-            ├── implement_session.log    # claude --print stdout for phase 3
+            ├── implement_session.jsonl    # claude --print stdout for phase 3
             ├── run_logs/<slug>/         # runner_io output
             │   ├── env/                 # conda clone + install logs
             │   │   ├── clone.stdout/stderr
@@ -94,7 +94,7 @@ experiments/bundle_creation_test/
             │   └── sub_<N>.attempt_<K>/ # reformat-and-run-driven user-submission scoring
             │       └── (same shape as baseline/)
             ├── reformat_run/<sub_N>/    # phase 4a per-sub shell-out
-            │   ├── session.log
+            │   ├── session.jsonl
             │   ├── env_probe.txt
             │   ├── attempt_<K>/         # per-attempt adapted code
             │   │   ├── model.py (or whatever the bundle interface expects)
@@ -153,7 +153,7 @@ The shell-outs share state with the parent orchestrator only
 through:
 - the on-disk run dir (`AUTOCODABENCH_RUN_DIR` env var),
 - the JSON object the shell-out emits as its last assistant message
-  (captured in the `*_session.log` and parsed by the orchestrator).
+  (captured in the `*_session.jsonl` and parsed by the orchestrator).
 
 That's the entire inter-phase contract. Each phase is reproducible
 in isolation by re-running `claude --print` with the same prompt.
@@ -210,8 +210,10 @@ To inspect a finished run:
 - For machine analysis: `manifest.json` (structured) +
   `missing_info_report.json`.
 - For deeper digging into a phase failure: the corresponding
-  `*_session.log` (full Claude transcript) + the run_logs/ subdir
-  for the artifact that broke.
+  `*_session.jsonl` (one JSON event per line — type=system, user,
+  assistant, tool_use, tool_result, result) + the run_logs/ subdir
+  for the artifact that broke. `jq -c 'select(.type=="result")'
+  session.jsonl | tail -1` gives the final result blob.
 
 ---
 
