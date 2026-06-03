@@ -30,6 +30,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -168,10 +169,17 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
     ferr = stderr.open("w", encoding="utf-8") if stderr else None
 
     try:
+        # `start_new_session=True` makes the child a process-group leader, so
+        # on timeout we can SIGKILL the whole group via `os.killpg` and reap
+        # grandchildren (conda run → bash → python). Without this, `p.kill()`
+        # only hits the direct child and leaves orphans pinning CPU/memory
+        # — observed in the 6/3 run where the python ingestion process was
+        # still alive 30+ minutes after its parent was killed.
         p = subprocess.Popen(
             cmd, shell=True, cwd=str(cwd) if cwd else None,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=proc_env, bufsize=1,
+            start_new_session=True,
         )
         t_out = threading.Thread(target=_pump, args=(p.stdout, fout, out_tail, out_count),
                                  daemon=True)
@@ -183,7 +191,10 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
         try:
             p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            p.kill()
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                p.kill()
             p.wait()
             timed_out = True
 
@@ -505,7 +516,7 @@ def _run_submission_in_sandbox(
                     fallback="python3 ingestion_program/ingestion.py "
                              "input_data submission input/res")
         ing = _bash(
-            f"{_conda_run_prefix(env_name)} bash -lc {shlex.quote(ing_cmd)}",
+            f"{_conda_run_prefix(env_name)} bash -c {shlex.quote(ing_cmd)}",
             cwd=sandbox / "program",
             stdout=logs / "ingestion_stdout.txt",
             stderr=logs / "ingestion_stderr.txt",
@@ -536,7 +547,7 @@ def _run_submission_in_sandbox(
     score_cmd = _read_command_from_metadata(meta_path,
                 fallback="python3 scoring_program/score.py input output")
     score_run = _bash(
-        f"{_conda_run_prefix(env_name)} bash -lc {shlex.quote(score_cmd)}",
+        f"{_conda_run_prefix(env_name)} bash -c {shlex.quote(score_cmd)}",
         cwd=sandbox / "program",
         stdout=logs / "scoring_stdout.txt",
         stderr=logs / "scoring_stderr.txt",

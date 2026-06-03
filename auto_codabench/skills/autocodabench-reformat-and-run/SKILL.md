@@ -73,6 +73,15 @@ that's the orchestrator's job after you finish.
    You do NOT have permission to `pip install` directly. Use the MCP
    tool `autocodabench_install_env_extras` for that.
 
+   **Always pass the per-run env name** (the one the orchestrator handed
+   you, e.g. `acb-run-<run_id>`) — NEVER pass `env_name="base"`.
+   Installing into `base` pollutes the user's host environment and
+   doesn't help: the bundle's ingestion runs inside the per-run env,
+   not base. (One past run wasted an attempt on this — the inner agent
+   misdiagnosed a `CONDA_PREFIX`-clobbering bug as a missing-package
+   issue and installed TF into base. The runner-side fix `bash -lc →
+   bash -c` removed the clobbering; install into the cloned env now.)
+
 ---
 
 ## 1. Inputs (parsed from the orchestrator's prompt)
