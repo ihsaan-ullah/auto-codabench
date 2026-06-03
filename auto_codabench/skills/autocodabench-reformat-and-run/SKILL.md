@@ -45,6 +45,17 @@ that's the orchestrator's job after you finish.
    Your inputs are the four arguments above. Any other file under
    the experiment run dir is off-limits.
 
+   **The harness exports safe single-thread defaults** for
+   BLAS/OMP/TF into every subprocess env (`OMP_NUM_THREADS=1`,
+   `TF_NUM_INTEROP_THREADS=1`, `TF_NUM_INTRAOP_THREADS=1`, +
+   sibling vars). Do NOT add `os.environ.setdefault("OMP_NUM_THREADS", "1")`
+   to the adapted submission code — by the time that line runs,
+   numpy has already pulled libomp in with the wrong thread count
+   and the deadlock is locked in. If you genuinely need a different
+   value (e.g. perf testing), pass `extra_env=` to
+   `autocodabench_run_user_submission`; that gets applied at process
+   start time, which is the only place it can work.
+
 3. **Bounded attempts.** `MAX_ATTEMPTS = 4`. Initial reformat counts
    as attempt 1; up to 3 retries on runtime errors. Per attempt:
    write to `<out_dir>/attempt_<K>/`. Each retry reads the prior

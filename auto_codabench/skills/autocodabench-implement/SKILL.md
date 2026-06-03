@@ -281,6 +281,20 @@ If False, diagnose:
 | `FileNotFoundError: <path>` | Either ingestion is looking for the wrong path or the scoring stage's input/output dirs differ from Codabench convention. Re-read the relevant `metadata.yaml`'s `command:` and the script's `sys.argv` use. Fix the script. |
 | `ValueError: shapes (n,m) and (p,q) ...` / metric-side numeric failure | Mismatch between baseline's predictions format and scoring's reader. Fix one or the other (whichever the plan unambiguously specifies). |
 | Process killed / `SIGTERM` / no traceback | Native library conflict (e.g. abseil deadlock between TF and pyarrow). Try uninstalling the conflicting non-essential package via `install_env_extras(env_name, ["pyarrow<7"])` or pinning to a compatible version. If still failing after one such fix, fall through to "exhausted" — this class of failure is upstream of any code edit you can do. |
+| **Process alive, ~0% CPU, no stderr output, hangs indefinitely** | macOS libomp / OpenBLAS / TF multi-thread deadlock. The harness sets `OMP_NUM_THREADS=1` + `TF_NUM_INTEROP_THREADS=1` + `TF_NUM_INTRAOP_THREADS=1` + sibling vars as defaults in the subprocess env BEFORE python starts, so this should be already handled. If it still hangs, the bundle's own code is overriding one of those vars somewhere — grep `scoring_program/`, `ingestion_program/`, `solutions/` for `OMP_NUM_THREADS` / `TF_NUM_*` and remove the override. Do NOT add `os.environ.setdefault("OMP_NUM_THREADS", "1")` to bundle code as a "fix" — by the time that line runs, libomp is already loaded with the wrong thread count. |
+
+The harness automatically exports the following defaults into every
+subprocess it launches (set BEFORE the child python starts, so libomp
+and BLAS read them at .so-load time): `OMP_NUM_THREADS=1`,
+`OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
+`VECLIB_MAXIMUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`,
+`TF_NUM_INTEROP_THREADS=1`, `TF_NUM_INTRAOP_THREADS=1`,
+`TF_CPP_MIN_LOG_LEVEL=2`, `PYTHONUNBUFFERED=1`. You can override
+any of them per-call via the `extra_env` arg on
+`autocodabench_run_baseline_submission`, `_run_user_submission`, or
+`_run_starting_kit`, but the defaults are intentional — they
+prevent the macOS deadlock. The toy-scale data used in self-validation
+doesn't benefit from multi-threading anyway.
 
 Re-run baseline. Cap at `MAX_ATTEMPTS_BASELINE`. If exhausted, set
 `validate_runtime = false`, record `baseline_status = "fail"` in the

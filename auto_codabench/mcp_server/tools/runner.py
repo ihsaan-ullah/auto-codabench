@@ -100,6 +100,7 @@ async def autocodabench_run_baseline_submission(
     slug: str,
     env_name: str,
     subdir: str = "solution_baseline",
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the bundle's OWN baseline submission through ingestion + scoring.
 
@@ -111,10 +112,19 @@ async def autocodabench_run_baseline_submission(
     Falls back gracefully to other common subdir names
     (`sample_code_submission`, `solution1`) if `subdir` doesn't exist.
 
+    The harness already exports safe BLAS/OMP/TF single-thread defaults
+    into the subprocess env at .so-load time (this prevents the macOS
+    libomp deadlock that hangs TF 2.21 + Keras 3 sessions). Pass
+    `extra_env` ONLY to override one of those (e.g.
+    `{"OMP_NUM_THREADS": "4"}` for a perf test) — most callers can
+    omit it.
+
     Args:
-        slug:     bundle slug.
-        env_name: env returned by `autocodabench_prepare_run_env`.
-        subdir:   directory under `solutions/` containing the baseline.
+        slug:      bundle slug.
+        env_name:  env returned by `autocodabench_prepare_run_env`.
+        subdir:    directory under `solutions/` containing the baseline.
+        extra_env: optional env-var overrides applied at subprocess
+                   start time, before python imports any C extensions.
 
     Returns:
         Dict: `ok`, `stage` ("ingestion"|"scoring"), `ingestion`
@@ -124,9 +134,11 @@ async def autocodabench_run_baseline_submission(
               The `scores` dict mirrors the bundle's `scores.json`
               top-level keys verbatim.
     """
-    log.info("run_baseline slug=%s env=%s subdir=%s", slug, env_name, subdir)
+    log.info("run_baseline slug=%s env=%s subdir=%s extra_env=%s",
+             slug, env_name, subdir, list((extra_env or {}).keys()))
     try:
-        return await asyncio.to_thread(run_baseline_submission, slug, env_name, subdir)
+        return await asyncio.to_thread(run_baseline_submission, slug, env_name, subdir,
+                                       extra_env)
     except Exception as e:
         return {"ok": False, "error": f"run_baseline_submission crashed: {e}"}
 
@@ -138,6 +150,7 @@ async def autocodabench_run_user_submission(
     env_name: str,
     submission_dir: str,
     label: str,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run an external submission directory through ingestion + scoring.
 
@@ -146,19 +159,27 @@ async def autocodabench_run_user_submission(
     pipeline as `run_baseline_submission` but the submission code is
     sourced from `submission_dir` instead of the bundle's `solutions/`.
 
+    Default BLAS/OMP/TF thread pools are single-threaded (set in the
+    subprocess env at .so-load time to avoid the macOS libomp
+    deadlock). Pass `extra_env` only to override per-call.
+
     Args:
         slug:           bundle slug.
         env_name:       env returned by `autocodabench_prepare_run_env`.
         submission_dir: absolute path to the submission folder.
         label:          short identifier scoping the run logs (e.g.
                         `"sub_1.attempt_2"`); appears in `logs_dir`.
+        extra_env:      optional env-var overrides applied at subprocess
+                        start time.
 
     Returns:
         Same shape as `run_baseline_submission`.
     """
-    log.info("run_user slug=%s env=%s sub=%s label=%s", slug, env_name, submission_dir, label)
+    log.info("run_user slug=%s env=%s sub=%s label=%s extra_env=%s",
+             slug, env_name, submission_dir, label, list((extra_env or {}).keys()))
     try:
-        return await asyncio.to_thread(run_user_submission, slug, env_name, submission_dir, label)
+        return await asyncio.to_thread(run_user_submission, slug, env_name, submission_dir,
+                                       label, extra_env)
     except Exception as e:
         return {"ok": False, "error": f"run_user_submission crashed: {e}"}
 
@@ -169,6 +190,7 @@ async def autocodabench_run_starting_kit(
     slug: str,
     env_name: str,
     notebook_path: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Execute the bundle's starting-kit notebook end-to-end.
 
@@ -178,10 +200,14 @@ async def autocodabench_run_starting_kit(
     traceback in `stderr_tail`. The executed copy is saved under
     `<run>/run_logs/<slug>/starting_kit/executed.ipynb` for review.
 
+    Default BLAS/OMP/TF thread pools are single-threaded. Pass
+    `extra_env` only to override per-call.
+
     Args:
         slug:          bundle slug.
         env_name:      env returned by `autocodabench_prepare_run_env`.
         notebook_path: optional explicit path; otherwise auto-discovered.
+        extra_env:     optional env-var overrides.
 
     Returns:
         Dict: `ok`, `notebook_source`, `executed_notebook`,
@@ -189,9 +215,11 @@ async def autocodabench_run_starting_kit(
               `stdout_tail`, `stderr_tail`, `stdout_path`, `stderr_path`,
               `logs_dir`, `error`.
     """
-    log.info("run_starting_kit slug=%s env=%s nb=%s", slug, env_name, notebook_path)
+    log.info("run_starting_kit slug=%s env=%s nb=%s extra_env=%s",
+             slug, env_name, notebook_path, list((extra_env or {}).keys()))
     try:
-        return await asyncio.to_thread(run_starting_kit, slug, env_name, notebook_path)
+        return await asyncio.to_thread(run_starting_kit, slug, env_name, notebook_path,
+                                       extra_env)
     except Exception as e:
         return {"ok": False, "error": f"run_starting_kit crashed: {e}"}
 

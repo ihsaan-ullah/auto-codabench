@@ -47,6 +47,40 @@ _TAIL_LINES = 80
 # scoring program hangs.
 _DEFAULT_TIMEOUT_S = 1800
 
+# Defaults set in the OS environ for every subprocess we launch. These
+# MUST be set before python starts because:
+#
+# 1. libomp / OpenBLAS / MKL read their thread-count vars at .so-load
+#    time. By the time `import numpy` returns (which itself pulls libomp
+#    in), the thread pools are already sized. Setting OMP_NUM_THREADS=1
+#    in Python via `os.environ.setdefault` is too late — that was the
+#    failure mode that hung the sub_1 run on macOS/arm64 for 24 minutes
+#    using ~10s of CPU.
+# 2. TF reads its inter/intra-op thread vars at session-creation time;
+#    similar story.
+# 3. PYTHONUNBUFFERED=1 makes child python flush stdout/stderr promptly
+#    so the tee-to-disk output is closer to live.
+# 4. TF_CPP_MIN_LOG_LEVEL=2 silences TF's INFO chatter; warnings/errors
+#    still surface.
+#
+# Single-threading BLAS/OMP is a defensive default for the developer
+# laptop case (small, toy-sized data — multi-threading overhead would
+# dominate anyway). On Codabench's Linux workers + Docker the bundle
+# will run with the docker_image's default settings, not these — the
+# values live in the *harness's* subprocess env, not in the bundle.
+# Per-call `env=` overrides still win (e.g. `extra_env={"OMP_NUM_THREADS": "8"}`).
+_SUBPROCESS_DEFAULTS = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+    "TF_NUM_INTEROP_THREADS": "1",
+    "TF_NUM_INTRAOP_THREADS": "1",
+    "TF_CPP_MIN_LOG_LEVEL": "2",
+    "PYTHONUNBUFFERED": "1",
+}
+
 
 # ---------------------------------------------------------------------------
 # Env management
@@ -81,6 +115,10 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
     timed_out = False
 
     proc_env = os.environ.copy()
+    # Set our subprocess defaults BEFORE merging caller's env, so explicit
+    # caller values (e.g. extra_env={"OMP_NUM_THREADS": "8"}) override.
+    for k, v in _SUBPROCESS_DEFAULTS.items():
+        proc_env.setdefault(k, v)
     if env:
         proc_env.update(env)
 
@@ -354,6 +392,7 @@ def _read_scores(output_dir: Path) -> dict[str, Any]:
 def _run_submission_in_sandbox(
     slug: str, env_name: str, submission_dir: Path,
     label: str,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Stage a sandbox, run ingestion (if defined) + scoring, parse scores.
 
@@ -426,7 +465,7 @@ def _run_submission_in_sandbox(
             cwd=sandbox / "program",
             stdout=logs / "ingestion_stdout.txt",
             stderr=logs / "ingestion_stderr.txt",
-            env={"PYTHONUNBUFFERED": "1"},
+            env=extra_env or None,
         )
         if ing["exit_code"] != 0 or ing["timed_out"]:
             return {
@@ -457,7 +496,7 @@ def _run_submission_in_sandbox(
         cwd=sandbox / "program",
         stdout=logs / "scoring_stdout.txt",
         stderr=logs / "scoring_stderr.txt",
-        env={"PYTHONUNBUFFERED": "1"},
+        env=extra_env or None,
     )
 
     scores_blob = _read_scores(sandbox / "output")
@@ -495,12 +534,18 @@ def _read_command_from_metadata(meta_path: Path, fallback: str) -> str:
 
 
 def run_baseline_submission(slug: str, env_name: str,
-                            subdir: str = "solution_baseline") -> dict[str, Any]:
+                            subdir: str = "solution_baseline",
+                            extra_env: dict[str, str] | None = None,
+                            ) -> dict[str, Any]:
     """Run the bundle's own baseline through its scoring pipeline.
 
     The bundle ships `solutions/<subdir>/` as a working example. We
     run it the same way Codabench would run a participant submission
     so the implementer can verify the bundle is end-to-end functional.
+
+    `extra_env` (optional) overrides per-subprocess env vars at process
+    start time. Use sparingly — the host has sane defaults for
+    BLAS/OMP/TF thread pools that you usually want.
     """
     bundle_dir = resolve_bundle_dir(slug)
     candidates = [
@@ -515,24 +560,31 @@ def run_baseline_submission(slug: str, env_name: str,
                 "error": f"no baseline submission found under bundle's solutions/ "
                          f"(checked: {[str(c) for c in candidates]})"}
     log_event("run_baseline_started", slug=slug, env_name=env_name, submission=str(sub_dir))
-    res = _run_submission_in_sandbox(slug, env_name, sub_dir, label="baseline")
+    res = _run_submission_in_sandbox(slug, env_name, sub_dir, label="baseline",
+                                     extra_env=extra_env)
     log_event("run_baseline_finished", slug=slug, ok=res["ok"],
               error=res.get("error"), score=res.get("scores"))
     return res
 
 
 def run_user_submission(slug: str, env_name: str, submission_dir: str,
-                        label: str) -> dict[str, Any]:
+                        label: str,
+                        extra_env: dict[str, str] | None = None,
+                        ) -> dict[str, Any]:
     """Run an arbitrary submission directory through the bundle's scoring pipeline.
 
     `label` namespaces this run's logs (e.g. "sub_1.attempt_2"). Used
     by the reformat-and-run skill against a ground-truth submission
     that's been adapted to the bundle's interface.
+
+    `extra_env` (optional) overrides per-subprocess env vars at process
+    start time.
     """
     sub_dir = Path(submission_dir).resolve()
     log_event("run_user_started", slug=slug, env_name=env_name,
               submission=str(sub_dir), label=label)
-    res = _run_submission_in_sandbox(slug, env_name, sub_dir, label=label)
+    res = _run_submission_in_sandbox(slug, env_name, sub_dir, label=label,
+                                     extra_env=extra_env)
     log_event("run_user_finished", slug=slug, label=label, ok=res["ok"],
               error=res.get("error"), score=res.get("scores"))
     return res
@@ -543,7 +595,9 @@ def run_user_submission(slug: str, env_name: str, submission_dir: str,
 # ---------------------------------------------------------------------------
 
 def run_starting_kit(slug: str, env_name: str,
-                     notebook_path: str | None = None) -> dict[str, Any]:
+                     notebook_path: str | None = None,
+                     extra_env: dict[str, str] | None = None,
+                     ) -> dict[str, Any]:
     """Execute the bundle's starting-kit notebook end-to-end in the cloned env.
 
     Looks for `README.ipynb` or `starting_kit/*.ipynb` at the bundle root.
@@ -576,7 +630,7 @@ def run_starting_kit(slug: str, env_name: str,
     log_event("run_starting_kit_started", slug=slug, notebook=str(nb))
     res = _bash(cmd, cwd=bundle_dir,
                 stdout=logs / "stdout.txt", stderr=logs / "stderr.txt",
-                timeout=3600, env={"PYTHONUNBUFFERED": "1"})
+                timeout=3600, env=extra_env or None)
 
     # Count cells executed by re-reading the notebook (best-effort, no nbformat dep)
     cells_executed = None
