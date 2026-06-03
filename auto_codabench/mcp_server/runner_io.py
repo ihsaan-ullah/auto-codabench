@@ -31,9 +31,11 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, IO, TextIO
 
 from .config import resolve_bundle_dir
 from .run_log import current_run, log_event
@@ -102,13 +104,48 @@ def _env_name_for_run() -> str:
     return f"acb-run-{run.name[:24]}"
 
 
+def _pump(src: IO[str], sink: TextIO | None, tail: deque[str], counter: list[int]) -> None:
+    """Daemon-thread body: copy one stream line-by-line to disk + ring buffer.
+
+    `counter` is a single-element list used as a thread-safe lines-seen
+    counter (GIL atomicity is enough — only one writer per stream). The
+    ring buffer (`tail`, bounded `deque(maxlen=_TAIL_LINES)`) keeps the
+    last N lines for the inline return.
+
+    Each line is flushed to disk immediately. `bufsize=1` on the Popen
+    + `flush()` here is what makes the on-disk file actually live —
+    important for long-running TF/torch jobs where the only signal that
+    they're alive is the steady drip of progress lines.
+    """
+    try:
+        for line in iter(src.readline, ""):
+            tail.append(line.rstrip("\n"))
+            counter[0] += 1
+            if sink is not None:
+                sink.write(line)
+                sink.flush()
+    finally:
+        try:
+            src.close()
+        except Exception:
+            pass
+
+
 def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
           stdout: Path | None = None, stderr: Path | None = None,
           env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Run a shell command. Tee streams to disk if paths are given.
+    """Run a shell command. Tee streams to disk live (line-by-line).
+
+    The on-disk files at `stdout` / `stderr` paths grow as the
+    subprocess runs, so `tail -f` works from outside this process —
+    important for long-running ingestion / training where the only
+    signal the process is alive is its steady output. The
+    `stdout_tail` / `stderr_tail` returned in the result dict are the
+    last `_TAIL_LINES` lines collected by per-stream daemon threads.
 
     Returns a dict with exit_code, duration_s, stdout_tail, stderr_tail,
-    stdout_path, stderr_path, command, timed_out.
+    stdout_path, stderr_path, stdout_lines, stderr_lines, command,
+    timed_out.
     """
     timeout = timeout or _DEFAULT_TIMEOUT_S
     t0 = time.perf_counter()
@@ -122,8 +159,10 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
     if env:
         proc_env.update(env)
 
-    out_buf: list[str] = []
-    err_buf: list[str] = []
+    out_tail: deque[str] = deque(maxlen=_TAIL_LINES)
+    err_tail: deque[str] = deque(maxlen=_TAIL_LINES)
+    out_count = [0]
+    err_count = [0]
 
     fout = stdout.open("w", encoding="utf-8") if stdout else None
     ferr = stderr.open("w", encoding="utf-8") if stderr else None
@@ -132,23 +171,28 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
         p = subprocess.Popen(
             cmd, shell=True, cwd=str(cwd) if cwd else None,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=proc_env,
+            text=True, env=proc_env, bufsize=1,
         )
+        t_out = threading.Thread(target=_pump, args=(p.stdout, fout, out_tail, out_count),
+                                 daemon=True)
+        t_err = threading.Thread(target=_pump, args=(p.stderr, ferr, err_tail, err_count),
+                                 daemon=True)
+        t_out.start()
+        t_err.start()
+
         try:
-            out, err = p.communicate(timeout=timeout)
+            p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             p.kill()
-            out, err = p.communicate()
+            p.wait()
             timed_out = True
 
-        if out:
-            out_buf.extend(out.splitlines())
-            if fout:
-                fout.write(out)
-        if err:
-            err_buf.extend(err.splitlines())
-            if ferr:
-                ferr.write(err)
+        # Let pump threads drain whatever buffered output the child wrote
+        # between its last flush and exit. A short join is enough — the
+        # child's pipes are closed once it exits, so `iter(readline, "")`
+        # terminates.
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
         exit_code = p.returncode
     finally:
         if fout: fout.close()
@@ -160,12 +204,12 @@ def _bash(cmd: str, cwd: Path | str | None = None, timeout: int | None = None,
         "exit_code": exit_code,
         "duration_s": duration_s,
         "timed_out": timed_out,
-        "stdout_tail": "\n".join(out_buf[-_TAIL_LINES:]),
-        "stderr_tail": "\n".join(err_buf[-_TAIL_LINES:]),
+        "stdout_tail": "\n".join(out_tail),
+        "stderr_tail": "\n".join(err_tail),
         "stdout_path": str(stdout) if stdout else None,
         "stderr_path": str(stderr) if stderr else None,
-        "stdout_lines": len(out_buf),
-        "stderr_lines": len(err_buf),
+        "stdout_lines": out_count[0],
+        "stderr_lines": err_count[0],
     }
 
 
