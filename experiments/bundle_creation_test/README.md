@@ -273,3 +273,24 @@ different problem than the proposal specified.
   with no traceback and are upstream of any code edit the
   implementer can do. When it sees that shape, it falls through to
   `validate_runtime: false` and the experiment fails honestly.
+
+---
+
+## Migration note (2026-06-12, branch `jmlr-oss-direction`)
+
+The `auto_codabench/` package was restructured into the pip-installable
+`src/autocodabench/` library (core / runner / checks / backends / agent /
+mcp / cli). For this harness:
+
+- `setup.sh` symlink sources now point at `src/autocodabench/skills/` —
+  re-run it once per checkout.
+- The MCP server module is `python -m autocodabench.mcp.server` (the old
+  `auto_codabench.mcp_server.server` path is gone).
+- Default artifact roots moved from `auto_codabench/{runs,bundles}/` to
+  `./.autocodabench/{runs,bundles}/` (override with `AUTOCODABENCH_HOME`).
+- The per-bundle deterministic checks that used to live only in
+  `validate_bundle` are now the `codabench-validate` CLI / check registry —
+  future harness phases should call that instead of re-implementing lint.
+
+Recorded artifacts inside old runs still reference the old layout; that's
+expected and harmless.

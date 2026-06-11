@@ -50,11 +50,11 @@ echo "=== linking skills into .claude/skills/ ==="
 #   - competition-design:             design reference loaded by plan
 SKILLS=(
     "bundle-creation-test:experiments/bundle_creation_test/skills/bundle-creation-test"
-    "autocodabench-plan:auto_codabench/skills/plan"
-    "autocodabench-implement:auto_codabench/skills/autocodabench-implement"
-    "autocodabench-reformat-and-run:auto_codabench/skills/autocodabench-reformat-and-run"
-    "codabench-bundle:auto_codabench/skills/codabench-bundle"
-    "competition-design:auto_codabench/skills/competition-design"
+    "autocodabench-plan:src/autocodabench/skills/plan"
+    "autocodabench-implement:src/autocodabench/skills/autocodabench-implement"
+    "autocodabench-reformat-and-run:src/autocodabench/skills/autocodabench-reformat-and-run"
+    "codabench-bundle:src/autocodabench/skills/codabench-bundle"
+    "competition-design:src/autocodabench/skills/competition-design"
 )
 for entry in "${SKILLS[@]}"; do
     skill_name="${entry%%:*}"
