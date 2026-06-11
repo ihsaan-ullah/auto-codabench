@@ -2,8 +2,8 @@
 
 A private-alpha Chainlit chat surface over the 2-phase workflow
 (Plan → Competition Creation). End-user docs live in
-[`../auto_codabench/INSTRUCTION_FOR_USER.md`](../auto_codabench/INSTRUCTION_FOR_USER.md)
-§A. This file is for the maintainer.
+[`../docs/INSTRUCTION_FOR_USER.md`](../docs/INSTRUCTION_FOR_USER.md)
+§6. This file is for the maintainer.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -12,7 +12,7 @@ A private-alpha Chainlit chat surface over the 2-phase workflow
 │                          ├─► spawns: autocodabench MCP server       │
 │                          │           alex-mcp MCP server            │
 │                          │                                          │
-│                          ├─► writes: auto_codabench/runs/web_…/     │
+│                          ├─► writes: .autocodabench/runs/web_…/     │
 │                          │           transcript.md / events.jsonl   │
 │                          │           specs/implementation_plan.md   │
 │                          │           bundles/<slug>/<slug>.zip      │
@@ -33,13 +33,13 @@ A private-alpha Chainlit chat surface over the 2-phase workflow
 
 - An **Anthropic API key** (separate from Claude Max / Pro — see
   https://console.anthropic.com → API Keys). Top up ~$20 to cover
-  trial usage.
+  trial usage. The web UI is API-key-only: a hosted multi-user
+  surface must not route requests through one person's subscription
+  (see `docs/INSTRUCTION_FOR_USER.md` §2). For *local single-user*
+  smoke tests your own subscription login also works.
 - A **Hugging Face account** (free).
-- The `semantic-scholar` conda env from the parent README, with
-  `alex-mcp`, `autocodabench`, `chainlit`, and `claude-agent-sdk`
-  installed. From repo root:
+- A Python ≥3.10 env with the package + web extras. From repo root:
   ```bash
-  conda activate semantic-scholar
   pip install -e .
   pip install "git+https://github.com/drAbreu/alex-mcp.git@v4.8.2"
   pip install -r web/requirements.txt
@@ -86,7 +86,7 @@ Open http://localhost:8500. Sign in with any username + the
    `[2. 📦 Competition Creation]` (grayed out / 🔒).
 3. ✅ Send "design a competition on detecting AI-generated text".
    Claude opens a run dir (visible under
-   `auto_codabench/runs/web_*_<sid>/`) and starts asking 1-2 scope
+   `.autocodabench/runs/web_*_<sid>/`) and starts asking 1-2 scope
    questions.
 4. ✅ After the agent saves `specs/implementation_plan.md`, the
    workspace panel on the right shows the rendered plan, and the
@@ -184,7 +184,8 @@ role is enough). They open the URL, sign in with `SHARED_PASSWORD`.
 ### Phase model
 
 Each web session has its own:
-- **Run dir** at `auto_codabench/runs/web_<user>_<runtime>_<sid>/`.
+- **Run dir** at `.autocodabench/runs/web_<user>_<runtime>_<sid>/`
+  (repo-root anchored via `AUTOCODABENCH_HOME`; operator-overridable).
 - **MCP subprocess** with `AUTOCODABENCH_RUN_DIR` env set to that
   run dir. Bundles land at `<run>/bundles/<slug>/`.
 - **Public session dir** at `web/public/sessions/<sid>/` with
@@ -205,7 +206,7 @@ First request wakes the container (~30 s).
 ### Where data lives
 
 - **Inside the container**:
-  `auto_codabench/runs/web_*` — chat transcripts, plan, bundle,
+  `.autocodabench/runs/web_*` — chat transcripts, plan, bundle,
   cost log, MCP tool snapshots.
 - **HF Dataset upload**: if `HF_TOKEN` is set, the run dir is
   uploaded (text-only allowlist) to a private dataset
@@ -245,7 +246,7 @@ exists in the run dir.
 ### Bundle download stays grayed after Phase 2 finishes
 Look at the Space logs for warnings from `_find_bundle_zip` — it
 prefers `<run>/bundles/` and falls back to the global
-`auto_codabench/bundles/` if the env propagation broke.
+`.autocodabench/bundles/` if the env propagation broke.
 
 ### Publish form: "unknown error" or any other unclear failure
 The `/ac/upload-codabench` route returns a non-empty `error` string

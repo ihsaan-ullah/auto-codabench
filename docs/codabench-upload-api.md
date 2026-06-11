@@ -30,13 +30,13 @@ CODABENCH_TOKEN=your_token_here  # optional is you want to use your username and
 Using an API token from `.env`:
 
 ```bash
-python codabench/upload_bundle.py competition_bundle.zip
+python -m autocodabench.upload.codabench_api competition_bundle.zip
 ```
 
 Using username and password:
 
 ```bash
-python codabench/upload_bundle.py \
+python -m autocodabench.upload.codabench_api \
   --username USERNAME \
   --password PASSWORD \
   competition_bundle.zip
@@ -45,7 +45,7 @@ python codabench/upload_bundle.py \
 Using a custom Codabench instance:
 
 ```bash
-python codabench/upload_bundle.py \
+python -m autocodabench.upload.codabench_api \
   --base-url https://your-codabench-instance.org \
   competition_bundle.zip
 ```

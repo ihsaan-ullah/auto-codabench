@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Symlink the experiment's orchestrator skill, the auto_codabench/
+# Symlink the experiment's orchestrator skill, the packaged
 # skills it shells out to, and the experiment's one in-process subagent
 # definition into .claude/ so Claude Code picks them up under its
 # standard discovery paths. Idempotent.
 #
 # .claude/ itself is gitignored — the source of truth for these skills
-# lives in experiments/bundle_creation_test/ and auto_codabench/.
+# lives in experiments/bundle_creation_test/ and src/autocodabench/skills/.
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ mkdir -p .claude/agents .claude/skills
 echo "=== linking agent definitions into .claude/agents/ ==="
 # Only one in-process subagent now (the log auditor). Phases 2/3/4a
 # are shell-outs, not subagents, and their definitions live in
-# auto_codabench/skills/ as skills rather than agents.
+# src/autocodabench/skills/ as skills rather than agents.
 for f in experiments/bundle_creation_test/agents/*.md; do
     name="$(basename "$f")"
     target="../../experiments/bundle_creation_test/agents/${name}"
@@ -43,9 +43,9 @@ echo
 echo "=== linking skills into .claude/skills/ ==="
 # Five skills the experiment depends on:
 #   - bundle-creation-test:           the orchestrator (this experiment owns it)
-#   - autocodabench-plan:             phase 2 shell-out target (auto_codabench/)
-#   - autocodabench-implement:        phase 3 shell-out target (auto_codabench/)
-#   - autocodabench-reformat-and-run: phase 4a shell-out target (auto_codabench/)
+#   - autocodabench-plan:             phase 2 shell-out target (packaged skill)
+#   - autocodabench-implement:        phase 3 shell-out target (packaged skill)
+#   - autocodabench-reformat-and-run: phase 4a shell-out target (packaged skill)
 #   - codabench-bundle:               schema reference loaded by implement
 #   - competition-design:             design reference loaded by plan
 SKILLS=(

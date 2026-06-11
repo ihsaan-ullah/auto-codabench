@@ -94,12 +94,12 @@ If the official Codabench docs evolve:
 - Upstream source: [Codabench documentation (develop branch)][docs]
 - Used by Phase 2: [`autocodabench-implement`](../autocodabench-implement/README.md)
 - Bundle code path:
-  [`auto_codabench/mcp_server/bundle_io.py`](../../mcp_server/bundle_io.py)
+  [`autocodabench/core/bundle_io.py`](../../core/bundle_io.py)
   writes the files this skill describes the shape of.
 - Validator path:
-  [`auto_codabench/mcp_server/tools/package.py`](../../mcp_server/tools/package.py)
+  [`autocodabench/mcp/tools/package.py`](../../mcp/tools/package.py)
   — `autocodabench_validate_bundle` enforces §9 (scores.json ↔ columns)
   and §12 (zip layout).
-- Package map: [`auto_codabench/README.md`](../../README.md)
+- Package map: [`docs/architecture.md`](../../../../docs/architecture.md)
 
 [docs]: https://github.com/codalab/codabench/tree/develop/documentation

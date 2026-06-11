@@ -83,6 +83,6 @@ When updating a bullet:
 - Used by Phase 2: [`autocodabench-implement`](../autocodabench-implement/README.md)
   — occasionally, when picking a default for a field the plan left
   ambiguous (e.g. metric defaults from §3).
-- Package map: [`auto_codabench/README.md`](../../README.md)
+- Package map: [`docs/architecture.md`](../../../../docs/architecture.md)
 
 [book]: https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf

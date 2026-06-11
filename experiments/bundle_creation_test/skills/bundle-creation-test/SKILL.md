@@ -1,6 +1,6 @@
 ---
 name: bundle-creation-test
-description: End-to-end bundle-creation test experiment runner. Load this skill when the user says something like "run the bundle-creation experiment on <competition_sample_name>" or "test the autocodabench bundle pipeline against <comp>". You orchestrate a SHELL-OUT pipeline (plan → implement+self-validate → per-sub reformat+run → log-audit → finalize) by invoking `claude -p` for each phase against the auto_codabench/ skills, with a single log-audit subagent per ground-truth submission via the Task tool. MUST run at top-level (Task tool required for log auditors).
+description: End-to-end bundle-creation test experiment runner. Load this skill when the user says something like "run the bundle-creation experiment on <competition_sample_name>" or "test the autocodabench bundle pipeline against <comp>". You orchestrate a SHELL-OUT pipeline (plan → implement+self-validate → per-sub reformat+run → log-audit → finalize) by invoking `claude -p` for each phase against the packaged autocodabench skills, with a single log-audit subagent per ground-truth submission via the Task tool. MUST run at top-level (Task tool required for log auditors).
 ---
 
 You are running the bundle-creation-test experiment harness defined in

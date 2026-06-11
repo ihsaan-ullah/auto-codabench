@@ -69,7 +69,7 @@ explicit user request).
   what the bundle-creation-test experiment's
   `autocodabench-reformat-and-run` skill reads to bridge a ground-truth
   `submission.py` to whatever the bundle declared — see
-  [`auto_codabench/skills/autocodabench-reformat-and-run/SKILL.md`](../autocodabench-reformat-and-run/SKILL.md)).
+  [`autocodabench/skills/autocodabench-reformat-and-run/SKILL.md`](../autocodabench-reformat-and-run/SKILL.md)).
 - The pages reference the metric and data sources declared above.
 - `competition.yaml` is written **last** because its `tasks:` and
   `leaderboards:` blocks reference all the above. Writing it first
@@ -132,4 +132,4 @@ deterministically and never burns LLM cost on a 4-step REST flow.
 - Phase 2 produces:
   `<run>/bundles/<slug>/{competition.yaml, scoring_program/, solution/, pages/, README.ipynb, <slug>.zip}`
   + `<run>/run_logs/<slug>/{env,baseline,starting_kit}/`
-- Package map: [`auto_codabench/README.md`](../../README.md)
+- Package map: [`docs/architecture.md`](../../../../docs/architecture.md)

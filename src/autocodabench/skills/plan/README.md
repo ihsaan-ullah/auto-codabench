@@ -91,4 +91,4 @@ specifically to push the planner to write everything down.
 - Phase orchestrator in code:
   [`web/app.py`](../../../web/app.py) → `_advance_to_phase`
 - Phase 1 produces: `<run>/specs/implementation_plan.md`
-- Package map: [`auto_codabench/README.md`](../../README.md)
+- Package map: [`docs/architecture.md`](../../../../docs/architecture.md)

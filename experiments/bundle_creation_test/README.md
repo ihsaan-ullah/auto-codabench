@@ -5,11 +5,11 @@ watch it plan → build → self-validate → score known submissions → check
 whether the resulting score matches a pre-recorded ground truth (within
 tolerance).
 
-This is a **wrapper** around `auto_codabench/`. The experiment side
+This is a **wrapper** around the `autocodabench` package. The experiment side
 orchestrates; the heavy lifting (writing the bundle, running its
 baseline, executing the starting-kit notebook, reformatting external
 submissions to the bundle's interface, scoring them) lives in
-`auto_codabench/` skills and MCP tools. Both sides share the same
+the packaged skills and MCP tools. Both sides share the same
 on-disk run dir via the `AUTOCODABENCH_RUN_DIR` environment variable.
 
 Future experiments (latency, cost, robustness, etc.) live in sibling
@@ -22,7 +22,7 @@ Future experiments (latency, cost, robustness, etc.) live in sibling
 The orchestrator skill (this folder's `SKILL.md`) is loaded into the
 top-level Claude session and drives five phases. Phases 2/3/4a are
 **shell-outs** via `claude --print` to fresh Claude sessions running
-the `auto_codabench/` skills (`autocodabench-plan`,
+the packaged skills (`autocodabench-plan`,
 `autocodabench-implement`, `autocodabench-reformat-and-run`). Each
 shell-out is its own root-level session, so it can spawn subagents
 and run its own internal iteration loops without hitting Claude
@@ -62,7 +62,7 @@ experiments/bundle_creation_test/
         └── <branch_sha>_<utc_ts>/       # one folder per experiment RUN
             ├── manifest.json            # orchestrator's structured log
             ├── meta.json                # makes the dir AUTOCODABENCH_RUN_DIR-adoptable
-            ├── events.jsonl             # MCP tool-call timeline (written by auto_codabench/)
+            ├── events.jsonl             # MCP tool-call timeline (written by the MCP server)
             ├── tool_calls/              # full MCP request/response snapshots
             ├── specs/                   # plan-phase output
             │   └── implementation_plan.md
@@ -183,14 +183,14 @@ golden reference bundle is human-only.
 ./experiments/bundle_creation_test/setup.sh
 ```
 
-Symlinks the orchestrator skill + the `auto_codabench/` skills
+Symlinks the orchestrator skill + the packaged skills
 (`autocodabench-plan`, `autocodabench-implement`,
 `autocodabench-reformat-and-run`, `codabench-bundle`,
 `competition-design`) into `.claude/skills/`, and the
 `submission-log-auditor` agent definition into `.claude/agents/`.
 
 `.claude/` is gitignored — the source of truth lives in this folder
-and in `auto_codabench/`.
+and in `src/autocodabench/skills/`.
 
 ---
 
@@ -232,7 +232,7 @@ fields across runs. See the script docstring for filter flags.
 ## Host runtime expectations
 
 The implementer's `prepare_run_env` clones the **active conda env**
-(named `base` by default in `auto_codabench/mcp_server/runner_io.py`)
+(named `base` by default in `autocodabench/runner/execution.py`)
 into a per-run scratch env. The clone inherits whatever's installed
 in your base env; per-program `requirements.txt` files are then
 installed on top via `uv pip install` (or `pip` if `uv` isn't on
