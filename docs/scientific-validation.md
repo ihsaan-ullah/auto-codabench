@@ -1,0 +1,366 @@
+# Scientific validation of autocodabench
+
+This document specifies **what autocodabench claims, how each claim is
+tested, and how to reproduce every test**. It is written for a scientific
+reviewer: each test type states its procedure, its oracle (what decides
+pass/fail), its scope, and its known limitations. Commands shown are
+runnable from a fresh checkout.
+
+Status legend: **[implemented]** runs today (command given);
+**[piloted]** the instrument exists and has ≥1 recorded run;
+**[designed]** the protocol is specified but the campaign has not run.
+
+---
+
+## 1. Claims under test
+
+The software makes four falsifiable claims. Everything in this document
+exists to test one of them.
+
+| # | Claim | Tested by |
+|---|-------|-----------|
+| C1 | The authoring layer produces **structurally valid** Codabench bundles (schema-correct, internally consistent, uploadable). | §3.1 unit tests, §3.2 replay E2E, §3.4 check framework |
+| C2 | Generated competitions are **functional**: their own baseline runs through their own scoring pipeline and produces scores; the starting kit executes. | §3.3 execution oracles |
+| C3 | The validator **catches real authoring defects** before launch — in generated *and* hand-written bundles. | §3.4 check framework, §4.3 seeded-defect study (E3) |
+| C4 | Given a competition proposal with known ground truth, the end-to-end pipeline produces a competition that **scores known submissions within tolerance of their expected scores**. | §3.5 ground-truth harness, §4.1 success-rate campaign (E1) |
+
+What we deliberately do **not** claim or measure: how well third-party
+models *solve* the generated competitions. "GPT-X scores Y% on our
+benchmark" evaluates the solver, not the software, and conflating the two
+is a known methodological error in tooling papers. No experiment here
+reports solver accuracy as evidence of tool quality.
+
+---
+
+## 2. Why an agentic tool needs a different test discipline
+
+Two properties of LLM-driven generation shape everything below:
+
+1. **Non-determinism.** The same prompt can yield different bundles.
+   Therefore correctness is never defined by the generation path; it is
+   defined by **executable post-hoc oracles** applied to the artifact
+   (does it validate? does its baseline run? does it reproduce expected
+   scores?). Success rates are reported over repeated runs, not single
+   anecdotes.
+2. **Self-assessment is inadmissible.** An agent reporting "the bundle is
+   correct" is not evidence. Every verdict in this codebase is produced
+   by code that is independent of the generating agent: the schema
+   linter, the sandbox runner's exit codes and parsed `scores.json`, and
+   the check registry. LLM *judgment* is used in exactly one place
+   (§3.4.2) and is constitutionally advisory — it can never flip a
+   pass/fail verdict.
+
+Every agentic run also produces a complete audit trail
+(`tool_calls/NNNN_*.json` + `events.jsonl` per run): the inputs and
+outputs of every authoring action, with timestamps and durations. All
+quantitative statements about a run are recomputable from this record,
+and any recorded run can be re-executed deterministically (§3.2).
+
+---
+
+## 3. The test pyramid (implemented)
+
+### 3.1 Unit tests — the deterministic core **[implemented]**
+
+```bash
+pip install -e '.[dev]'
+python -m pytest tests/        # 41 tests, < 1 s, no network, no API keys
+```
+
+**Scope.** The LLM-free layers: bundle file I/O (round-trip authoring,
+path-traversal rejection, schema-key allow-listing), the schema linter
+(detects missing referenced files, unwritten leaderboard keys), zip
+layout (`competition.yaml` at zip root — the most common upload
+rejection), the check framework (every status transition: PASS, FAIL,
+FINDING, SKIPPED, ATTESTATION_REQUIRED), facts gating, the replay
+backend (including determinism: two replays produce byte-identical
+`competition.yaml`), auth resolution (all credential combinations via a
+faked home directory), and the CLI surface (exit codes included).
+
+**Oracle.** Conventional assertions. The suite is **keyless by policy**:
+no test may require Claude auth or network, which is what makes it a
+hard CI gate rather than a flaky one.
+
+**CI.** `.github/workflows/ci.yml` runs the suite on Python 3.10–3.13
+(Linux) + 3.12 (macOS) on every push/PR, plus §3.2 and a wheel-content
+check (the packaged skills and fixtures must ship, or the install is
+broken in a way unit tests can't see).
+
+### 3.2 Deterministic end-to-end: record/replay **[implemented]**
+
+```bash
+autocodabench demo --out /tmp/demo
+codabench-validate /tmp/demo/demo-ai-text-detection.zip
+```
+
+**Procedure.** Every live run records each MCP tool call (name + full
+arguments). The replay backend re-executes a recorded sequence against
+the *real* authoring layer — the bundle is genuinely rebuilt on the
+local machine, then schema-validated and zipped. The shipped fixture
+(14 authoring calls) is regenerated by `scripts/make_demo_fixture.py`.
+
+**What it establishes.** (a) The full authoring path — init → pages →
+scoring program → data → solution → `competition.yaml` → validate → zip
+— functions end-to-end with zero model access; (b) **determinism**: the
+pipeline below the model seam has no hidden nondeterminism (asserted
+byte-for-byte in `tests/test_replay_backend.py`); (c) reviewability:
+anyone can exercise the system without credentials.
+
+**Limitation.** Replay validates the machinery, not the model's design
+choices — that is §3.3–§3.5's job.
+
+### 3.3 Execution oracles: the bundle must run itself **[implemented]**
+
+Used by `autocodabench create` (and the experiment harness) as the
+**runtime** definition of a working bundle. Structural validity (§3.1)
+is necessary but not sufficient — a bundle can be schema-perfect and
+still crash on its first real submission.
+
+**Procedure.** After the build agent writes a bundle:
+
+1. A fresh conda environment is cloned and the bundle's own
+   per-program `requirements.txt` files are installed
+   (`prepare_run_env`) — so the bundle's declared dependencies, not the
+   developer's environment, are what gets tested.
+2. **Baseline oracle** (`run_baseline_submission`): the bundle's own
+   shipped baseline solution is staged into a sandbox laid out exactly
+   as Codabench's worker lays it out (`program/`, `input/res`,
+   `input/ref`, `output/`), its ingestion program (if any) and scoring
+   program are invoked via the commands in their `metadata.yaml`, and
+   the run **passes iff** exit code 0 ∧ no timeout ∧ a parseable
+   `scores.json` whose keys cover the leaderboard columns.
+3. **Starting-kit oracle** (`run_starting_kit`): the participant-facing
+   notebook is executed top-to-bottom (`jupyter execute`,
+   `--allow-errors=false`); pass iff exit 0 and all code cells executed.
+4. The generating agent gets the stderr and may retry — bounded at
+   **5 baseline attempts and 4 notebook attempts**. Exhausting the
+   budget is recorded as failure; the agent is forbidden from weakening
+   the task to make the test pass (no silent downgrade rule).
+
+All subprocess stdout/stderr is tee'd to disk live
+(`run_logs/<slug>/...`), with timeouts enforced by process-group kill,
+so failures are diagnosable from artifacts alone.
+
+**Evidence from the recorded pilot** (run dir retained;
+2026-06-12, `claude-sonnet-4-6`): from the one-line idea "Iris species
+classification…", the build agent hit a real sandbox/ingestion mismatch,
+diagnosed it from stderr, repaired the bundle, and converged in 4
+baseline attempts + 5 notebook attempts; final baseline scored
+`balanced_accuracy = 0.941` with bootstrap CIs, notebook 6/6 cells,
+total cost $2.69, 61 fully-audited tool calls.
+
+### 3.4 The check framework: competition design as an executable checklist **[implemented]**
+
+```bash
+codabench-validate <bundle-dir-or-zip> [--facts facts.yaml] [--judged]
+autocodabench checks list        # the live inventory, by tier, with citations
+```
+
+The checklist is derived from Pavão et al. (2024), *AI Competitions and
+Benchmarks: The Science Behind the Contests* — each check cites the
+chapter it operationalizes. The framework's central methodological
+commitment is that **checks are typed by how their verdict is produced**,
+and the three types are never conflated in reports:
+
+| Tier | Verdict produced by | Can it gate? | Failure mode handled |
+|------|--------------------:|--------------|----------------------|
+| deterministic | code | **yes** (FAIL blocks) | — |
+| LLM-judged | a model grading a rubric | **no** (FINDING only) | unparseable/failed judge ⇒ SKIPPED, never silent pass |
+| attestation | a human | no (surfaced as unchecked box) | cannot be faked by the tool |
+
+#### 3.4.1 Deterministic checks (the gates and cited findings)
+
+Each check below states its decision rule exactly. BLOCKER failures gate
+(exit 1); WARNING/INFO emit findings.
+
+| Check id | Decision rule | Severity | Source |
+|----------|---------------|----------|--------|
+| `bundle-schema` | `competition.yaml` parses; required keys present; every referenced file (image, terms, pages, task data, programs, solutions) exists; programs carry a runnable `metadata.yaml command`; every non-computation leaderboard `column.key` appears as a literal in the scoring program; phases reference declared tasks; `start ≤ end` | BLOCKER | Codabench schema docs |
+| `two-phase-structure` | ≥ 2 phases declared (development + final) | WARNING | Pavão Ch. 5, 11 |
+| `dev-phase-duration` | first phase ≥ 40 days | WARNING | Pavão Ch. 13 |
+| `daily-submission-cap` | every development phase declares `max_submissions_per_day`; flag > 10/day | WARNING | Pavão Ch. 5 |
+| `final-phase-submission-limit` | last phase declares `max_submissions ≤ 3` | WARNING | Pavão Ch. 5 |
+| `leaderboard-sorting` | every ranked column declares `sorting ∈ {asc, desc}` | WARNING | Pavão Ch. 4 |
+| `starting-kit` | `starting_kit/` ships ≥ 1 file | WARNING | Pavão Ch. 5, 13 |
+| `baseline-solutions` | ≥ 1 solution shipped *and* declared; recommend ≥ 2 (trivial + competent) | WARNING/INFO | Pavão Ch. 5 |
+| `docker-image-pinned` | `docker_image` declared | WARNING | Pavão Ch. 11 |
+| `test-set-size` | N ≥ 100/E where E = declared `anticipated_error_rate`; N from declared `test_set_size`, else counted from a single reference CSV | WARNING | Pavão Ch. 4 |
+| `external-data-rule` | given declared `external_data_allowed`, the pages must mention the external-data/pre-training policy | WARNING | Pavão Ch. 5 |
+
+**Declared facts.** `test-set-size`, `external-data-rule`, and the
+prize-legality attestation consume a `competition_facts.yaml` the
+organizer declares (anticipated error rate, unit of generalization,
+external-data policy, prizes). This is deliberate **declare-then-verify**
+design: rather than guessing unverifiable context, a check missing its
+fact reports `SKIPPED — requires facts: …`, which is auditable, instead
+of a silent pass, which is not.
+
+#### 3.4.2 LLM-judged checks (advisory by construction)
+
+Currently one: `judged-docs-config-consistency`. **Procedure:** the raw
+`competition.yaml` (≤ 8k chars) and all pages (≤ 16k chars) are embedded
+in a fixed rubric prompt that asks *only* for contradictions between
+what the pages promise participants and what the config enforces (phase
+dates, submission limits, metric names and ranking direction, submission
+format, prizes), with the instruction that every finding must quote both
+sides. The judge replies in strict JSON
+(`{"findings": [{where, message}]}`); replies that don't parse degrade
+to SKIPPED. Each finding is rendered with its locator, marked advisory,
+and never gates.
+
+**Calibration evidence (manual, recorded 2026-06-12):** on the clean
+demo bundle the judge returned zero findings; after planting a single
+contradiction (page says "max 20 submissions/day", config enforces 5)
+the judge flagged exactly that contradiction with the correct locator
+and both quotes. Systematic sensitivity/specificity measurement is the
+E3 protocol (§4.3).
+
+#### 3.4.3 Attestations
+
+Five launch criteria that no code or model can verify — external
+reviewers attempted the task (Pavão Ch. 2), per-feature leakage probe
+run (Ch. 3), datasheet published (Ch. 3), data license + persistent home
+decided (Ch. 3, 13), prize legality (Ch. 13). The report surfaces them
+as unchecked boxes. Scientifically this is a refusal to overclaim:
+the tool distinguishes "verified," "advised," and "asserted by a human"
+in its output format itself.
+
+### 3.5 Ground-truth harness: score fidelity on real competitions **[piloted]**
+
+`experiments/bundle_creation_test/` — the instrument behind claim C4 and
+the E1 campaign.
+
+**Design.** For a competition with known ground truth (a proposal
+document, sample data, K reference submissions each with an
+`expected_result.json`):
+
+1. **Plan** from the proposal; **build + self-validate** from the plan
+   (§3.3 oracles apply).
+2. **Adapt** each reference submission to the generated bundle's
+   interface (an agent may rewrite glue code, never the method), and
+   **score** it through the generated bundle's own pipeline.
+3. **Oracle:** the produced score must match the expected score within
+   the per-submission tolerance recorded in `expected_result.json`.
+   An independent auditor agent verdicts each submission from logs and
+   writes `verdict.json`.
+
+**Blinding / leakage protocol** (enforced via per-phase file-access
+rules; full table in the harness README): the builder never sees the
+ground-truth bundle, the reference submissions, or the proposal PDF
+(plan only); the adapter never sees expected scores; expected scores
+exist only in the orchestrator/auditor pair; the human-made reference
+bundle is off-limits to all agents. This prevents the generator from
+shaping the competition to the answers — the experiment's central
+validity threat.
+
+**Attribution.** Phases get no cross-phase retries; a run that fails
+records *where* (`fail_at_plan` / `fail_at_implement` / per-submission)
+so failure classes are separable in analysis. Every run's `manifest.json`
+records model + version, per-phase cost, validation outcomes, scores,
+and deltas.
+
+**Status.** Instrument complete with one full pilot competition
+(`style-trans-fair`); the multi-competition campaign is E1 below.
+
+---
+
+## 4. Designed experiments (the evaluation campaign)
+
+These are specified now so the instruments above were built to collect
+them. Reporting standards for all of them: model + version pinned and
+recorded per run; **≥ 3 runs per condition** with success rates and
+dispersion, never single anecdotes; cost per run reported; all raw logs
+(`tool_calls/`, `events.jsonl`, sandbox stdout/stderr) retained and
+linkable.
+
+### 4.1 E1 — Bundle-generation success rate and score fidelity **[designed; N=1 piloted]**
+
+Over N ≈ 10–15 named, diverse real competitions: the fraction of runs
+reaching (a) structurally valid bundle, (b) running baseline (§3.3
+oracle), (c) ground-truth score match within tolerance (§3.5 oracle) —
+reported per phase, with cost. This is the headline table; the harness
+already emits every column into `manifest.json`, so the campaign is
+execution + tabulation, not new instrumentation.
+
+### 4.2 E2 — Capability matrix **[designed]**
+
+autocodabench vs. manual authoring vs. raw Codabench vs. EvalAI across
+user-meaningful capabilities (bundle-from-natural-language, pre-launch
+ground-truth validation, erroneous-submission testing, auditable
+authoring log, platform generality, cost), with honest ✗ cells —
+including ours (Codabench-only; LLM cost).
+
+### 4.3 E3 — Validation effectiveness (seeded defects) **[designed]**
+
+The validator's sensitivity/specificity study. Protocol: take K bundle
+defect types drawn from real authoring failures (missing referenced
+file; leaderboard key never written by the scorer; pages/config
+contradiction; missing daily cap; undersized test set; wrong sorting
+direction; …). For each, programmatically seed the defect into otherwise
+clean bundles (the replay fixture provides the clean base), run
+`codabench-validate --judged`, and record catch/miss per tier. Report a
+defect-type × catch-rate table, separating deterministic catches from
+judged catches, plus false-positive rate on clean bundles (M clean runs;
+judged tier measured over repeated runs because it is stochastic). The
+planted-contradiction probe in §3.4.2 is this protocol at K=1.
+
+### 4.4 E4 — Authoring-effort study **[designed, optional]**
+
+Small within-subjects user study (N ≈ 10–20): time-to-first-valid-bundle
+and defect count, manual vs. assisted; pre-registered protocol; reported
+descriptively given the N.
+
+---
+
+## 5. Threats to validity and limitations
+
+- **Single live model family.** v1 runs on the Claude Agent SDK only.
+  Mitigations: the backend seam isolates the dependency; the deterministic
+  tier and replay run model-free; model+version recorded per run so
+  results are conditioned, not implied universal. Cross-model results
+  would require new backends (an explicit extension point).
+- **Judged-tier stochasticity.** Treated by design (advisory-only,
+  parse-or-skip) and by measurement (E3 repeats judged runs).
+- **The checklist is not complete.** `autocodabench checks list` is the
+  live inventory of what is and isn't covered; attestations make the
+  uncovered-by-construction part explicit. The validator targets common
+  authoring errors, not adversarial organizers.
+- **Local oracles approximate the production worker.** The sandbox
+  mirrors Codabench's layout and command contract but is not the hosted
+  queue; `docker_image` pinning is checked, container parity is not
+  executed locally.
+- **Toy-scale pilots.** The recorded pilots use small datasets by
+  design (minutes, dollars); E1's named real competitions are where
+  scale claims will rest.
+- **Cost/time variance.** Agentic runs vary in turns and cost; E1
+  reports distributions, and per-phase budget caps bound the tail.
+
+---
+
+## 6. Reproducibility quick reference
+
+| What | Command | Needs auth? |
+|------|---------|-------------|
+| Unit suite | `python -m pytest tests/` | no |
+| Core smoke | `python -m autocodabench.core.bundle_io` | no |
+| Offline E2E + validation | `autocodabench demo --out /tmp/d && codabench-validate /tmp/d/demo-ai-text-detection.zip` | no |
+| Check inventory | `autocodabench checks list` | no |
+| Judged tier | `codabench-validate <bundle> --judged` | yes |
+| Judge calibration probe | edit a page to contradict the config, re-run `--judged` | yes |
+| Full live pipeline | `autocodabench create "<idea>" --verbose` | yes |
+| Ground-truth harness | see `experiments/bundle_creation_test/README.md` | yes |
+
+Auth = Claude subscription login or `ANTHROPIC_API_KEY`
+(`autocodabench auth status` explains what's active).
+
+---
+
+## 7. Sources
+
+- Pavão et al. (2024), *AI Competitions and Benchmarks: The Science
+  Behind the Contests* — the source of the design rules the checks
+  operationalize (cited per check, chapter-level, in code and reports).
+- Codabench documentation (bundle schema and worker contract) —
+  vendored under `documentation/codabench_getting_started/` for
+  provenance; the schema checks cite it.
+- Gebru et al., *Datasheets for Datasets* — the datasheet attestation.

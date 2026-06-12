@@ -73,6 +73,8 @@ deployments (like the HF Space) must use an API key — see
 
 | You are… | Read |
 |----------|------|
+| **Evaluating this software** (demo walkthrough + repo tour) | [`docs/demo-for-reviewers.md`](docs/demo-for-reviewers.md) |
+| Asking what's scientifically tested, and how | [`docs/scientific-validation.md`](docs/scientific-validation.md) |
 | Using the CLI or library | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) |
 | Trying the Web UI (Space or local `chainlit run`) | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI, then [`web/README.md`](web/README.md) to operate it |
 | Hacking on the package | [`docs/architecture.md`](docs/architecture.md) |
