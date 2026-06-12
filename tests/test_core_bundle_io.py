@@ -115,3 +115,13 @@ def test_resolve_bundle_dir_prefers_run_dir(tmp_path, monkeypatch):
     run.mkdir()
     monkeypatch.setenv("AUTOCODABENCH_RUN_DIR", str(run))
     assert resolve_bundle_dir("x") == run / "bundles" / "x"
+
+
+def test_validate_accepts_legacy_metadata_filename(tmp_path):
+    """Production Codabench accepts an extensionless `metadata` file
+    (verified against the STYLE-TRANS-FAIR reference bundle)."""
+    bundle = _minimal_bundle(tmp_path)
+    meta = bundle / "scoring_program" / "metadata.yaml"
+    meta.rename(bundle / "scoring_program" / "metadata")
+    report = bundle_io.validate_bundle("demo", root_dir=str(tmp_path))
+    assert report["ok"] is True, report["issues"]

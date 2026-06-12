@@ -6,6 +6,12 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `validate_bundle` falsely gated bundles using the legacy extensionless
+  `metadata` program filename, which production Codabench accepts —
+  found by validating the STYLE-TRANS-FAIR production reference bundle;
+  regression-tested.
+
 ### Added
 - **Multi-backbone support**: `OpenAICompatBackend` — a stdlib
   tool-calling loop over any OpenAI-compatible chat-completions

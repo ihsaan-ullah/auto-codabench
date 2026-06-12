@@ -437,28 +437,36 @@ def validate_bundle(slug: str, root_dir: str | None = None) -> dict[str, Any]:
             if isinstance(ref, str) and not _resolve(ref).exists():
                 issues.append(ValidationIssue("error", f"tasks[{i}].{key}", f"referenced path does not exist: {ref}"))
 
-        # if scoring_program is a directory, check metadata.yaml/command
+        # If a program is a directory, it must carry a runnable metadata file.
+        # Codabench accepts BOTH `metadata.yaml` and the legacy extensionless
+        # `metadata` (production bundles use either — verified against the
+        # STYLE-TRANS-FAIR reference bundle, Codabench competition #601).
+        def _program_metadata(path: Path) -> Path | None:
+            for candidate in ("metadata.yaml", "metadata"):
+                if (path / candidate).is_file():
+                    return path / candidate
+            return None
+
         sp = t.get("scoring_program")
         if isinstance(sp, str):
             sp_path = _resolve(sp)
             if sp_path.is_dir():
-                meta = sp_path / "metadata.yaml"
-                if not meta.exists():
-                    issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program", "missing metadata.yaml"))
+                meta = _program_metadata(sp_path)
+                if meta is None:
+                    issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program", "missing metadata.yaml (or legacy 'metadata')"))
                 else:
                     try:
                         meta_data = _load_yaml(meta)
                         if not isinstance(meta_data, dict) or not meta_data.get("command"):
-                            issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program/metadata.yaml", "missing 'command'"))
+                            issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program/{meta.name}", "missing 'command'"))
                     except yaml.YAMLError as e:
-                        issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program/metadata.yaml", f"YAML parse error: {e}"))
+                        issues.append(ValidationIssue("error", f"tasks[{i}].scoring_program/{meta.name}", f"YAML parse error: {e}"))
         ip = t.get("ingestion_program")
         if isinstance(ip, str):
             ip_path = _resolve(ip)
             if ip_path.is_dir():
-                meta = ip_path / "metadata.yaml"
-                if not meta.exists():
-                    issues.append(ValidationIssue("error", f"tasks[{i}].ingestion_program", "missing metadata.yaml"))
+                if _program_metadata(ip_path) is None:
+                    issues.append(ValidationIssue("error", f"tasks[{i}].ingestion_program", "missing metadata.yaml (or legacy 'metadata')"))
 
     # 5. phases
     phases = comp.get("phases") or []
