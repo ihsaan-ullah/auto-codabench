@@ -6,6 +6,25 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Multi-backbone support**: `OpenAICompatBackend` — a stdlib
+  tool-calling loop over any OpenAI-compatible chat-completions
+  endpoint (Ollama local models, OpenAI, vLLM, LiteLLM proxies), with
+  an in-process tool registry exposing the same `autocodabench_*`
+  tool surface and writing the same `tool_calls/` audit trail as the
+  MCP layer. `--backend claude[:model] | ollama:<model> |
+  openai:<model> | <url>#<model>` on `create` and `validate --judged`;
+  `resolve_backend()` in the library.
+- **Backbone benchmark** (`experiments/backbone_bench/`): axis A
+  (validator/judge quality — the E3 seeded-defect instrument,
+  12 defect types, per-backbone catch rate + clean-bundle
+  false-positive rate; deterministic baseline 9/9) and axis B
+  (bundle-creation quality over the ground-truth competitions —
+  protocol fixed, runs per backbone).
+- `docs/scientific-validation.md` §6: explicit review-gauntlet mapping
+  (F4 wrapper objection, F5 solver-grading, F6 overselling,
+  F7 key/service walls + non-determinism).
+
 ## [0.2.0.dev0] — 2026-06-12
 
 The repository restructured from an MCP-server-in-a-repo

@@ -213,7 +213,15 @@ demo bundle the judge returned zero findings; after planting a single
 contradiction (page says "max 20 submissions/day", config enforces 5)
 the judge flagged exactly that contradiction with the correct locator
 and both quotes. Systematic sensitivity/specificity measurement is the
-E3 protocol (§4.3).
+E3 protocol (§4.3), now implemented as a runnable instrument
+(`experiments/backbone_bench/run_judge_bench.py`).
+
+Judged checks run through the same backend seam as everything else, so
+the judging backbone is a **measured variable**: the same rubric, the
+same parse-or-skip policy, and the same defect oracles apply whether the
+judge is Claude, a local Ollama model, or any OpenAI-compatible
+endpoint. Per-backbone judged quality is axis A of the backbone
+benchmark (§4.5).
 
 #### 3.4.3 Attestations
 
@@ -290,19 +298,26 @@ ground-truth validation, erroneous-submission testing, auditable
 authoring log, platform generality, cost), with honest ✗ cells —
 including ours (Codabench-only; LLM cost).
 
-### 4.3 E3 — Validation effectiveness (seeded defects) **[designed]**
+### 4.3 E3 — Validation effectiveness (seeded defects) **[implemented; campaign pending]**
 
-The validator's sensitivity/specificity study. Protocol: take K bundle
-defect types drawn from real authoring failures (missing referenced
-file; leaderboard key never written by the scorer; pages/config
-contradiction; missing daily cap; undersized test set; wrong sorting
-direction; …). For each, programmatically seed the defect into otherwise
-clean bundles (the replay fixture provides the clean base), run
-`codabench-validate --judged`, and record catch/miss per tier. Report a
-defect-type × catch-rate table, separating deterministic catches from
-judged catches, plus false-positive rate on clean bundles (M clean runs;
-judged tier measured over repeated runs because it is stochastic). The
-planted-contradiction probe in §3.4.2 is this protocol at K=1.
+The validator's sensitivity/specificity study, implemented as
+`experiments/backbone_bench/run_judge_bench.py`. Protocol: 12 defect
+types drawn from real authoring failures are programmatically seeded
+into otherwise-clean bundles (the replay fixture provides the
+deterministic clean base) — 9 targeting the deterministic tier (missing
+referenced file, unwritten leaderboard key, missing daily cap, 10-day
+dev phase, missing sorting direction, unlimited final submissions,
+missing starting kit, single phase, unpinned docker image) and 3
+targeting the judged tier (pages↔config contradictions in submission
+caps, metric direction, phase dates). Catch/miss is recorded per
+defect per run, plus the judged tier's false-positive rate on clean
+copies (the judged tier is stochastic, so ≥3 runs per condition).
+
+**First result (2026-06-12):** the deterministic tier catches **9/9**
+seeded defects, as required — it is code, so anything below 9/9 is a
+bug, and this doubles as a regression test for the check registry.
+Per-backbone judged-tier results accumulate under
+`experiments/backbone_bench/results/`.
 
 ### 4.4 E4 — Authoring-effort study **[designed, optional]**
 
@@ -310,15 +325,40 @@ Small within-subjects user study (N ≈ 10–20): time-to-first-valid-bundle
 and defect count, manual vs. assisted; pre-registered protocol; reported
 descriptively given the N.
 
+### 4.5 E5 — Backbone benchmark **[axis A implemented; axis B protocol fixed]**
+
+Because every backbone runs behind the same seam — identical tool
+surface, identical audit-trail format, identical oracles — the LLM
+itself becomes a measured variable rather than a confound. Two axes
+(full protocol: `experiments/backbone_bench/README.md`):
+
+- **Axis A — validation/judging quality**: E3's seeded-defect catch
+  rate and clean-bundle false-positive rate, per backbone (Claude,
+  local models via Ollama, OpenAI-compatible endpoints). Runnable now.
+- **Axis B — bundle-creation quality**: the ground-truth harness
+  (§3.5) run per backbone per competition — plan completeness,
+  structural validity, runtime validity with attempts-to-converge,
+  ground-truth score fidelity, and cost. The blinding protocol is
+  unchanged; backbone-specific conditions (no PDF reading in the
+  generic backend; native tool-calling required) are recorded as run
+  conditions, never silently worked around.
+
+This doubles as the seed of a public benchmark of agentic
+benchmark-authoring capability, with `style-trans-fair` as the first of
+the ground-truth competitions.
+
 ---
 
 ## 5. Threats to validity and limitations
 
-- **Single live model family.** v1 runs on the Claude Agent SDK only.
-  Mitigations: the backend seam isolates the dependency; the deterministic
-  tier and replay run model-free; model+version recorded per run so
-  results are conditioned, not implied universal. Cross-model results
-  would require new backends (an explicit extension point).
+- **Backbone coverage is uneven.** Two live backend families ship:
+  the Claude Agent SDK (richest runtime: subagents, MCP, PDF reading)
+  and a generic OpenAI-compatible loop (covers Ollama-served local
+  models and API endpoints; requires native tool-calling; cannot read
+  PDF proposals). Results are always conditioned on the recorded
+  backbone+model, and the backbone benchmark (§4.5) measures rather
+  than assumes the differences. The deterministic tier and replay
+  remain model-free.
 - **Judged-tier stochasticity.** Treated by design (advisory-only,
   parse-or-skip) and by measurement (E3 repeats judged runs).
 - **The checklist is not complete.** `autocodabench checks list` is the
@@ -337,7 +377,39 @@ descriptively given the N.
 
 ---
 
-## 6. Reproducibility quick reference
+## 6. Where the contribution lives (and the review-gauntlet mapping)
+
+A fair question for any LLM-driven tool: *isn't the model doing all the
+work?* The falsifiable answer is to enumerate what functions with the
+model removed or swapped, and what the scaffolding measurably adds:
+
+1. **Runs with zero LLM:** the entire validator's deterministic tier
+   (9/9 on the E3 seeded defects — by code, not by model), the bundle
+   authoring core, the execution sandbox, the replay demo, the full
+   unit suite, and CI. A reviewer exercises all of it keyless.
+2. **Model-independent by construction:** the typed tool surface, the
+   per-run audit trail (identical format across backbones), the
+   blinding protocol of the ground-truth harness, the plan-lock phase
+   boundary, and the three-tier verdict epistemics. None of these are
+   prompts; they are inspectable code with tests.
+3. **The model is a measured variable, not the contribution:** the
+   backbone benchmark (§4.5) runs *different* LLMs — local Ollama
+   models included — through the same scaffolding and reports how
+   outcome quality varies. A wrapper cannot run this experiment; a
+   framework is what makes it well-posed.
+
+Mapping to the standard failure modes of LLM-tool submissions:
+
+| Mode | Risk | Standing answer |
+|------|------|-----------------|
+| F4 "wrapper" | the LLM does all the work | the three points above; design section of `architecture.md` |
+| F5 solver-grading confusion | reporting model accuracy as tool quality | policy in §1: no experiment reports solver performance; oracles measure bundle validity, runtime, score fidelity, defect catch rate |
+| F6 overselling | claims beyond evidence | status tags (implemented/piloted/designed) throughout; threats-to-validity §5; attestation tier = the tool refusing to overclaim *in its own output format* |
+| F7a key wall | reviewer can't run it without paying | keyless tiers (validator, replay demo, tests, CI) + **Ollama local models** for the LLM tiers + Claude subscription path |
+| F7b live-service wall | needs codabench.org | everything ends at the validated zip; upload is an explicitly optional final step |
+| F7c non-determinism | "ran it twice, got different bundles" | artifact-level oracles (§2), deterministic sub-model layer proven by replay, ≥3-runs-with-dispersion reporting standard |
+
+## 7. Reproducibility quick reference
 
 | What | Command | Needs auth? |
 |------|---------|-------------|
@@ -345,9 +417,10 @@ descriptively given the N.
 | Core smoke | `python -m autocodabench.core.bundle_io` | no |
 | Offline E2E + validation | `autocodabench demo --out /tmp/d && codabench-validate /tmp/d/demo-ai-text-detection.zip` | no |
 | Check inventory | `autocodabench checks list` | no |
-| Judged tier | `codabench-validate <bundle> --judged` | yes |
-| Judge calibration probe | edit a page to contradict the config, re-run `--judged` | yes |
-| Full live pipeline | `autocodabench create "<idea>" --verbose` | yes |
+| E3 deterministic baseline | `python experiments/backbone_bench/run_judge_bench.py` | no |
+| Judged tier | `codabench-validate <bundle> --judged [--backend ollama:<model>]` | Claude auth, or none with a local Ollama model |
+| Judge bench per backbone | `python experiments/backbone_bench/run_judge_bench.py --backend <spec> --runs 3` | per backbone |
+| Full live pipeline | `autocodabench create "<idea>" [--backend <spec>] --verbose` | per backbone |
 | Ground-truth harness | see `experiments/bundle_creation_test/README.md` | yes |
 
 Auth = Claude subscription login or `ANTHROPIC_API_KEY`
@@ -355,7 +428,7 @@ Auth = Claude subscription login or `ANTHROPIC_API_KEY`
 
 ---
 
-## 7. Sources
+## 8. Sources
 
 - Pavão et al. (2024), *AI Competitions and Benchmarks: The Science
   Behind the Contests* — the source of the design rules the checks

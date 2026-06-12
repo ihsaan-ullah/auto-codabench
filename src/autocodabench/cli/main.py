@@ -31,7 +31,12 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--facts", help="path to competition_facts.yaml "
                                    "(default: <bundle>/competition_facts.yaml if present)")
     p.add_argument("--judged", action="store_true",
-                   help="also run LLM-judged advisory checks (needs Claude auth)")
+                   help="also run LLM-judged advisory checks (needs an LLM backend)")
+    p.add_argument("--backend", default=None,
+                   help="LLM backend for --judged: claude[:model] (default), "
+                        "ollama:<model> (local, keyless), openai:<model>, or an "
+                        "OpenAI-compatible URL with '#<model>'")
+    p.add_argument("--model", default=None, help="model override for --backend")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="emit the machine-readable report instead of markdown")
 
@@ -39,7 +44,12 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
-    report = validate_bundle_path(args.bundle, facts_path=args.facts, judged=args.judged)
+    backend = None
+    if args.judged and (args.backend or args.model):
+        from ..backends import resolve_backend
+        backend = resolve_backend(args.backend, model=args.model)
+    report = validate_bundle_path(args.bundle, facts_path=args.facts,
+                                  judged=args.judged, backend=backend)
     if args.as_json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
@@ -92,9 +102,14 @@ def _cmd_create(args: argparse.Namespace) -> int:
     def on_text(text: str) -> None:
         print(text, flush=True)
 
+    backend = None
+    if args.backend:
+        from ..backends import resolve_backend
+        backend = resolve_backend(args.backend, model=args.model)
     result = create(
         args.idea,
         data=args.data,
+        backend=backend,
         model=args.model,
         max_budget_usd=args.max_budget_usd,
         on_text=on_text if args.verbose else None,
@@ -182,9 +197,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="(default behavior; flag kept for clarity)")
     p.set_defaults(func=_cmd_demo)
 
-    p = sub.add_parser("create", help="agentic plan→build pipeline (needs Claude auth)")
+    p = sub.add_parser("create", help="agentic plan→build pipeline (needs an LLM backend)")
     p.add_argument("idea", help="one-line competition idea or proposal text")
     p.add_argument("--data", help="path to sample data the planner may inspect")
+    p.add_argument("--backend", default=None,
+                   help="LLM backend: claude[:model] (default), ollama:<model> "
+                        "(local, keyless), openai:<model>, or an OpenAI-compatible "
+                        "URL with '#<model>'")
     p.add_argument("--model", help="model override for the agent sessions")
     p.add_argument("--max-budget-usd", type=float, default=None,
                    help="cumulative cost cap per phase")

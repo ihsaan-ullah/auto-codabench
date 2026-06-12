@@ -50,12 +50,17 @@ the bundle can't carry (anticipated error rate, unit of generalization)
 read a declared `competition_facts.yaml` — and report *skipped, here's how
 to enable me* rather than silently passing.
 
-## Agentic authoring (Claude auth required)
+## Agentic authoring (bring an LLM backbone)
 
 ```bash
-autocodabench auth status     # which auth path is active
+autocodabench auth status     # which Claude auth path is active, if any
 autocodabench create "Plankton image classification, balanced accuracy, \
     two phases" --data ./plankton_sample/
+
+# The model is a slot, not a hard binding — same tools, same audit trail:
+autocodabench create "..." --backend ollama:llama3.1      # local, keyless
+autocodabench create "..." --backend openai:gpt-4o
+codabench-validate bundle.zip --judged --backend ollama:llama3.1
 ```
 
 `create` runs two isolated agent sessions — plan, then build — joined only

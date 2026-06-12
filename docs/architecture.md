@@ -17,9 +17,11 @@ offline check framework run without LLM or network access and are
 unit-tested conventionally. Generated (or hand-written) competitions are
 validated by registered checks in three tiers — deterministic gates,
 LLM-judged advisories, human attestations — each citing its source. Model
-access is isolated behind a single backend seam with two shipped
-implementations: live (Claude Agent SDK) and record/replay, so the full
-pipeline runs deterministically without API keys.
+access is isolated behind a single backend seam: the Claude Agent SDK,
+a generic OpenAI-compatible tool-calling loop (Ollama local models, any
+chat-completions endpoint), and record/replay — so the full pipeline
+runs deterministically without API keys, and the backbone itself is a
+measured variable (`experiments/backbone_bench/`).
 
 ---
 
@@ -53,6 +55,10 @@ src/autocodabench/
 ├── backends/                # the model-runtime seam
 │   ├── base.py              # AgentBackend protocol, AgentTask, AgentRunResult
 │   ├── claude.py            # live: Claude Agent SDK (lazy import)
+│   ├── openai_compat.py     # live: any OpenAI-compatible endpoint (Ollama,
+│   │                        #   OpenAI, vLLM, …) — stdlib tool-calling loop
+│   ├── local_tools.py       # in-process tool registry for generic backends
+│   │                        #   (same names + same audit trail as the MCP layer)
 │   ├── replay.py            # keyless: re-execute a recorded run's tool calls
 │   └── fixtures/            # shipped demo fixture (see scripts/make_demo_fixture.py)
 │
@@ -136,6 +142,7 @@ flowchart TB
 
   seam["backends/ — AgentBackend seam"]
   claude["claude.py<br/>Claude Agent SDK<br/>(subscription or API key)"]
+  oai["openai_compat.py<br/>Ollama / OpenAI / vLLM<br/>(in-process tools)"]
   replay["replay.py<br/>recorded tool calls<br/>(keyless, deterministic)"]
 
   subgraph offline["Offline layers (no LLM, no keys)"]
@@ -151,8 +158,9 @@ flowchart TB
   lib --> pipeline & checks
   pipeline --> seam
   judged --> seam
-  seam --> claude & replay
+  seam --> claude & oai & replay
   claude -- "spawns, scoped by AUTOCODABENCH_RUN_DIR" --> mcp
+  oai -- "same tools in-process, same audit trail" --> core
   replay -- "re-executes recorded calls" --> core
   mcp --> core & runner
   checks --> core
@@ -216,5 +224,6 @@ if it consumes declared facts), implement `run()`, and decorate with
 validation report automatically.
 
 Adding a backend: implement `backends.base.AgentBackend` (`name` +
-`async run(task) -> AgentRunResult`). Everything above the seam — pipeline,
-judged checks, CLI, web — works unchanged.
+`async run(task) -> AgentRunResult`), or just point `resolve_backend()` at
+any OpenAI-compatible endpoint. Everything above the seam — pipeline,
+judged checks, CLI, web, the backbone benchmark — works unchanged.
