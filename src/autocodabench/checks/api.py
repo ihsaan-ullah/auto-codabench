@@ -1,4 +1,15 @@
-"""Entry points for validating a bundle directory or zip."""
+"""Entry points for validating a bundle directory or zip.
+
+The validator deliberately accepts *any* bundle — hand-written, exported
+from a production competition, or produced by the pipeline — rather than
+only our own output. Validating foreign bundles is both the tool's
+standalone value to organizers and the validator's own regression diet:
+a validator that only ever sees generated bundles co-evolves with the
+generator and stops measuring anything external (see
+``docs/design-rationale.md``, Section 6). Importing this module registers
+the full check registry as a side effect; a zip argument is unpacked to a
+temporary directory and the bundle root located within it.
+"""
 from __future__ import annotations
 
 import asyncio

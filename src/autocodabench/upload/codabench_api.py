@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""
-Upload a Codabench competition bundle (.zip) via the public REST API.
+"""Upload a Codabench competition bundle (.zip) via the public REST API.
 
-API reference: https://www.codabench.org/api/docs/
-Implementation follows the datasets flow in codalab/codabench (DataViewSet.create +
-upload_completed → unpack_competition).
+API reference: https://www.codabench.org/api/docs/. The implementation
+mirrors the platform's own datasets flow in codalab/codabench
+(``DataViewSet.create`` + ``upload_completed`` → ``unpack_competition``)
+rather than inventing a flow, so a future Codabench change fails loudly
+here instead of subtly downstream.
 
 Usage:
-  export CODABENCH_TOKEN="..."   # from POST /api/api-token-auth/ with username/password
-  python codabench/upload_bundle.py competition_bundle.zip
 
-  # or login first:
-  python codabench/upload_bundle.py --username USER --password PASS bundle.zip
+  # token from the environment (or a .env file in the working directory)
+  export CODABENCH_TOKEN="..."   # from POST /api/api-token-auth/
+  python -m autocodabench.upload.codabench_api competition_bundle.zip
 
-Environment:
+  # or authenticate with credentials; a fresh token is obtained at runtime
+  python -m autocodabench.upload.codabench_api \\
+      --username USER --password PASS competition_bundle.zip
+
+Environment (a ``.env`` in the working directory is loaded if present):
+
   CODABENCH_BASE_URL  default https://www.codabench.org
-  CODABENCH_TOKEN    DRF token (Authorization: Token …)
-
-This script auto-loads environment variables from `codabench/.env` (next to this
-file) before parsing arguments, and exits with an error if that file is missing
-or invalid.
+  CODABENCH_TOKEN     DRF token (sent as ``Authorization: Token …``)
 """
 
 from __future__ import annotations

@@ -7,7 +7,9 @@ functions, and crucially the **same audit trail**: every execution is
 recorded through :mod:`autocodabench.run_log` (``tool_calls/NNNN_*.json``
 + ``events.jsonl``), so runs are replayable and comparable across
 backbones. That parity is what makes cross-model benchmarking
-(``experiments/backbone_bench``) apples-to-apples.
+(``experiments/backbone_bench``) commensurable by construction: every
+backbone acts through the identical tool surface and leaves identical
+evidence.
 
 Tool schemas are hand-written (OpenAI function-calling format) and kept
 deliberately small.
@@ -26,7 +28,7 @@ from ..core import bundle_io
 from ..runner import execution as runner
 
 # Tool results returned to the model are capped so a verbose stderr tail
-# can't blow up the context window. Full streams are on disk regardless.
+# cannot flood the context window. Full streams are on disk regardless.
 _RESULT_CHARS_CAP = 20_000
 
 

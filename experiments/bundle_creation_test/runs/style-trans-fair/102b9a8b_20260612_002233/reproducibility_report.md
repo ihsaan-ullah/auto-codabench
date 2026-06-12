@@ -8,10 +8,9 @@ Codabench competition #601) — and how many of the system's tests does the
 result pass?
 
 **Run:** `102b9a8b_20260612_002233` · branch `jmlr-oss-direction` ·
-backbone: Claude (subscription auth) · total agent cost **$20.76**
-(plan $2.75 + implement $12.78 + reformat $5.23) · ~1h35m wall-clock.
+backbone: Claude (subscription auth)
 
-## Method and provenance
+# Method and provenance
 
 The generation pipeline ran fully **blind** under the harness's leakage
 protocol: the planner saw only `input/`; the implementer saw only the
@@ -26,17 +25,17 @@ it could not have influenced generation.
 
 ## 1. Pipeline outcome (which tests passed)
 
-| Test / oracle | Result | Detail |
-|---|---|---|
-| Preconditions | ✅ pass | 1 ground-truth submission, expected scores parse |
-| Plan completeness (7 design sections) | ✅ pass | 7/7 sections, 7 assumptions documented, 17 turns |
-| Structural validity (`validate_bundle`) | ✅ pass | clean after the implementer's own lint-fix loop |
-| **Baseline execution oracle** | ✅ pass | bundle's own baseline through ingestion+scoring, attempt 3/5; scores produced for all 3 leaderboard keys (gm=0.0122, am=0.344, wga=0.0) |
-| **Starting-kit notebook oracle** | ✅ pass | full execution, attempt 4/4 |
-| Bundle zip produced | ✅ pass | `bundles/style-trans-fair.zip` |
-| **Ground-truth score fidelity (sub_1)** | ❌ fail | no score produced — see §3 |
-| Validator, deterministic tier (post-hoc) | ✅ pass | 0 gate failures, 2 advisory findings |
-| Validator, judged tier (post-hoc) | — | 1 advisory finding (real, subtle: a "leaderboard revealed at close" promise with no enforcing config flag) |
+| Test / oracle                                 | Result  | Detail                                                                                                                                  |
+| --------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Preconditions                                 | ✅ pass | 1 ground-truth submission, expected scores parse                                                                                        |
+| Plan completeness (7 design sections)         | ✅ pass | 7/7 sections, 7 assumptions documented, 17 turns                                                                                        |
+| Structural validity (`validate_bundle`)     | ✅ pass | clean after the implementer's own lint-fix loop                                                                                         |
+| **Baseline execution oracle**           | ✅ pass | bundle's own baseline through ingestion+scoring, attempt 3/5; scores produced for all 3 leaderboard keys (gm=0.0122, am=0.344, wga=0.0) |
+| **Starting-kit notebook oracle**        | ✅ pass | full execution, attempt 4/4                                                                                                             |
+| Bundle zip produced                           | ✅ pass | `bundles/style-trans-fair.zip`                                                                                                        |
+| **Ground-truth score fidelity (sub_1)** | ❌ fail | no score produced — see §3                                                                                                            |
+| Validator, deterministic tier (post-hoc)      | ✅ pass | 0 gate failures, 2 advisory findings                                                                                                    |
+| Validator, judged tier (post-hoc)             | —      | 1 advisory finding (real, subtle: a "leaderboard revealed at close" promise with no enforcing config flag)                              |
 
 **4 of the 5 harness phases passed; the run fails honestly at
 `fail_at_score_submissions/sub_1`.** The two failure causes are
@@ -48,24 +47,24 @@ neither was recoverable under the harness's no-retry rule.
 Dimension-by-dimension comparison against the production bundle. ✅ =
 reproduced, ◐ = reproduced with deviation, ❌ = diverged.
 
-| Dimension | Ground truth (production) | Generated (blind) | Verdict |
-|---|---|---|---|
-| Task framing | bias-invariant classification of style-transferred images, category×style confound | same, including the confound framing in pages | ✅ |
-| Protocol | γ (code submission: ingestion + scoring) | γ (ingestion + scoring) | ✅ |
-| Data realism | real stylized images | real stylized images from `input/sample_data/` — **no synthetic data** | ✅ |
-| Test set size | 180 (set 2) | **180** (`reference_data/test_labels.csv`) | ✅ |
-| Train set size | 90 (set 1) | **90** (`input_data/train/`) | ✅ |
-| Group structure | 9 per-(category×style) groups | 9 per-(CATEGORY×STYLE) groups | ✅ |
-| Metric family | geometric mean of per-group accuracies | geometric mean of per-group accuracies | ✅ |
-| **Metric zero-handling** | hard zero: any zero-accuracy group ⇒ score 0 | `gmean(accs + 1e-12)` ⇒ small positive score | ❌ (quantified in §3) |
-| Leaderboard columns | `set2_score` only | `gm` primary + `am`, `wga` secondaries, all `desc` | ◐ (richer; names differ) |
-| Train-set diagnostic score | reported (`set1_train`) | not scored (test only) | ❌ |
-| Phases | 2 (dev + final) | 2 (dev + final) | ✅ |
-| Submission limits | none enforced (pages *promise* limits the config doesn't enforce — see §4) | dev: 5/day + 100 total; final: 1 | ◐ (generated is stricter than GT *and* matches GT's own stated intent) |
-| Docker image | custom `ktgiahieu/codalab-legacy-with-tensorflow:3.8` | generic `codalab/codalab-legacy:py3` | ❌ (consequential — §3) |
-| Baseline shipped | `sample_code_submission/` | `solutions/solution_baseline/` | ✅ |
-| Starting-kit notebook | `README.ipynb` | `README.ipynb` | ✅ |
-| Pages | overview/evaluation/data/files | overview/evaluation/data/terms | ✅ |
+| Dimension                      | Ground truth (production)                                                           | Generated (blind)                                                               | Verdict                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Task framing                   | bias-invariant classification of style-transferred images, category×style confound | same, including the confound framing in pages                                   | ✅                                                                       |
+| Protocol                       | γ (code submission: ingestion + scoring)                                           | γ (ingestion + scoring)                                                        | ✅                                                                       |
+| Data realism                   | real stylized images                                                                | real stylized images from `input/sample_data/` — **no synthetic data** | ✅                                                                       |
+| Test set size                  | 180 (set 2)                                                                         | **180** (`reference_data/test_labels.csv`)                              | ✅                                                                       |
+| Train set size                 | 90 (set 1)                                                                          | **90** (`input_data/train/`)                                            | ✅                                                                       |
+| Group structure                | 9 per-(category×style) groups                                                      | 9 per-(CATEGORY×STYLE) groups                                                  | ✅                                                                       |
+| Metric family                  | geometric mean of per-group accuracies                                              | geometric mean of per-group accuracies                                          | ✅                                                                       |
+| **Metric zero-handling** | hard zero: any zero-accuracy group ⇒ score 0                                       | `gmean(accs + 1e-12)` ⇒ small positive score                                 | ❌ (quantified in §3)                                                   |
+| Leaderboard columns            | `set2_score` only                                                                 | `gm` primary + `am`, `wga` secondaries, all `desc`                      | ◐ (richer; names differ)                                                |
+| Train-set diagnostic score     | reported (`set1_train`)                                                           | not scored (test only)                                                          | ❌                                                                       |
+| Phases                         | 2 (dev + final)                                                                     | 2 (dev + final)                                                                 | ✅                                                                       |
+| Submission limits              | none enforced (pages*promise* limits the config doesn't enforce — see §4)       | dev: 5/day + 100 total; final: 1                                                | ◐ (generated is stricter than GT*and* matches GT's own stated intent) |
+| Docker image                   | custom `ktgiahieu/codalab-legacy-with-tensorflow:3.8`                             | generic `codalab/codalab-legacy:py3`                                          | ❌ (consequential — §3)                                                |
+| Baseline shipped               | `sample_code_submission/`                                                         | `solutions/solution_baseline/`                                                | ✅                                                                       |
+| Starting-kit notebook          | `README.ipynb`                                                                    | `README.ipynb`                                                                | ✅                                                                       |
+| Pages                          | overview/evaluation/data/files                                                      | overview/evaluation/data/terms                                                  | ✅                                                                       |
 
 **Summary: 11 ✅, 2 ◐, 3 ❌ across 16 dimensions.** The blind pipeline
 reproduced the competition's identity — task, protocol, real data with
@@ -105,10 +104,10 @@ inventory exists to surface (and didn't — see §5, defect 2).
 
 Same checks, both artifacts, judged tier included:
 
-| | Gates failed | Findings (advisory) | Passes |
-|---|---|---|---|
-| **Generated** bundle | 0 | 3 | 9 |
-| **Ground-truth** bundle (production!) | 0¹ | 7 | 5 |
+|                                             | Gates failed | Findings (advisory) | Passes |
+| ------------------------------------------- | ------------ | ------------------- | ------ |
+| **Generated** bundle                  | 0            | 3                   | 9      |
+| **Ground-truth** bundle (production!) | 0¹          | 7                   | 5      |
 
 ¹ After a validator fix this comparison itself forced: the GT bundle
 uses the legacy extensionless `metadata` filename, which production

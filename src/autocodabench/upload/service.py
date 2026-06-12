@@ -9,8 +9,10 @@ Auth credentials come from arguments first, environment second:
   - CODABENCH_USERNAME + CODABENCH_PASSWORD, OR
   - CODABENCH_TOKEN
 
-If both forms are available, username+password wins (a fresh token is
-fetched on each call, so a 90-day token rotation will not surprise us).
+If both forms are available, username+password takes precedence: a fresh
+token is obtained on every call, so scheduled token rotation (Codabench
+tokens expire after 90 days) cannot invalidate a stored configuration
+mid-run.
 """
 from __future__ import annotations
 

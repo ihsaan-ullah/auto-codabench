@@ -1,6 +1,6 @@
 """autocodabench CLI.
 
-Tiered entry points, friendliest-auth first:
+Entry points are tiered by their authentication demands, keyless first:
 
   autocodabench validate BUNDLE [--facts F] [--judged]   # keyless (unless --judged)
   autocodabench demo [--out DIR]                          # keyless replay demo
@@ -10,6 +10,11 @@ Tiered entry points, friendliest-auth first:
 
 ``codabench-validate`` is an alias console script for the validator, usable
 on any bundle — including hand-written ones that never touched an agent.
+
+The CLI is a thin argument-parsing layer over the library: it contributes
+``.env`` loading and the live-auth preflight, and contains no validation
+or authoring logic of its own, so everything reachable here is equally
+reachable via ``import autocodabench``.
 """
 from __future__ import annotations
 
@@ -20,6 +25,26 @@ import sys
 from pathlib import Path
 
 from .. import __version__
+
+
+def _require_live_claude_auth(backend_spec: str | None) -> bool:
+    """Preflight before starting a live Claude session: if no auth path
+    exists, walk the user through one (interactive) or print guidance and
+    refuse (non-interactive) — instead of failing opaquely inside the SDK
+    mid-run. Non-Claude backends (ollama:/openai:/URL) carry their own
+    credentials and are skipped."""
+    if backend_spec and backend_spec.split(":", 1)[0] != "claude":
+        return True
+    from ..auth import AuthRequiredError, ensure_live_auth
+    try:
+        ensure_live_auth()
+    except AuthRequiredError as e:
+        print(f"\n{e}", file=sys.stderr)
+        return False
+    except (KeyboardInterrupt, EOFError):
+        print("\naborted", file=sys.stderr)
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +69,8 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
+    if args.judged and not _require_live_claude_auth(args.backend):
+        return 2
     backend = None
     if args.judged and (args.backend or args.model):
         from ..backends import resolve_backend
@@ -98,6 +125,9 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
 def _cmd_create(args: argparse.Namespace) -> int:
     from ..agent.pipeline import create
+
+    if not _require_live_claude_auth(args.backend):
+        return 2
 
     def on_text(text: str) -> None:
         print(text, flush=True)
@@ -226,6 +256,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from ..auth import load_dotenv
+    load_dotenv()  # <cwd>/.env, if present; never overrides real env vars
     args = _build_parser().parse_args(argv)
     return args.func(args)
 
@@ -240,6 +272,8 @@ def validate_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__}")
     _add_validate_args(parser)
+    from ..auth import load_dotenv
+    load_dotenv()
     return _cmd_validate(parser.parse_args(argv))
 
 

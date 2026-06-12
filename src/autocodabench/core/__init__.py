@@ -1,4 +1,9 @@
-"""Pure, LLM-free, network-free core: bundle authoring file I/O + schema lint."""
+"""Pure core: bundle-authoring file I/O and schema lint.
+
+No LLM, no network, no MCP, no subprocess — by design: purity is what
+makes this layer unit-testable without keys and trustworthy as the
+foundation that every higher layer (checks, MCP tools, replay) builds on.
+"""
 from .bundle_io import (
     attach_data,
     init_bundle,

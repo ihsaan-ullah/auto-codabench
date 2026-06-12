@@ -2,8 +2,10 @@
 
 A *run* is the working folder for one planning or execution session. The
 plan skill calls `autocodabench_open_run` as its first action and then
-uses `autocodabench_log_event` / `autocodabench_snapshot_spec` to record
-what's happening as it happens.
+records progress through `autocodabench_log_event` /
+`autocodabench_snapshot_spec`, so the run directory accumulates a
+contemporaneous account of the session rather than a reconstruction
+after the fact.
 """
 from __future__ import annotations
 

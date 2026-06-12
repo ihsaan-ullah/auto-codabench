@@ -6,13 +6,14 @@ them to self-validate the bundle it just wrote: prepare a per-run
 conda env, run the bundle's own baseline through the scoring pipeline,
 execute the starting-kit notebook end-to-end. The reformat-and-run
 skill uses `run_user_submission` to score an external (ground-truth)
-submission once it's been adapted to the bundle's interface.
+submission after it has been adapted to the bundle's interface.
 
 The MCP wrappers are pure one-shots — the *skill* drives any retry
-loop based on the returned `error` / `stderr_tail`. Keeping the loop in
-the skill (where a Claude session can read the traceback and decide
-how to fix it) and not in this module (where it would be a brittle
-regex on the stderr) is intentional.
+loop based on the returned `error` / `stderr_tail`. The loop belongs in
+the skill, where a model session can read the traceback and decide how
+to respond, not in this module, where it could only be a brittle regex
+over stderr; a retry driven through logged tool calls is also an audit
+trail, where one buried in library code would hide failures.
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ async def autocodabench_prepare_run_env(
     """Clone the base conda env and install the bundle's per-program requirements.
 
     Idempotent: if an env named `acb-run-<short>` already exists for
-    this session's run, it's reused unless `force_recreate=True`. The
+    this session's run, it is reused unless `force_recreate=True`. The
     requirements union covers `scoring_program/requirements.txt`,
     `ingestion_program/requirements.txt`, and any bundle-root
     `requirements.txt`.
@@ -110,7 +111,7 @@ async def autocodabench_run_baseline_submission(
     submission ever touches it.
 
     Falls back gracefully to other common subdir names
-    (`sample_code_submission`, `solution1`) if `subdir` doesn't exist.
+    (`sample_code_submission`, `solution1`) if `subdir` does not exist.
 
     The harness already exports safe BLAS/OMP/TF single-thread defaults
     into the subprocess env at .so-load time (this prevents the macOS
@@ -155,7 +156,7 @@ async def autocodabench_run_user_submission(
     """Run an external submission directory through ingestion + scoring.
 
     Used by `autocodabench-reformat-and-run` to score a ground-truth
-    submission once it's been adapted to the bundle's interface. Same
+    submission after it has been adapted to the bundle's interface. Same
     pipeline as `run_baseline_submission` but the submission code is
     sourced from `submission_dir` instead of the bundle's `solutions/`.
 

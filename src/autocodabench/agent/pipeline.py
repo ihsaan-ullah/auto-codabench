@@ -1,15 +1,19 @@
 """The plan→build pipeline: two isolated agent sessions joined by one file.
 
-Phase isolation is load-bearing, not an implementation detail: the build
-session starts with zero conversation history — the locked
-``implementation_plan.md`` is the entire interface between thinking and
-doing, which is what makes a run auditable (and the plan human-editable
-between phases).
+Phase isolation is load-bearing, not an implementation detail. The build
+session starts with zero conversation history; the locked
+``implementation_plan.md`` is the entire interface between deliberation
+and execution. We discard the planner's context deliberately: it reduces
+token cost, gives the builder a focused prompt instead of a long mixed
+history, leaves a human-reviewable (and editable) decision record between
+the phases, and makes "was the plan wrong, or the implementation?"
+answerable from artifacts alone. See ``docs/design-rationale.md``,
+Section 10, for the full argument and its costs.
 
 Each phase is one ``AgentBackend.run()``; the agent acts only through the
 autocodabench MCP server (spawned as a stdio subprocess scoped to the run
-dir), so every authoring action lands in the run's ``tool_calls/`` audit
-trail — which is also what makes finished runs replayable.
+directory), so every authoring action lands in the run's ``tool_calls/``
+audit trail — which is also what makes finished runs replayable.
 """
 from __future__ import annotations
 

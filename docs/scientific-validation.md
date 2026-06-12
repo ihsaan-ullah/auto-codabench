@@ -1,57 +1,60 @@
 # Scientific validation of autocodabench
 
-This document specifies **what autocodabench claims, how each claim is
-tested, and how to reproduce every test**. It is written for a scientific
-reviewer: each test type states its procedure, its oracle (what decides
-pass/fail), its scope, and its known limitations. Commands shown are
-runnable from a fresh checkout.
+This document specifies what autocodabench claims, how each claim is
+tested, and how every test can be reproduced. It is written for a
+scientific reviewer: each test type states its procedure, its oracle
+(the mechanism that decides pass or fail), its scope, and its known
+limitations. All commands shown are runnable from a fresh checkout.
 
 Status legend: **[implemented]** runs today (command given);
-**[piloted]** the instrument exists and has ≥1 recorded run;
+**[piloted]** the instrument exists and has at least one recorded run;
 **[designed]** the protocol is specified but the campaign has not run.
 
 ---
 
 ## 1. Claims under test
 
-The software makes four falsifiable claims. Everything in this document
-exists to test one of them.
+The software makes four falsifiable claims, and every element of this
+document exists to test one of them. Table 1 maps each claim to the
+sections that test it.
 
 | # | Claim | Tested by |
 |---|-------|-----------|
 | C1 | The authoring layer produces **structurally valid** Codabench bundles (schema-correct, internally consistent, uploadable). | §3.1 unit tests, §3.2 replay E2E, §3.4 check framework |
 | C2 | Generated competitions are **functional**: their own baseline runs through their own scoring pipeline and produces scores; the starting kit executes. | §3.3 execution oracles |
-| C3 | The validator **catches real authoring defects** before launch — in generated *and* hand-written bundles. | §3.4 check framework, §4.3 seeded-defect study (E3) |
+| C3 | The validator **catches real authoring defects** before launch, in both generated and hand-written bundles. | §3.4 check framework, §4.3 seeded-defect study (E3) |
 | C4 | Given a competition proposal with known ground truth, the end-to-end pipeline produces a competition that **scores known submissions within tolerance of their expected scores**. | §3.5 ground-truth harness, §4.1 success-rate campaign (E1) |
 
-What we deliberately do **not** claim or measure: how well third-party
-models *solve* the generated competitions. "GPT-X scores Y% on our
-benchmark" evaluates the solver, not the software, and conflating the two
-is a known methodological error in tooling papers. No experiment here
-reports solver accuracy as evidence of tool quality.
+We deliberately do not claim or measure how well third-party models
+solve the generated competitions. A statement of the form "model X
+scores Y% on our benchmark" evaluates the solver, not the software, and
+conflating the two is a known methodological error in tooling papers.
+No experiment in this document reports solver accuracy as evidence of
+tool quality.
 
 ---
 
-## 2. Why an agentic tool needs a different test discipline
+## 2. Why an agentic tool requires a different test discipline
 
-Two properties of LLM-driven generation shape everything below:
+Two properties of LLM-driven generation shape the methodology that
+follows.
 
 1. **Non-determinism.** The same prompt can yield different bundles.
-   Therefore correctness is never defined by the generation path; it is
-   defined by **executable post-hoc oracles** applied to the artifact
-   (does it validate? does its baseline run? does it reproduce expected
-   scores?). Success rates are reported over repeated runs, not single
-   anecdotes.
-2. **Self-assessment is inadmissible.** An agent reporting "the bundle is
-   correct" is not evidence. Every verdict in this codebase is produced
-   by code that is independent of the generating agent: the schema
-   linter, the sandbox runner's exit codes and parsed `scores.json`, and
-   the check registry. LLM *judgment* is used in exactly one place
-   (§3.4.2) and is constitutionally advisory — it can never flip a
-   pass/fail verdict.
+   Correctness is therefore never defined by the generation path; it is
+   defined by executable post-hoc oracles applied to the artifact: does
+   the bundle validate, does its baseline run, does it reproduce
+   expected scores. Success rates are reported over repeated runs, not
+   single anecdotes.
+2. **Self-assessment is inadmissible.** An agent reporting that "the
+   bundle is correct" is not evidence. Every verdict in this codebase
+   is produced by code that is independent of the generating agent: the
+   schema linter, the sandbox runner's exit codes and parsed
+   `scores.json`, and the check registry. LLM judgment is used in
+   exactly one place (§3.4.2) and is advisory by construction; it can
+   never change a pass/fail verdict.
 
 Every agentic run also produces a complete audit trail
-(`tool_calls/NNNN_*.json` + `events.jsonl` per run): the inputs and
+(`tool_calls/NNNN_*.json` and `events.jsonl` per run): the inputs and
 outputs of every authoring action, with timestamps and durations. All
 quantitative statements about a run are recomputable from this record,
 and any recorded run can be re-executed deterministically (§3.2).
@@ -60,7 +63,7 @@ and any recorded run can be re-executed deterministically (§3.2).
 
 ## 3. The test pyramid (implemented)
 
-### 3.1 Unit tests — the deterministic core **[implemented]**
+### 3.1 Unit tests: the deterministic core **[implemented]**
 
 ```bash
 pip install -e '.[dev]'
@@ -69,85 +72,89 @@ python -m pytest tests/        # 41 tests, < 1 s, no network, no API keys
 
 **Scope.** The LLM-free layers: bundle file I/O (round-trip authoring,
 path-traversal rejection, schema-key allow-listing), the schema linter
-(detects missing referenced files, unwritten leaderboard keys), zip
-layout (`competition.yaml` at zip root — the most common upload
+(detection of missing referenced files and unwritten leaderboard keys),
+zip layout (`competition.yaml` at the zip root, the most common upload
 rejection), the check framework (every status transition: PASS, FAIL,
 FINDING, SKIPPED, ATTESTATION_REQUIRED), facts gating, the replay
 backend (including determinism: two replays produce byte-identical
 `competition.yaml`), auth resolution (all credential combinations via a
 faked home directory), and the CLI surface (exit codes included).
 
-**Oracle.** Conventional assertions. The suite is **keyless by policy**:
-no test may require Claude auth or network, which is what makes it a
-hard CI gate rather than a flaky one.
+**Oracle.** Conventional assertions. The suite is keyless by policy:
+no test may require Claude authentication or network access. This is
+what makes the suite a hard CI gate rather than a flaky one.
 
 **CI.** `.github/workflows/ci.yml` runs the suite on Python 3.10–3.13
-(Linux) + 3.12 (macOS) on every push/PR, plus §3.2 and a wheel-content
-check (the packaged skills and fixtures must ship, or the install is
-broken in a way unit tests can't see).
+(Linux) and 3.12 (macOS) on every push and pull request, together with
+the §3.2 replay test and a wheel-content check (the packaged skills and
+fixtures must ship; otherwise the install is broken in a way unit tests
+cannot detect).
 
-### 3.2 Deterministic end-to-end: record/replay **[implemented]**
+### 3.2 Deterministic end-to-end testing: record and replay **[implemented]**
 
 ```bash
 autocodabench demo --out /tmp/demo
 codabench-validate /tmp/demo/demo-ai-text-detection.zip
 ```
 
-**Procedure.** Every live run records each MCP tool call (name + full
+**Procedure.** Every live run records each MCP tool call (name and full
 arguments). The replay backend re-executes a recorded sequence against
-the *real* authoring layer — the bundle is genuinely rebuilt on the
-local machine, then schema-validated and zipped. The shipped fixture
+the real authoring layer: the bundle is genuinely rebuilt on the local
+machine, then schema-validated and zipped. The shipped fixture
 (14 authoring calls) is regenerated by `scripts/make_demo_fixture.py`.
 
-**What it establishes.** (a) The full authoring path — init → pages →
-scoring program → data → solution → `competition.yaml` → validate → zip
-— functions end-to-end with zero model access; (b) **determinism**: the
+**What it establishes.** (a) The full authoring path — init, pages,
+scoring program, data, solution, `competition.yaml`, validation, zip —
+functions end-to-end with no model access; (b) determinism: the
 pipeline below the model seam has no hidden nondeterminism (asserted
 byte-for-byte in `tests/test_replay_backend.py`); (c) reviewability:
 anyone can exercise the system without credentials.
 
 **Limitation.** Replay validates the machinery, not the model's design
-choices — that is §3.3–§3.5's job.
+choices; the latter are the subject of §3.3–§3.5.
 
 ### 3.3 Execution oracles: the bundle must run itself **[implemented]**
 
-Used by `autocodabench create` (and the experiment harness) as the
-**runtime** definition of a working bundle. Structural validity (§3.1)
-is necessary but not sufficient — a bundle can be schema-perfect and
-still crash on its first real submission.
+These oracles are used by `autocodabench create` (and by the experiment
+harness) as the runtime definition of a working bundle. Structural
+validity (§3.1) is necessary but not sufficient: a bundle can be
+schema-perfect and still fail on its first real submission.
 
 **Procedure.** After the build agent writes a bundle:
 
 1. A fresh conda environment is cloned and the bundle's own
    per-program `requirements.txt` files are installed
-   (`prepare_run_env`) — so the bundle's declared dependencies, not the
-   developer's environment, are what gets tested.
+   (`prepare_run_env`), so that the bundle's declared dependencies,
+   rather than the developer's environment, are what is tested.
 2. **Baseline oracle** (`run_baseline_submission`): the bundle's own
    shipped baseline solution is staged into a sandbox laid out exactly
    as Codabench's worker lays it out (`program/`, `input/res`,
-   `input/ref`, `output/`), its ingestion program (if any) and scoring
-   program are invoked via the commands in their `metadata.yaml`, and
-   the run **passes iff** exit code 0 ∧ no timeout ∧ a parseable
-   `scores.json` whose keys cover the leaderboard columns.
+   `input/ref`, `output/`); its ingestion program (if any) and scoring
+   program are invoked via the commands in their `metadata.yaml`; and
+   the run passes if and only if the exit code is 0, no timeout
+   occurs, and a parseable `scores.json` is produced whose keys cover
+   the leaderboard columns.
 3. **Starting-kit oracle** (`run_starting_kit`): the participant-facing
    notebook is executed top-to-bottom (`jupyter execute`,
-   `--allow-errors=false`); pass iff exit 0 and all code cells executed.
-4. The generating agent gets the stderr and may retry — bounded at
-   **5 baseline attempts and 4 notebook attempts**. Exhausting the
-   budget is recorded as failure; the agent is forbidden from weakening
-   the task to make the test pass (no silent downgrade rule).
+   `--allow-errors=false`); the run passes if and only if the exit code
+   is 0 and all code cells executed.
+4. The generating agent receives the stderr and may retry, bounded at
+   5 baseline attempts and 4 notebook attempts. Exhausting the budget
+   is recorded as failure, and the agent is forbidden from weakening
+   the task to make the test pass (the no-silent-downgrade rule).
 
-All subprocess stdout/stderr is tee'd to disk live
-(`run_logs/<slug>/...`), with timeouts enforced by process-group kill,
-so failures are diagnosable from artifacts alone.
+All subprocess stdout and stderr is streamed to disk as it is produced
+(`run_logs/<slug>/...`), with timeouts enforced by process-group
+termination, so that failures are diagnosable from artifacts alone.
 
-**Evidence from the recorded pilot** (run dir retained;
-2026-06-12, `claude-sonnet-4-6`): from the one-line idea "Iris species
-classification…", the build agent hit a real sandbox/ingestion mismatch,
-diagnosed it from stderr, repaired the bundle, and converged in 4
-baseline attempts + 5 notebook attempts; final baseline scored
-`balanced_accuracy = 0.941` with bootstrap CIs, notebook 6/6 cells,
-total cost $2.69, 61 fully-audited tool calls.
+**Evidence from the recorded pilot** (run directory retained;
+2026-06-12, `claude-sonnet-4-6`): starting from the one-line idea "Iris
+species classification…", the build agent encountered a genuine
+sandbox/ingestion mismatch, diagnosed it from stderr, repaired the
+bundle, and converged in 4 baseline attempts and 5 notebook attempts;
+the final baseline scored `balanced_accuracy = 0.941` with bootstrap
+confidence intervals, the notebook executed 6/6 cells, the total cost
+was $2.69, and the run comprised 61 fully audited tool calls.
 
 ### 3.4 The check framework: competition design as an executable checklist **[implemented]**
 
@@ -157,10 +164,11 @@ autocodabench checks list        # the live inventory, by tier, with citations
 ```
 
 The checklist is derived from Pavão et al. (2024), *AI Competitions and
-Benchmarks: The Science Behind the Contests* — each check cites the
+Benchmarks: The Science Behind the Contests*; each check cites the
 chapter it operationalizes. The framework's central methodological
-commitment is that **checks are typed by how their verdict is produced**,
-and the three types are never conflated in reports:
+commitment is that checks are typed by how their verdict is produced,
+and the three types are never conflated in reports. Table 2 summarizes
+the three tiers and their epistemic standing.
 
 | Tier | Verdict produced by | Can it gate? | Failure mode handled |
 |------|--------------------:|--------------|----------------------|
@@ -170,8 +178,9 @@ and the three types are never conflated in reports:
 
 #### 3.4.1 Deterministic checks (the gates and cited findings)
 
-Each check below states its decision rule exactly. BLOCKER failures gate
-(exit 1); WARNING/INFO emit findings.
+Each check states its decision rule exactly. BLOCKER failures gate
+(exit 1); WARNING and INFO severities emit findings. Table 3 lists the
+deterministic checks, their decision rules, and their sources.
 
 | Check id | Decision rule | Severity | Source |
 |----------|---------------|----------|--------|
@@ -187,120 +196,124 @@ Each check below states its decision rule exactly. BLOCKER failures gate
 | `test-set-size` | N ≥ 100/E where E = declared `anticipated_error_rate`; N from declared `test_set_size`, else counted from a single reference CSV | WARNING | Pavão Ch. 4 |
 | `external-data-rule` | given declared `external_data_allowed`, the pages must mention the external-data/pre-training policy | WARNING | Pavão Ch. 5 |
 
-**Declared facts.** `test-set-size`, `external-data-rule`, and the
-prize-legality attestation consume a `competition_facts.yaml` the
-organizer declares (anticipated error rate, unit of generalization,
-external-data policy, prizes). This is deliberate **declare-then-verify**
-design: rather than guessing unverifiable context, a check missing its
-fact reports `SKIPPED — requires facts: …`, which is auditable, instead
-of a silent pass, which is not.
+**Declared facts.** The `test-set-size` and `external-data-rule` checks
+and the prize-legality attestation consume a `competition_facts.yaml`
+that the organizer declares (anticipated error rate, unit of
+generalization, external-data policy, prizes). This is a deliberate
+declare-then-verify design: rather than guessing unverifiable context,
+a check missing its fact reports `SKIPPED — requires facts: …`, which
+is auditable, instead of a silent pass, which is not.
 
 #### 3.4.2 LLM-judged checks (advisory by construction)
 
-Currently one: `judged-docs-config-consistency`. **Procedure:** the raw
-`competition.yaml` (≤ 8k chars) and all pages (≤ 16k chars) are embedded
-in a fixed rubric prompt that asks *only* for contradictions between
-what the pages promise participants and what the config enforces (phase
-dates, submission limits, metric names and ranking direction, submission
-format, prizes), with the instruction that every finding must quote both
-sides. The judge replies in strict JSON
-(`{"findings": [{where, message}]}`); replies that don't parse degrade
+The judged tier currently contains one check,
+`judged-docs-config-consistency`. **Procedure:** the raw
+`competition.yaml` (≤ 8k characters) and all pages (≤ 16k characters)
+are embedded in a fixed rubric prompt that asks only for contradictions
+between what the pages promise participants and what the configuration
+enforces (phase dates, submission limits, metric names and ranking
+direction, submission format, prizes), with the instruction that every
+finding must quote both sides. The judge replies in strict JSON
+(`{"findings": [{where, message}]}`); replies that do not parse degrade
 to SKIPPED. Each finding is rendered with its locator, marked advisory,
 and never gates.
 
 **Calibration evidence (manual, recorded 2026-06-12):** on the clean
-demo bundle the judge returned zero findings; after planting a single
-contradiction (page says "max 20 submissions/day", config enforces 5)
-the judge flagged exactly that contradiction with the correct locator
-and both quotes. Systematic sensitivity/specificity measurement is the
-E3 protocol (§4.3), now implemented as a runnable instrument
+demo bundle the judge returned zero findings; after a single
+contradiction was planted (a page stating "max 20 submissions/day"
+while the configuration enforces 5), the judge flagged exactly that
+contradiction with the correct locator and both quotes. Systematic
+sensitivity/specificity measurement is the E3 protocol (§4.3), now
+implemented as a runnable instrument
 (`experiments/backbone_bench/run_judge_bench.py`).
 
 Judged checks run through the same backend seam as everything else, so
-the judging backbone is a **measured variable**: the same rubric, the
-same parse-or-skip policy, and the same defect oracles apply whether the
+the judging backbone is a measured variable: the same rubric, the same
+parse-or-skip policy, and the same defect oracles apply whether the
 judge is Claude, a local Ollama model, or any OpenAI-compatible
-endpoint. Per-backbone judged quality is axis A of the backbone
-benchmark (§4.5).
+endpoint. Per-backbone quality of the judged tier is axis A of the
+backbone benchmark (§4.5).
 
 #### 3.4.3 Attestations
 
-Five launch criteria that no code or model can verify — external
-reviewers attempted the task (Pavão Ch. 2), per-feature leakage probe
-run (Ch. 3), datasheet published (Ch. 3), data license + persistent home
-decided (Ch. 3, 13), prize legality (Ch. 13). The report surfaces them
-as unchecked boxes. Scientifically this is a refusal to overclaim:
-the tool distinguishes "verified," "advised," and "asserted by a human"
-in its output format itself.
+The attestation tier comprises five launch criteria that no code or
+model can verify: external reviewers attempted the task (Pavão Ch. 2),
+a per-feature leakage probe was run (Ch. 3), a datasheet was published
+(Ch. 3), a data license and persistent home were decided (Ch. 3, 13),
+and prize legality was confirmed (Ch. 13). The report surfaces these as
+unchecked boxes. Scientifically, this is a refusal to overclaim: the
+tool distinguishes "verified," "advised," and "asserted by a human" in
+its output format itself.
 
 ### 3.5 Ground-truth harness: score fidelity on real competitions **[piloted]**
 
-`experiments/bundle_creation_test/` — the instrument behind claim C4 and
-the E1 campaign.
+`experiments/bundle_creation_test/` is the instrument behind claim C4
+and the E1 campaign.
 
 **Design.** For a competition with known ground truth (a proposal
-document, sample data, K reference submissions each with an
+document, sample data, and K reference submissions each with an
 `expected_result.json`):
 
-1. **Plan** from the proposal; **build + self-validate** from the plan
-   (§3.3 oracles apply).
+1. **Plan** from the proposal; **build and self-validate** from the
+   plan (the §3.3 oracles apply).
 2. **Adapt** each reference submission to the generated bundle's
-   interface (an agent may rewrite glue code, never the method), and
+   interface (an agent may rewrite glue code but never the method), and
    **score** it through the generated bundle's own pipeline.
 3. **Oracle:** the produced score must match the expected score within
-   the per-submission tolerance recorded in `expected_result.json`.
-   An independent auditor agent verdicts each submission from logs and
-   writes `verdict.json`.
+   the per-submission tolerance recorded in `expected_result.json`. An
+   independent auditor agent renders a verdict on each submission from
+   the logs and writes `verdict.json`.
 
-**Blinding / leakage protocol** (enforced via per-phase file-access
-rules; full table in the harness README): the builder never sees the
-ground-truth bundle, the reference submissions, or the proposal PDF
-(plan only); the adapter never sees expected scores; expected scores
-exist only in the orchestrator/auditor pair; the human-made reference
-bundle is off-limits to all agents. This prevents the generator from
-shaping the competition to the answers — the experiment's central
-validity threat.
+**Blinding and leakage protocol** (enforced via per-phase file-access
+rules; the full table appears in the harness README): the builder never
+sees the ground-truth bundle, the reference submissions, or the
+proposal PDF (the plan only); the adapter never sees expected scores;
+expected scores exist only in the orchestrator/auditor pair; the
+human-made reference bundle is off-limits to all agents. This prevents
+the generator from shaping the competition to the answers, which is the
+experiment's central validity threat.
 
-**Attribution.** Phases get no cross-phase retries; a run that fails
-records *where* (`fail_at_plan` / `fail_at_implement` / per-submission)
-so failure classes are separable in analysis. Every run's `manifest.json`
-records model + version, per-phase cost, validation outcomes, scores,
-and deltas.
+**Attribution.** Phases receive no cross-phase retries; a run that
+fails records where it failed (`fail_at_plan` / `fail_at_implement` /
+per-submission), so that failure classes are separable in analysis.
+Every run's `manifest.json` records the model and version, per-phase
+cost, validation outcomes, scores, and deltas.
 
-**Status.** Instrument complete with one full pilot competition
+**Status.** The instrument is complete, with one full pilot competition
 (`style-trans-fair`); the multi-competition campaign is E1 below.
 
 ---
 
 ## 4. Designed experiments (the evaluation campaign)
 
-These are specified now so the instruments above were built to collect
-them. Reporting standards for all of them: model + version pinned and
-recorded per run; **≥ 3 runs per condition** with success rates and
-dispersion, never single anecdotes; cost per run reported; all raw logs
-(`tool_calls/`, `events.jsonl`, sandbox stdout/stderr) retained and
-linkable.
+These experiments are specified now so that the instruments above were
+built to collect them. The reporting standards for all of them are: the
+model and version are pinned and recorded per run; at least 3 runs per
+condition are reported, with success rates and dispersion, never single
+anecdotes; cost per run is reported; and all raw logs (`tool_calls/`,
+`events.jsonl`, sandbox stdout/stderr) are retained and linkable.
 
 ### 4.1 E1 — Bundle-generation success rate and score fidelity **[designed; N=1 piloted]**
 
-Over N ≈ 10–15 named, diverse real competitions: the fraction of runs
-reaching (a) structurally valid bundle, (b) running baseline (§3.3
-oracle), (c) ground-truth score match within tolerance (§3.5 oracle) —
-reported per phase, with cost. This is the headline table; the harness
-already emits every column into `manifest.json`, so the campaign is
-execution + tabulation, not new instrumentation.
+Over N ≈ 10–15 named, diverse real competitions, E1 measures the
+fraction of runs reaching (a) a structurally valid bundle, (b) a
+running baseline (the §3.3 oracle), and (c) a ground-truth score match
+within tolerance (the §3.5 oracle), reported per phase, with cost. This
+is the headline table; the harness already emits every column into
+`manifest.json`, so the campaign requires execution and tabulation, not
+new instrumentation.
 
 ### 4.2 E2 — Capability matrix **[designed]**
 
-autocodabench vs. manual authoring vs. raw Codabench vs. EvalAI across
-user-meaningful capabilities (bundle-from-natural-language, pre-launch
-ground-truth validation, erroneous-submission testing, auditable
-authoring log, platform generality, cost), with honest ✗ cells —
-including ours (Codabench-only; LLM cost).
+E2 compares autocodabench against manual authoring, raw Codabench, and
+EvalAI across user-meaningful capabilities (bundle-from-natural-language,
+pre-launch ground-truth validation, erroneous-submission testing,
+auditable authoring log, platform generality, cost), with honest
+negative cells, including our own (Codabench-only scope; LLM cost).
 
 ### 4.3 E3 — Validation effectiveness (seeded defects) **[implemented; campaign pending]**
 
-The validator's sensitivity/specificity study, implemented as
+E3 is the validator's sensitivity/specificity study, implemented as
 `experiments/backbone_bench/run_judge_bench.py`. Protocol: 12 defect
 types drawn from real authoring failures are programmatically seeded
 into otherwise-clean bundles (the replay fixture provides the
@@ -308,42 +321,45 @@ deterministic clean base) — 9 targeting the deterministic tier (missing
 referenced file, unwritten leaderboard key, missing daily cap, 10-day
 dev phase, missing sorting direction, unlimited final submissions,
 missing starting kit, single phase, unpinned docker image) and 3
-targeting the judged tier (pages↔config contradictions in submission
-caps, metric direction, phase dates). Catch/miss is recorded per
-defect per run, plus the judged tier's false-positive rate on clean
-copies (the judged tier is stochastic, so ≥3 runs per condition).
+targeting the judged tier (pages-versus-config contradictions in
+submission caps, metric direction, and phase dates). Catch or miss is
+recorded per defect per run, together with the judged tier's
+false-positive rate on clean copies (the judged tier is stochastic, so
+at least 3 runs per condition are required).
 
 **First result (2026-06-12):** the deterministic tier catches **9/9**
-seeded defects, as required — it is code, so anything below 9/9 is a
-bug, and this doubles as a regression test for the check registry.
-Per-backbone judged-tier results accumulate under
-`experiments/backbone_bench/results/`.
+seeded defects, as required. Because this tier is code, anything below
+9/9 constitutes a bug, and the study doubles as a regression test for
+the check registry. Per-backbone results for the judged tier accumulate
+under `experiments/backbone_bench/results/`.
 
 ### 4.4 E4 — Authoring-effort study **[designed, optional]**
 
-Small within-subjects user study (N ≈ 10–20): time-to-first-valid-bundle
-and defect count, manual vs. assisted; pre-registered protocol; reported
-descriptively given the N.
+E4 is a small within-subjects user study (N ≈ 10–20) measuring
+time-to-first-valid-bundle and defect count, manual versus assisted,
+with a pre-registered protocol; results are reported descriptively
+given the N.
 
 ### 4.5 E5 — Backbone benchmark **[axis A implemented; axis B protocol fixed]**
 
-Because every backbone runs behind the same seam — identical tool
-surface, identical audit-trail format, identical oracles — the LLM
-itself becomes a measured variable rather than a confound. Two axes
-(full protocol: `experiments/backbone_bench/README.md`):
+Because every backbone runs behind the same seam — an identical tool
+surface, an identical audit-trail format, and identical oracles — the
+LLM itself becomes a measured variable rather than a confound. The
+benchmark has two axes (full protocol:
+`experiments/backbone_bench/README.md`):
 
-- **Axis A — validation/judging quality**: E3's seeded-defect catch
+- **Axis A — validation/judging quality:** E3's seeded-defect catch
   rate and clean-bundle false-positive rate, per backbone (Claude,
   local models via Ollama, OpenAI-compatible endpoints). Runnable now.
-- **Axis B — bundle-creation quality**: the ground-truth harness
-  (§3.5) run per backbone per competition — plan completeness,
+- **Axis B — bundle-creation quality:** the ground-truth harness
+  (§3.5) run per backbone per competition, measuring plan completeness,
   structural validity, runtime validity with attempts-to-converge,
   ground-truth score fidelity, and cost. The blinding protocol is
   unchanged; backbone-specific conditions (no PDF reading in the
   generic backend; native tool-calling required) are recorded as run
   conditions, never silently worked around.
 
-This doubles as the seed of a public benchmark of agentic
+This benchmark also serves as the seed of a public benchmark of agentic
 benchmark-authoring capability, with `style-trans-fair` as the first of
 the ground-truth competitions.
 
@@ -352,64 +368,72 @@ the ground-truth competitions.
 ## 5. Threats to validity and limitations
 
 - **Backbone coverage is uneven.** Two live backend families ship:
-  the Claude Agent SDK (richest runtime: subagents, MCP, PDF reading)
-  and a generic OpenAI-compatible loop (covers Ollama-served local
-  models and API endpoints; requires native tool-calling; cannot read
-  PDF proposals). Results are always conditioned on the recorded
-  backbone+model, and the backbone benchmark (§4.5) measures rather
-  than assumes the differences. The deterministic tier and replay
-  remain model-free.
-- **Judged-tier stochasticity.** Treated by design (advisory-only,
-  parse-or-skip) and by measurement (E3 repeats judged runs).
+  the Claude Agent SDK (the richest runtime: subagents, MCP, PDF
+  reading) and a generic OpenAI-compatible loop (covering Ollama-served
+  local models and API endpoints; it requires native tool-calling and
+  cannot read PDF proposals). Results are always conditioned on the
+  recorded backbone and model, and the backbone benchmark (§4.5)
+  measures rather than assumes the differences. The deterministic tier
+  and replay remain model-free.
+- **Stochasticity of the judged tier.** This is treated by design
+  (advisory-only, parse-or-skip) and by measurement (E3 repeats judged
+  runs).
 - **The checklist is not complete.** `autocodabench checks list` is the
-  live inventory of what is and isn't covered; attestations make the
-  uncovered-by-construction part explicit. The validator targets common
-  authoring errors, not adversarial organizers.
+  live inventory of what is and is not covered; attestations make the
+  uncovered-by-construction portion explicit. The validator targets
+  common authoring errors, not adversarial organizers.
 - **Local oracles approximate the production worker.** The sandbox
   mirrors Codabench's layout and command contract but is not the hosted
-  queue; `docker_image` pinning is checked, container parity is not
+  queue; `docker_image` pinning is checked, but container parity is not
   executed locally.
 - **Toy-scale pilots.** The recorded pilots use small datasets by
-  design (minutes, dollars); E1's named real competitions are where
-  scale claims will rest.
-- **Cost/time variance.** Agentic runs vary in turns and cost; E1
-  reports distributions, and per-phase budget caps bound the tail.
+  design (minutes of runtime, dollars of cost); E1's named real
+  competitions are where claims at scale will rest.
+- **Cost and time variance.** Agentic runs vary in the number of turns
+  and in cost; E1 reports distributions, and per-phase budget caps
+  bound the tail.
 
 ---
 
-## 6. Where the contribution lives (and the review-gauntlet mapping)
+## 6. Where the contribution lives, and the review-gauntlet mapping
 
-A fair question for any LLM-driven tool: *isn't the model doing all the
-work?* The falsifiable answer is to enumerate what functions with the
-model removed or swapped, and what the scaffolding measurably adds:
+A fair objection to any LLM-driven tool is that the model may be doing
+all of the work. The falsifiable answer is to enumerate what functions
+with the model removed or swapped, and what the scaffolding measurably
+adds:
 
-1. **Runs with zero LLM:** the entire validator's deterministic tier
-   (9/9 on the E3 seeded defects — by code, not by model), the bundle
-   authoring core, the execution sandbox, the replay demo, the full
-   unit suite, and CI. A reviewer exercises all of it keyless.
-2. **Model-independent by construction:** the typed tool surface, the
-   per-run audit trail (identical format across backbones), the
-   blinding protocol of the ground-truth harness, the plan-lock phase
-   boundary, and the three-tier verdict epistemics. None of these are
-   prompts; they are inspectable code with tests.
+1. **Components that run with zero LLM:** the entire deterministic tier
+   of the validator (9/9 on the E3 seeded defects, by code rather than
+   by model), the bundle authoring core, the execution sandbox, the
+   replay demo, the full unit suite, and CI. A reviewer can exercise
+   all of these without credentials.
+2. **Components that are model-independent by construction:** the typed
+   tool surface, the per-run audit trail (identical format across
+   backbones), the blinding protocol of the ground-truth harness, the
+   plan-lock phase boundary, and the three-tier verdict epistemics.
+   None of these are prompts; they are inspectable code with tests.
 3. **The model is a measured variable, not the contribution:** the
-   backbone benchmark (§4.5) runs *different* LLMs — local Ollama
-   models included — through the same scaffolding and reports how
-   outcome quality varies. A wrapper cannot run this experiment; a
-   framework is what makes it well-posed.
+   backbone benchmark (§4.5) runs different LLMs — including local
+   Ollama models — through the same scaffolding and reports how outcome
+   quality varies. A wrapper cannot run this experiment; a framework is
+   what makes it well-posed.
 
-Mapping to the standard failure modes of LLM-tool submissions:
+Table 4 maps the standard failure modes of LLM-tool submissions to this
+project's standing answers.
 
 | Mode | Risk | Standing answer |
 |------|------|-----------------|
 | F4 "wrapper" | the LLM does all the work | the three points above; design section of `architecture.md` |
 | F5 solver-grading confusion | reporting model accuracy as tool quality | policy in §1: no experiment reports solver performance; oracles measure bundle validity, runtime, score fidelity, defect catch rate |
 | F6 overselling | claims beyond evidence | status tags (implemented/piloted/designed) throughout; threats-to-validity §5; attestation tier = the tool refusing to overclaim *in its own output format* |
-| F7a key wall | reviewer can't run it without paying | keyless tiers (validator, replay demo, tests, CI) + **Ollama local models** for the LLM tiers + Claude subscription path |
+| F7a key wall | reviewer cannot run it without paying | keyless tiers (validator, replay demo, tests, CI) + **Ollama local models** for the LLM tiers + Claude subscription path |
 | F7b live-service wall | needs codabench.org | everything ends at the validated zip; upload is an explicitly optional final step |
 | F7c non-determinism | "ran it twice, got different bundles" | artifact-level oracles (§2), deterministic sub-model layer proven by replay, ≥3-runs-with-dispersion reporting standard |
 
 ## 7. Reproducibility quick reference
+
+Table 5 lists each reproducibility entry point, its command, and its
+authentication requirement.
 
 | What | Command | Needs auth? |
 |------|---------|-------------|
@@ -423,8 +447,9 @@ Mapping to the standard failure modes of LLM-tool submissions:
 | Full live pipeline | `autocodabench create "<idea>" [--backend <spec>] --verbose` | per backbone |
 | Ground-truth harness | see `experiments/bundle_creation_test/README.md` | yes |
 
-Auth = Claude subscription login or `ANTHROPIC_API_KEY`
-(`autocodabench auth status` explains what's active).
+Authentication means a Claude subscription login or an
+`ANTHROPIC_API_KEY` (`autocodabench auth status` reports which is
+active).
 
 ---
 
@@ -432,8 +457,10 @@ Auth = Claude subscription login or `ANTHROPIC_API_KEY`
 
 - Pavão et al. (2024), *AI Competitions and Benchmarks: The Science
   Behind the Contests* — the source of the design rules the checks
-  operationalize (cited per check, chapter-level, in code and reports).
+  operationalize (cited per check, at chapter level, in code and
+  reports).
 - Codabench documentation (bundle schema and worker contract) —
   vendored under `documentation/codabench_getting_started/` for
   provenance; the schema checks cite it.
-- Gebru et al., *Datasheets for Datasets* — the datasheet attestation.
+- Gebru et al., *Datasheets for Datasets* — the basis of the datasheet
+  attestation.

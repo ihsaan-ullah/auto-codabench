@@ -1,5 +1,8 @@
-"""Deterministic checks — code computes the verdict, no LLM, no network.
+"""Deterministic checks — code computes the verdict; no LLM, no network.
 
+This is the only tier permitted to gate: ``ValidationReport.ok`` is
+defined as the absence of a deterministic FAIL, because a gate must be
+reproducible and contestable, and only a code-computed verdict is both.
 Citations are chapter handles into Pavão et al. (2024), *AI Competitions
 and Benchmarks: The Science Behind the Contests*, matching the
 competition-design knowledge skill, or the Codabench bundle schema docs.
@@ -229,7 +232,7 @@ class BaselineSolutionsPresent(Check):
         if not declared:
             return [self.finding(
                 f"solutions/ contains {len(dirs)} folder(s) but competition.yaml "
-                "declares no solutions: block — Codabench won't run them",
+                "declares no solutions: block — Codabench will not run them",
                 where="competition.yaml:solutions")]
         if len(dirs) == 1:
             return [self.finding(

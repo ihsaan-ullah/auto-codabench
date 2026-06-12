@@ -1,22 +1,24 @@
-"""Run-directory bookkeeping for AutoCodabench sessions.
+"""Run-directory bookkeeping for autocodabench sessions.
 
 A "run" is the working directory for one planning or execution session,
-under `<runs_root>/<branch_id>_<runtime_id>/`. Everything Claude
-writes during that session (specs, implementation_plan.md, tool-call
-snapshots, structured events, MCP stderr) lives there so that
-postmortems and reproduction are local-grep-friendly.
+under `<runs_root>/<branch_id>_<runtime_id>/`. Everything the agent
+writes during that session (specs, the implementation plan, tool-call
+snapshots, structured events, MCP stderr) lives there, so postmortems
+and reproduction require nothing beyond the directory itself.
 
-The module is intentionally small and *server-process-scoped*:
-    - The active run is held in a single module-level variable.
-    - `open_run()` creates the directory and points the module variable
-      at it, also writes the environment variable AUTOCODABENCH_RUN_DIR
-      so any child process inherits the same run.
-    - `log_event()` appends a single JSON line to events.jsonl.
-    - `snapshot_tool_call()` writes the full request/response of one
-      MCP tool call to its own file under tool_calls/ with a zero-padded
-      counter for sortability.
+Two record streams are written: `log_event()` appends one JSON line per
+event to `events.jsonl`, and `snapshot_tool_call()` writes the full
+request/response of each MCP tool call to `tool_calls/NNNN_<tool>.json`
+(zero-padded for sortability). This audit format doubles as the replay
+fixture format — `backends/replay.py` re-executes a run directory
+directly — so the cost of observability also buys regression coverage
+(see ``docs/design-rationale.md``, Section 8). The duality is an
+invariant: changing either side breaks the other.
 
-No external dependencies beyond the stdlib + the repo layout.
+The module is small and *server-process-scoped*: the active run is one
+module-level variable, set by `open_run()`, which also exports
+AUTOCODABENCH_RUN_DIR so that child processes (fresh MCP subprocesses)
+adopt their parent's session. Stdlib only.
 """
 from __future__ import annotations
 
@@ -268,7 +270,7 @@ def open_run(slug: str | None = None, *, branch_id: str | None = None, runtime_i
 def current_run() -> Path | None:
     """Return the active run dir.
 
-    Adopts `AUTOCODABENCH_RUN_DIR` if it's set, exists, and contains a
+    Adopts `AUTOCODABENCH_RUN_DIR` if it is set, exists, and contains a
     meta.json — this matters for fresh MCP subprocesses spawned by the
     web layer on phase transitions: each new agent inherits the env
     var from the parent but starts with `_current_run = None`. Without

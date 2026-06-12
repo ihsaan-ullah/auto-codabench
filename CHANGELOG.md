@@ -13,6 +13,27 @@ All notable changes to autocodabench. Format follows
   regression-tested.
 
 ### Added
+- **Interactive auth preflight**: `create` and `validate --judged` now check
+  for a usable Claude auth path *before* starting a live session. On an
+  interactive terminal with no auth, the CLI walks you through it —
+  subscription login re-check, or paste an API key (input hidden, optional
+  save to `./.env` with mode 600). Non-interactive contexts get a clear
+  refusal (exit 2) with guidance instead of an opaque SDK failure mid-run.
+- The CLI loads `<cwd>/.env` at startup (stdlib parser; never overrides
+  real environment variables) — same convention as the web UI.
+- `docs/codabench-validate-walkthrough.md`: a line-by-line execution trace
+  of `codabench-validate` for newcomers, with debugger breakpoints per stage.
+- `docs/verification-catalog.md`: a complete inventory of all verification,
+  in four layers — the 17 registered bundle checks (with the six lint
+  condition families inside the structural gate), the dynamic execution
+  stages, all 54 unit tests with what each establishes, and the
+  system-level evidence (CI matrix, 12-defect seeded instrument, blinded
+  harness).
+- `docs/design-rationale.md`: derives the architecture from first principles —
+  starting from a single-file if/else validator and introducing each layer
+  (`core/`, `runner/`, `checks/`, `mcp/`, `backends/`, `agent/`) as the
+  resolution of a concrete failure, with the contested decisions (plan/build
+  split, keyless test split, validating imported bundles) argued explicitly.
 - **Multi-backbone support**: `OpenAICompatBackend` — a stdlib
   tool-calling loop over any OpenAI-compatible chat-completions
   endpoint (Ollama local models, OpenAI, vLLM, LiteLLM proxies), with

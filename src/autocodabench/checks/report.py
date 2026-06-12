@@ -1,4 +1,12 @@
-"""Aggregate check results into one report (dict + markdown renderings)."""
+"""Aggregate check results into one report (dict and Markdown renderings).
+
+The report preserves the three-status semantics of the check tiers rather
+than collapsing them into one boolean: deterministic FAILs gate (``ok`` is
+defined as their absence), judged FINDINGs advise, and
+ATTESTATION_REQUIRED items surface as explicit unchecked boxes. Erasing
+those distinctions here would undo the epistemic separation the check
+framework exists to maintain.
+"""
 from __future__ import annotations
 
 from collections import Counter

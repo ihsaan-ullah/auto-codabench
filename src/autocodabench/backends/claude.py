@@ -1,9 +1,11 @@
 """Live backend on the Claude Agent SDK.
 
-Auth is resolved by the SDK's bundled Claude Code runtime, in its own
-precedence order: an exported ``ANTHROPIC_API_KEY`` wins over a stored
-subscription login. See :mod:`autocodabench.auth` for the user-facing
-status report (including the stale-API-key foot-gun warning).
+Credential resolution is deliberately *not* re-implemented here: the SDK's
+bundled Claude Code runtime owns it, with its own precedence (an exported
+``ANTHROPIC_API_KEY`` takes priority over a stored subscription login).
+:mod:`autocodabench.auth` provides the user-facing status report and the
+pre-session preflight that surface that shadowing hazard before any
+tokens are spent.
 
 The backend records every SDK message to a JSONL trace when
 ``task.trace_path`` is set — those traces, together with the MCP layer's

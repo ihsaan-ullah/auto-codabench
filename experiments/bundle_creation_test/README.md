@@ -1,40 +1,22 @@
 # bundle_creation_test
 
-End-to-end test harness for AutoCodabench: feed it a paper/proposal,
-watch it plan → build → self-validate → score known submissions → check
-whether the resulting score matches a pre-recorded ground truth (within
-tolerance).
+This directory contains the end-to-end evaluation harness for AutoCodabench. Given a paper or proposal as input, the harness exercises the full pipeline — plan, build, self-validate, and score known submissions — and then verifies whether the resulting scores match pre-recorded ground truth within a stated tolerance.
 
-This is a **wrapper** around the `autocodabench` package. The experiment side
-orchestrates; the heavy lifting (writing the bundle, running its
-baseline, executing the starting-kit notebook, reformatting external
-submissions to the bundle's interface, scoring them) lives in
-the packaged skills and MCP tools. Both sides share the same
-on-disk run dir via the `AUTOCODABENCH_RUN_DIR` environment variable.
+The harness is a wrapper around the `autocodabench` package: the experiment side orchestrates, while the substantive work (authoring the bundle, running its baseline, executing the starting-kit notebook, reformatting external submissions to the bundle's interface, and scoring them) is performed by the packaged skills and MCP tools. The two sides share a single on-disk run directory through the `AUTOCODABENCH_RUN_DIR` environment variable.
 
-Future experiments (latency, cost, robustness, etc.) live in sibling
-`experiments/<other_name>/` folders.
+Future experiments (for example latency, cost, or robustness studies) reside in sibling `experiments/<other_name>/` directories.
 
 ---
 
-## Architecture in one paragraph
+## Architecture overview
 
-The orchestrator skill (this folder's `SKILL.md`) is loaded into the
-top-level Claude session and drives five phases. Phases 2/3/4a are
-**shell-outs** via `claude --print` to fresh Claude sessions running
-the packaged skills (`autocodabench-plan`,
-`autocodabench-implement`, `autocodabench-reformat-and-run`). Each
-shell-out is its own root-level session, so it can spawn subagents
-and run its own internal iteration loops without hitting Claude
-Code's depth-1 subagent limit. Phase 4b (per ground-truth submission)
-spawns ONE in-process subagent (`submission-log-auditor`) that
-verdicts the produced score against `expected_result.json`. Phases
-5/6/7 stay inside the orchestrator (missing-info aggregation,
-finalize, run_report.md).
+The orchestrator skill (this directory's `SKILL.md`) is loaded into the top-level Claude session and drives the phases described below. Phases 2, 3, and 4a are shell-outs via `claude --print` to fresh Claude sessions running the packaged skills (`autocodabench-plan`, `autocodabench-implement`, `autocodabench-reformat-and-run`). Each shell-out constitutes its own root-level session, so it can spawn subagents and run its own internal iteration loops without encountering Claude Code's depth-1 subagent limit. Phase 4b, executed once per ground-truth submission, spawns a single in-process subagent (`submission-log-auditor`) that renders a verdict on the produced score against `expected_result.json`. Phases 5, 6, and 7 remain inside the orchestrator (missing-information aggregation, finalization, and the generation of `run_report.md`).
 
 ---
 
-## Layout
+## Directory layout
+
+The harness and its per-competition fixtures are organized as follows:
 
 ```
 experiments/bundle_creation_test/
@@ -106,9 +88,13 @@ experiments/bundle_creation_test/
             └── run_report.md            # phase 7 human-readable summary
 ```
 
+Each experiment run is identified by a run directory named `<branch_sha>_<utc_ts>`.
+
 ---
 
-## Five-phase pipeline (per experiment run)
+## Experimental pipeline (per experiment run)
+
+The following table summarizes each phase of the pipeline, its execution mechanism, and its read and write sets:
 
 | # | Phase | Mechanism | Reads | Writes |
 |---|-------|-----------|-------|--------|
@@ -121,46 +107,30 @@ experiments/bundle_creation_test/
 | 6 | Finalize | _(orchestrator)_ | manifest + audits | `manifest.json` final, `conda env remove` |
 | 7 | run_report.md | _(orchestrator)_ | everything above | `<run>/run_report.md` |
 
-Phases 3–4a run their own internal iteration loops (the implementer
-retries baseline + notebook runs up to 5/4 times; reformat-and-run
-retries up to 4 times). The orchestrator does NOT retry phases —
-each shell-out gets one shot. This keeps failure attribution clean:
-an implementer that exhausts its inner attempts is a different
-class of failure than an orchestrator that hit an unrecoverable
-state, and the manifest distinguishes them.
+Phases 3 and 4a run their own internal iteration loops: the implementer retries the baseline and notebook runs up to 5 and 4 times respectively, and reformat-and-run retries up to 4 times. The orchestrator does not retry phases — each shell-out receives exactly one attempt. This design keeps failure attribution clean: an implementer that exhausts its inner attempts represents a different class of failure than an orchestrator that reached an unrecoverable state, and the manifest distinguishes the two.
 
 ---
 
-## Why shell-outs (and not Task subagents) for phases 2/3/4a
+## Rationale for shell-outs (rather than Task subagents) in phases 2, 3, and 4a
 
-Claude Code's `Task` tool can spawn a subagent (depth 1), but that
-subagent cannot itself spawn another subagent (depth 2 is blocked).
+Claude Code's `Task` tool can spawn a subagent at depth 1, but that subagent cannot itself spawn another subagent; depth 2 is blocked.
 
-The implementer's inner loop needs to call MCP tools (write the
-bundle), then `prepare_run_env`, then `run_baseline_submission`,
-then potentially `install_env_extras`, then re-run baseline, then
-`run_starting_kit`, etc. — those are all MCP calls inside one
-session, fine at any depth.
+The implementer's inner loop must call MCP tools (to write the bundle), then `prepare_run_env`, then `run_baseline_submission`, then potentially `install_env_extras`, then re-run the baseline, then `run_starting_kit`, and so on. These are all MCP calls within a single session and are permitted at any depth.
 
-But the orchestrator itself wants to delegate to the implementer
-AS its own conversational unit (fresh context, focused prompt). If
-we used `Task` for that, we'd burn the depth budget; phase 4b's
-log auditor couldn't spawn. By shell-outing the phases that need
-their own runtime loop, we keep `Task` available for the cheap
-single-shot auditor.
+The orchestrator, however, must delegate to the implementer as its own conversational unit, with fresh context and a focused prompt. If `Task` were used for that delegation, the depth budget would be consumed and the phase 4b log auditor could not spawn. By shelling out the phases that require their own runtime loop, we keep `Task` available for the inexpensive single-shot auditor.
 
-The shell-outs share state with the parent orchestrator only
-through:
-- the on-disk run dir (`AUTOCODABENCH_RUN_DIR` env var),
-- the JSON object the shell-out emits as its last assistant message
-  (captured in the `*_session.jsonl` and parsed by the orchestrator).
+The shell-outs share state with the parent orchestrator only through two channels:
 
-That's the entire inter-phase contract. Each phase is reproducible
-in isolation by re-running `claude --print` with the same prompt.
+- the on-disk run directory (the `AUTOCODABENCH_RUN_DIR` environment variable), and
+- the JSON object that the shell-out emits as its final assistant message (captured in the corresponding `*_session.jsonl` and parsed by the orchestrator).
+
+This constitutes the entire inter-phase contract. Each phase is reproducible in isolation by re-running `claude --print` with the same prompt.
 
 ---
 
-## Data-leakage rules (preserved from the prior architecture)
+## Blinding protocol (data-leakage rules, preserved from the prior architecture)
+
+The following table specifies, for each agent or phase, which paths it may and may not read; these access rules form the blinding protocol of the experiment and must be enforced exactly as stated:
 
 | Agent / phase | May read | May NOT read |
 |---|---|---|
@@ -170,127 +140,80 @@ in isolation by re-running `claude --print` with the same prompt.
 | Reformat-and-run shell-out (per sub) | `<run>/bundles/<slug>/**` + `<comp>/ground_truth/sample_submissions/<N>/submission/**` | `expected_result.json`, `ground_truth/bundle/**`, report.pdf, plan |
 | Log auditor (subagent, per sub) | `<run>/reformat_run/<N>/**` + `<run>/run_logs/<slug>/<N>.*` + `expected_result.json` | the submission's original code, ground_truth/bundle/, report.pdf, plan |
 
-The expected-score never leaves the orchestrator-or-auditor pair.
-The submission's code never reaches the implementer (so it can't
-shape the bundle interface to match GT code it just read). The
-golden reference bundle is human-only.
+Three invariants follow from this protocol. The expected score never leaves the orchestrator–auditor pair. The submission's code never reaches the implementer, so the implementer cannot shape the bundle interface to match ground-truth code it has just read. The golden reference bundle is human-only and is off limits to all agents.
 
 ---
 
 ## One-time setup
 
+Run the setup script once per checkout.
+
 ```bash
 ./experiments/bundle_creation_test/setup.sh
 ```
 
-Symlinks the orchestrator skill + the packaged skills
-(`autocodabench-plan`, `autocodabench-implement`,
-`autocodabench-reformat-and-run`, `codabench-bundle`,
-`competition-design`) into `.claude/skills/`, and the
-`submission-log-auditor` agent definition into `.claude/agents/`.
+The script symlinks the orchestrator skill and the packaged skills (`autocodabench-plan`, `autocodabench-implement`, `autocodabench-reformat-and-run`, `codabench-bundle`, `competition-design`) into `.claude/skills/`, and the `submission-log-auditor` agent definition into `.claude/agents/`.
 
-`.claude/` is gitignored — the source of truth lives in this folder
-and in `src/autocodabench/skills/`.
+The `.claude/` directory is gitignored; the source of truth resides in this directory and in `src/autocodabench/skills/`.
 
 ---
 
 ## Running an experiment
 
-In a top-level Claude Code session:
+In a top-level Claude Code session, issue the following request:
 
 > Run the bundle-creation experiment on `<competition_sample_name>`
 
-Claude will load `bundle-creation-test` and execute the seven
-phases. Total wall-clock depends on the proposal complexity but is
-typically dominated by the conda env clone (~30s) + bundle baseline
-training (varies) + each reformat-and-run attempt (varies).
+Claude loads `bundle-creation-test` and executes the seven phases. Total wall-clock time depends on the complexity of the proposal but is typically dominated by the conda environment clone (approximately 30 seconds), the bundle's baseline training (variable), and each reformat-and-run attempt (variable).
 
-To inspect a finished run:
-- **Start with `run_report.md`** — one-screen human summary.
-- For machine analysis: `manifest.json` (structured) +
-  `missing_info_report.json`.
-- For deeper digging into a phase failure: the corresponding
-  `*_session.jsonl` (one JSON event per line — type=system, user,
-  assistant, tool_use, tool_result, result) + the run_logs/ subdir
-  for the artifact that broke. `jq -c 'select(.type=="result")'
-  session.jsonl | tail -1` gives the final result blob.
+To inspect a finished run, proceed as follows.
+
+1. Begin with `run_report.md`, the one-screen human-readable summary.
+2. For machine analysis, consult `manifest.json` (structured) and `missing_info_report.json`.
+3. For deeper investigation of a phase failure, consult the corresponding `*_session.jsonl` (one JSON event per line, with `type` values system, user, assistant, tool_use, tool_result, and result) together with the `run_logs/` subdirectory for the artifact that failed. The command `jq -c 'select(.type=="result")' session.jsonl | tail -1` yields the final result blob.
 
 ---
 
 ## Cross-run analysis
 
+The aggregation script performs a meta-analysis across runs.
+
 ```bash
 python experiments/bundle_creation_test/scripts/aggregate_missing_info.py
 ```
 
-Walks every `runs/<comp>/<run_id>/missing_info_report.json`, reports
-counts by section / severity / impact, surfaces the most-missed
-fields across runs. See the script docstring for filter flags.
+The script walks every `runs/<comp>/<run_id>/missing_info_report.json`, reports counts by section, severity, and impact, and surfaces the fields most frequently missing across runs. The script docstring documents the available filter flags.
 
 ---
 
 ## Host runtime expectations
 
-The implementer's `prepare_run_env` clones the **active conda env**
-(named `base` by default in `autocodabench/runner/execution.py`)
-into a per-run scratch env. The clone inherits whatever's installed
-in your base env; per-program `requirements.txt` files are then
-installed on top via `uv pip install` (or `pip` if `uv` isn't on
-PATH).
+The implementer's `prepare_run_env` clones the active conda environment (named `base` by default in `autocodabench/runner/execution.py`) into a per-run scratch environment. The clone inherits whatever is installed in the base environment; per-program `requirements.txt` files are then installed on top via `uv pip install` (or `pip` if `uv` is not on PATH).
 
-For competitions that need GPU (e.g. TF/PyTorch CNN baselines), the
-base env needs the GPU stack pre-installed — `uv pip install` won't
-materialize CUDA libraries that aren't already there. If you're
-testing on CPU and the proposal calls for GPU, expect the
-implementer's baseline run to be slow but functional, or to fail at
-the env layer (TF builds without CUDA support, etc.).
+For competitions that require a GPU (for example TensorFlow or PyTorch CNN baselines), the base environment must have the GPU stack pre-installed; `uv pip install` cannot materialize CUDA libraries that are not already present. When testing on CPU hardware against a proposal that calls for a GPU, the implementer's baseline run should be expected to be slow but functional, or to fail at the environment layer (for example, TensorFlow built without CUDA support).
 
-The implementer DOES NOT downgrade or substitute when the host
-can't service the plan's compute requirements — it reports
-`validate_runtime: false` and lets the orchestrator log the failure.
-That's intentional: shrinking the baseline to fit the host
-invalidates the experiment by silently making the bundle solve a
-different problem than the proposal specified.
+The implementer does not downgrade or substitute when the host cannot service the plan's compute requirements; instead, it reports `validate_runtime: false` and allows the orchestrator to log the failure. This behavior is intentional: shrinking the baseline to fit the host would invalidate the experiment by silently making the bundle solve a different problem than the proposal specified.
+
+The same principle applies to data. Synthetic stand-in data is prohibited: if the implementer or the reformat-and-run session reports that it generated substitute data because the real source was inaccessible, the orchestrator records `fail_at_synthetic_data_detected` and the run fails. A bundle that silently executes on fabricated data while the proposal specifies a real dataset would render the entire experiment invalid.
 
 ---
 
 ## Known limitations
 
-- **No retries between phases.** If the implementer's inner loop
-  exhausts its baseline attempts, the orchestrator records
-  `fail_at_implement` and stops phase 4 + 4a — but still writes
-  `missing_info_report.json` + `run_report.md`. Reviewing the
-  implementer's stderr is the human's job, not the orchestrator's.
-- **Single competition per invocation.** To test against N
-  competitions, invoke the skill N times.
-- **`claude --print` cost.** Each shell-out is a full fresh Claude
-  session. A run with K ground-truth submissions makes 2 + K
-  shell-outs. Budget accordingly.
-- **No native-library deadlock recovery.** The implementer's retry
-  table can patch Python-level errors (ModuleNotFoundError, Keras
-  API breaks). It cannot patch native-side issues like the abseil
-  ABI deadlock between TF and pyarrow — those manifest as `SIGTERM`
-  with no traceback and are upstream of any code edit the
-  implementer can do. When it sees that shape, it falls through to
-  `validate_runtime: false` and the experiment fails honestly.
+- **No retries between phases.** If the implementer's inner loop exhausts its baseline attempts, the orchestrator records `fail_at_implement` and stops phases 4 and 4a, but still writes `missing_info_report.json` and `run_report.md`. Reviewing the implementer's stderr is the responsibility of the human experimenter, not the orchestrator.
+- **Single competition per invocation.** To test against N competitions, invoke the skill N times.
+- **`claude --print` cost.** Each shell-out is a full fresh Claude session. A run with K ground-truth submissions makes 2 + K shell-outs; budget accordingly.
+- **No native-library deadlock recovery.** The implementer's retry table can patch Python-level errors (for example, `ModuleNotFoundError` or Keras API breaks). It cannot patch native-side issues such as the abseil ABI deadlock between TensorFlow and pyarrow; these manifest as `SIGTERM` with no traceback and lie upstream of any code edit the implementer can make. When the implementer observes that failure shape, it falls through to `validate_runtime: false` and the experiment fails honestly.
 
 ---
 
 ## Migration note (2026-06-12, branch `jmlr-oss-direction`)
 
-The `auto_codabench/` package was restructured into the pip-installable
-`src/autocodabench/` library (core / runner / checks / backends / agent /
-mcp / cli). For this harness:
+The `auto_codabench/` package was restructured into the pip-installable `src/autocodabench/` library (core / runner / checks / backends / agent / mcp / cli). The implications for this harness are as follows:
 
-- `setup.sh` symlink sources now point at `src/autocodabench/skills/` —
-  re-run it once per checkout.
-- The MCP server module is `python -m autocodabench.mcp.server` (the old
-  `auto_codabench.mcp_server.server` path is gone).
-- Default artifact roots moved from `auto_codabench/{runs,bundles}/` to
-  `./.autocodabench/{runs,bundles}/` (override with `AUTOCODABENCH_HOME`).
-- The per-bundle deterministic checks that used to live only in
-  `validate_bundle` are now the `codabench-validate` CLI / check registry —
-  future harness phases should call that instead of re-implementing lint.
+- `setup.sh` symlink sources now point at `src/autocodabench/skills/`; re-run the script once per checkout.
+- The MCP server module is `python -m autocodabench.mcp.server` (the old `auto_codabench.mcp_server.server` path no longer exists).
+- Default artifact roots moved from `auto_codabench/{runs,bundles}/` to `./.autocodabench/{runs,bundles}/` (override with `AUTOCODABENCH_HOME`).
+- The per-bundle deterministic checks that previously lived only in `validate_bundle` are now the `codabench-validate` CLI and check registry; future harness phases should call that interface instead of re-implementing the lint.
 
-Recorded artifacts inside old runs still reference the old layout; that's
-expected and harmless.
+Recorded artifacts inside old runs still reference the old layout; this is expected and harmless.

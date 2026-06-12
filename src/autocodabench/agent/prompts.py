@@ -1,10 +1,13 @@
-"""Phase prompts, promoted from the skill files shipped inside the package.
+"""Phase prompts, loaded from the skill files shipped inside the package.
 
-The skills under ``autocodabench/skills/<name>/SKILL.md`` are the versioned
-behavioral contracts for each phase (see each skill's sibling README for
+Prompts live in ``autocodabench/skills/<name>/SKILL.md`` rather than as
+Python strings because they are the versioned behavioral contract for each
+phase: a document diffs, reviews, and audits like code, whereas a string
+buried in a module does not (each skill's sibling README records its
 provenance). This module loads a skill body (frontmatter stripped) and
-appends the runtime footer for the surface it's running on — the same
-pattern the web UI uses, now shared.
+appends the runtime footer for the surface on which it runs — one loading
+mechanism shared by the pipeline and the web UI, so the contracts cannot
+drift between surfaces.
 """
 from __future__ import annotations
 

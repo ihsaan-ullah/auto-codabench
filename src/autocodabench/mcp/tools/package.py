@@ -1,4 +1,9 @@
-"""MCP tool for zipping a bundle."""
+"""MCP tool for zipping a built bundle into its uploadable archive.
+
+A thin ``@logged_tool`` wrapper over :func:`core.bundle_io.zip_bundle`;
+the logic stays in core so the operation behaves identically from the
+CLI, the web UI, and the agent.
+"""
 from __future__ import annotations
 
 import asyncio

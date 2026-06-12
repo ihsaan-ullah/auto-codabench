@@ -5,7 +5,9 @@ split match the unit of generalization?" needs to know the grouping
 column; the 100/E test-set sizing rule needs the anticipated error rate).
 Rather than guessing, those checks consume a small ``competition_facts.yaml``
 the organizer (or the generating agent) declares. Checks that need a fact
-that isn't declared report SKIPPED with instructions — never a silent pass.
+that is not declared report SKIPPED with instructions for declaring it —
+never a silent pass. A skipped check is information; a silently passing
+one would be a defect.
 
 Example ``competition_facts.yaml``::
 

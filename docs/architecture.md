@@ -1,31 +1,18 @@
-# autocodabench — architecture
+# autocodabench — Architecture
 
-This is the maintainer's map of `src/autocodabench/`. End-user docs live in
-[`INSTRUCTION_FOR_USER.md`](./INSTRUCTION_FOR_USER.md); read that first if
-you just want to USE the tool.
+This document is a maintainer- and reviewer-oriented map of `src/autocodabench/`, intended for readers working with the source. End-user documentation is provided in [`INSTRUCTION_FOR_USER.md`](./INSTRUCTION_FOR_USER.md), which is the appropriate starting point for readers who only wish to use the tool. Readers encountering the architecture for the first time may prefer [`design-rationale.md`](./design-rationale.md), which derives the structure mapped here from the failures of simpler designs.
 
 ---
 
-## The one-paragraph version
+## 1. Overview
 
-autocodabench decomposes competition authoring into a **plan** phase and a
-**build** phase, executed by independent agent sessions that communicate
-only through a human-reviewable plan document. Agents act exclusively
-through a surface of typed MCP tools, so every authoring action is logged
-and replayable. Beneath the agent layer, a pure bundle-I/O core and an
-offline check framework run without LLM or network access and are
-unit-tested conventionally. Generated (or hand-written) competitions are
-validated by registered checks in three tiers — deterministic gates,
-LLM-judged advisories, human attestations — each citing its source. Model
-access is isolated behind a single backend seam: the Claude Agent SDK,
-a generic OpenAI-compatible tool-calling loop (Ollama local models, any
-chat-completions endpoint), and record/replay — so the full pipeline
-runs deterministically without API keys, and the backbone itself is a
-measured variable (`experiments/backbone_bench/`).
+autocodabench decomposes competition authoring into a **plan** phase and a **build** phase, executed by independent agent sessions that communicate only through a human-reviewable plan document. Agents act exclusively through a surface of typed MCP tools, so every authoring action is logged and replayable. Beneath the agent layer, a pure bundle-I/O core and an offline check framework operate without LLM or network access and are unit-tested conventionally. Generated (or hand-written) competitions are validated by registered checks in three tiers — deterministic gates, LLM-judged advisories, and human attestations — each carrying a citation to its source. Model access is isolated behind a single backend seam comprising the Claude Agent SDK, a generic OpenAI-compatible tool-calling loop (Ollama local models, or any chat-completions endpoint), and record/replay. Consequently, the full pipeline runs deterministically without API keys, and the model backbone itself is a measured experimental variable (`experiments/backbone_bench/`).
 
 ---
 
-## Layout
+## 2. Package layout
+
+The package is organized as follows.
 
 ```
 src/autocodabench/
@@ -83,49 +70,52 @@ src/autocodabench/
 
 ---
 
-## Design vocabulary (why it's built this way)
+## 3. Design rationale
 
-| Component | Design term | The sayable why |
+The following table summarizes the principal design decisions, the principle each embodies, and the rationale behind it.
+
+| Component | Design principle | Rationale |
 |---|---|---|
-| 20 small MCP tools instead of one big "do it" call | narrow interface / capability boundary | The agent can only act through typed, logged operations; the tool trace is a complete, replayable account of every authoring action. |
-| `SKILL.md` per phase | behavioral contract | Each phase's permissions, inputs, and outputs are declared in a versioned document — auditable and diffable like code. |
-| plan → build with only the locked plan crossing | separation of concerns + data contract | Planning is reviewable by a human before any artifact is generated; the plan is the interface between thinking and doing. |
-| fresh agent session per phase | isolation | No hidden state crosses phases; everything that matters is in the artifact, which is why runs are reproducible from artifacts alone. |
-| `core/` importable with no MCP/LLM | layering / pure core | The file layer is usable and unit-testable by itself. |
-| deterministic vs judged vs attestation check tiers | test oracle discipline | "Valid" is defined by executable checks; LLM judgments advise, never gate; human-only criteria are surfaced, never assumed. |
-| `competition_facts.yaml` | declare-then-verify | Checks that need context the bundle can't carry consume declared facts — and SKIP loudly when a fact is missing. |
-| `AgentBackend` with live + replay implementations | backend abstraction | The model runtime has a slot, not a hard binding; replay makes CI and keyless review possible. |
-| `tool_calls/` + `events.jsonl` per run | structured observability | Every run is a dataset; experiments are queries over it — and any run doubles as a replay fixture. |
+| Twenty small MCP tools rather than a single monolithic operation | Narrow interface / capability boundary | The agent can act only through typed, logged operations; the tool trace is therefore a complete, replayable account of every authoring action. |
+| One `SKILL.md` per phase | Behavioral contract | Each phase's permissions, inputs, and outputs are declared in a versioned document, which is auditable and diffable in the same manner as code. |
+| Plan → build, with only the locked plan crossing the boundary | Separation of concerns and data contract | Planning is reviewable by a human before any artifact is generated; the plan serves as the interface between deliberation and execution. |
+| A fresh agent session per phase | Isolation | No hidden state crosses phase boundaries; all relevant state resides in the artifacts, which is why runs are reproducible from artifacts alone. |
+| `core/` importable with no MCP or LLM dependencies | Layering / pure core | The file layer is usable and unit-testable in isolation. |
+| Deterministic, judged, and attestation check tiers | Test-oracle discipline | Validity is defined by executable checks; LLM judgments advise but never gate; human-only criteria are surfaced explicitly, never assumed. |
+| `competition_facts.yaml` | Declare-then-verify | Checks that require context the bundle cannot carry consume declared facts, and report SKIPPED explicitly when a fact is missing. |
+| `AgentBackend` with live and replay implementations | Backend abstraction | The model runtime occupies a slot rather than a hard binding; replay makes continuous integration and keyless review possible. |
+| `tool_calls/` and `events.jsonl` per run | Structured observability | Every run is a dataset and experiments are queries over it; in addition, any run doubles as a replay fixture. |
 
 ---
 
-## Key invariants
+## 4. Key invariants
 
-- **No repo assumptions.** The package is pip-installable; artifact roots
+- **No repository assumptions.** The package is pip-installable; artifact roots
   resolve explicit-arg → env (`AUTOCODABENCH_HOME` /
   `AUTOCODABENCH_BUNDLES_ROOT` / `AUTOCODABENCH_RUNS_ROOT`) →
   `<cwd>/.autocodabench/`.
 - **Per-session isolation.** `resolve_bundle_dir(slug)` scopes bundles into
   `<AUTOCODABENCH_RUN_DIR>/bundles/<slug>/` when a run is active. Two
-  concurrent sessions can't collide.
-- **Run-dir adoption.** `current_run()` adopts `AUTOCODABENCH_RUN_DIR` on
-  first call — a fresh MCP subprocess reliably resolves to its parent's
-  session, not to the global `LATEST` symlink.
-- **Every tool call is captured.** `logged_tool` wraps each `@mcp.tool` so
-  request + response + duration land under `<run>/tool_calls/NNNN_<tool>.json`
-  plus a line in `<run>/events.jsonl`. This audit format **is** the replay
-  fixture format — `ReplayBackend.load_fixture()` reads either a `.jsonl`
-  fixture or a run dir directly. Don't break that duality.
-- **The unit suite stays keyless.** Live-SDK behavior is verified manually
+  concurrent sessions therefore cannot collide.
+- **Run-directory adoption.** `current_run()` adopts `AUTOCODABENCH_RUN_DIR` on
+  first call, so a fresh MCP subprocess reliably resolves to its parent's
+  session rather than to the global `LATEST` symlink.
+- **Every tool call is captured.** `logged_tool` wraps each `@mcp.tool` so that
+  the request, response, and duration are recorded under
+  `<run>/tool_calls/NNNN_<tool>.json`, together with a line in
+  `<run>/events.jsonl`. This audit format **is** the replay fixture format:
+  `ReplayBackend.load_fixture()` reads either a `.jsonl` fixture or a run
+  directory directly. This duality must be preserved.
+- **The unit suite remains keyless.** Live-SDK behavior is verified manually
   (`codabench-validate --judged`, `autocodabench auth status --probe`);
-  nothing in `tests/` may require auth or network.
-- **`fastmcp` is pinned to exactly 2.14.7** — looser constraints let pip's
-  solver pick a release that breaks on HF Spaces (see the pyproject and
+  nothing in `tests/` may require authentication or network access.
+- **`fastmcp` is pinned to exactly 2.14.7.** Looser constraints allow pip's
+  solver to select a release that breaks on HF Spaces (see the pyproject and
   Dockerfile comments).
 
 ---
 
-## Runtime architecture
+## 5. Runtime architecture
 
 ```mermaid
 flowchart TB
@@ -166,20 +156,22 @@ flowchart TB
   checks --> core
 ```
 
-What the picture encodes:
+The diagram encodes four properties of the system:
 
-- **Phases communicate only through versioned artifacts** (plan, bundle,
-  manifest); any phase can be rerun or audited in isolation.
+- **Phases communicate only through versioned artifacts** (the plan, the
+  bundle, and the manifest); any phase can be rerun or audited in isolation.
 - **The agent acts only through the MCP tool surface**; the tool log is a
   complete, replayable account of every action.
-- **The bottom layers contain no LLM calls and run offline** — they are
+- **The bottom layers contain no LLM calls and run offline.** They are
   unit-tested conventionally; agentic behavior is exercised by replaying
   recorded tool traces.
 - **The web UI is a downstream consumer of the library**, not a fork of it.
 
 ---
 
-## MCP tools (20)
+## 6. MCP tools (20)
+
+The twenty MCP tools are grouped by function as follows.
 
 | Group | Tools |
 |---|---|
@@ -189,7 +181,7 @@ What the picture encodes:
 | Execution | `prepare_run_env`, `install_env_extras`, `run_baseline_submission`, `run_user_submission`, `run_starting_kit`, `remove_run_env` |
 | Publish | `upload_bundle` (explicit user request only) |
 
-All are prefixed `autocodabench_`. In-process tool-count check:
+All tool names carry the prefix `autocodabench_`. The registered tool count can be verified in-process:
 
 ```bash
 python - <<'PY'
@@ -208,7 +200,9 @@ PY
 
 ---
 
-## Developing
+## 7. Development
+
+The standard development workflow is as follows.
 
 ```bash
 pip install -e '.[dev]'
@@ -217,13 +211,14 @@ python -m autocodabench.core.bundle_io   # core smoke test
 python scripts/make_demo_fixture.py      # regenerate the shipped fixture
 ```
 
-Adding a check: subclass `checks.base.Check` (or `checks.judged.JudgedCheck`),
+To add a check, subclass `checks.base.Check` (or `checks.judged.JudgedCheck`),
 set `id` / `title` / `tier` / `severity` / `citation` (and `requires_facts`
 if it consumes declared facts), implement `run()`, and decorate with
-`@register`. It appears in `autocodabench checks list` and in every
-validation report automatically.
+`@register`. The check then appears in `autocodabench checks list` and in
+every validation report automatically.
 
-Adding a backend: implement `backends.base.AgentBackend` (`name` +
-`async run(task) -> AgentRunResult`), or just point `resolve_backend()` at
-any OpenAI-compatible endpoint. Everything above the seam — pipeline,
-judged checks, CLI, web, the backbone benchmark — works unchanged.
+To add a backend, implement `backends.base.AgentBackend` (`name` and
+`async run(task) -> AgentRunResult`), or point `resolve_backend()` at
+any OpenAI-compatible endpoint. Everything above the seam — the pipeline,
+the judged checks, the CLI, the web UI, and the backbone benchmark — works
+unchanged.

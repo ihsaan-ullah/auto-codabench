@@ -1,23 +1,23 @@
-# backbone_bench — LLM backbones compared on the autocodabench tasks
+# backbone_bench: A Comparison of LLM Backbones on the autocodabench Tasks
 
-The backend seam (`autocodabench.backends`) makes the model a measured
-variable. This experiment benchmarks LLM backbones on the two jobs the
-software gives them, using the repo's ground-truth instruments as the
-oracles — so the comparison is apples-to-apples by construction (same
-tool surface, same audit-trail format, same pass/fail criteria,
-regardless of backbone).
+The backend seam (`autocodabench.backends`) makes the underlying language
+model a measured variable. This experiment benchmarks LLM backbones on the
+two tasks that the software delegates to them, using the repository's
+ground-truth instruments as oracles. The comparison is therefore
+commensurable by construction: every backbone is evaluated against the same
+tool surface, the same audit-trail format, and the same pass/fail criteria.
 
-## Axis A — validation/judging quality (runnable now)
+## Axis A — Validation and Judging Quality (runnable now)
 
-*How good is a backbone at catching competition defects?*
+Axis A measures how reliably a backbone detects competition defects.
 
-`run_judge_bench.py` seeds known authoring defects into otherwise-clean
-bundles (rebuilt deterministically from the replay fixture), runs the
-validator, and measures per-defect catch rate plus the false-positive
-rate on clean copies. The deterministic tier is backbone-independent and
-serves as the sanity baseline (it must be 9/9 for any backbone — it
-never touches the model); the LLM-judged tier is the backbone-sensitive
-measurement.
+The script `run_judge_bench.py` seeds known authoring defects into otherwise
+clean bundles (rebuilt deterministically from the replay fixture), runs the
+validator, and measures the per-defect catch rate together with the
+false-positive rate on clean copies. The deterministic tier is
+backbone-independent and serves as the sanity baseline; because it never
+invokes the model, it must achieve 9/9 for any backbone. The LLM-judged tier
+constitutes the backbone-sensitive measurement.
 
 ```bash
 # sanity baseline (no LLM at all)
@@ -29,19 +29,21 @@ python experiments/backbone_bench/run_judge_bench.py --backend ollama:llama3.1 -
 python experiments/backbone_bench/run_judge_bench.py --backend openai:gpt-4o-mini --runs 3
 ```
 
-Results land under `results/<backbone>/results.{json,md}`. Defect
-library: 9 deterministic-tier targets + 3 judged-tier targets
-(pages↔config contradictions in submission caps, metric direction, and
-phase dates). Extend by appending to `DEFECTS`.
+Results are written under `results/<backbone>/results.{json,md}`. The defect
+library comprises 9 deterministic-tier targets and 3 judged-tier targets
+(pages↔config contradictions in submission caps, metric direction, and phase
+dates). The library is extended by appending entries to `DEFECTS`.
 
-## Axis B — bundle-creation quality (protocol)
+## Axis B — Bundle-Creation Quality (protocol)
 
-*How good is a backbone at authoring a working competition?*
+Axis B measures how reliably a backbone authors a working competition.
 
 The instrument is the existing ground-truth harness
-(`experiments/bundle_creation_test/`), run once per backbone per
-competition, with its blinding rules unchanged. Per (backbone,
-competition, run) the manifest already records every outcome column:
+(`experiments/bundle_creation_test/`), executed once per backbone per
+competition with its blinding rules unchanged. For each (backbone,
+competition, run) triple, the harness manifest already records every outcome
+column; the measures and their sources are summarized in the following
+table.
 
 | Measure | Source |
 |---|---|
@@ -51,19 +53,21 @@ competition, run) the manifest already records every outcome column:
 | **score fidelity**: generated bundle scores the ground-truth submission within `expected_result.json` tolerance | log-audit verdicts |
 | cost + turns | session results |
 
-Report per backbone: success rate per stage over ≥3 runs × N
-competitions, attempts-to-converge distributions, score deltas, cost.
-`style-trans-fair` is the first ground-truth competition; the protocol
-scales by adding more under
-`experiments/bundle_creation_test/competitions/`.
+For each backbone, we report the success rate per stage over at least 3 runs
+across N competitions, the distributions of attempts to convergence, score
+deltas, and cost. The competition `style-trans-fair` is the first
+ground-truth competition; the protocol scales by adding further competitions
+under `experiments/bundle_creation_test/competitions/`.
 
-Caveats for non-Claude backbones on axis B: the generic backend's plan
-phase cannot read PDF proposals (text/markdown proposals only), and the
-backbone must support native tool calling — both are recorded as
-conditions of the run, not silently worked around.
+Two caveats apply to non-Claude backbones on axis B. First, the generic
+backend's plan phase cannot read PDF proposals and accepts text or markdown
+proposals only. Second, the backbone must support native tool calling. Both
+limitations are recorded as conditions of the run rather than silently
+worked around.
 
-## Reporting standards
+## Reporting Standards
 
-Same as the rest of the project (`docs/scientific-validation.md` §4):
-pinned model identifiers per run, ≥3 runs per stochastic condition,
-dispersion reported, costs/tokens reported, raw logs retained.
+Reporting follows the standards used throughout the project
+(`docs/scientific-validation.md` §4): model identifiers are pinned per run,
+each stochastic condition is executed at least 3 times, dispersion is
+reported, costs and tokens are reported, and raw logs are retained.

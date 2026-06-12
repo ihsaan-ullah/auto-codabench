@@ -18,8 +18,9 @@ Design rules:
   prompt, which is where the actual Claude session can reason about
   the failure.
 - **Bounded output.** stdout/stderr are tee'd to disk in full, but
-  the returned dict carries only the last ~80 lines of each so the
-  model's context doesn't blow up.
+  the returned dict carries only the last ~80 lines of each, keeping
+  subprocess noise out of the model's context while preserving the
+  complete record on disk.
 - **Env names are deterministic.** `acb-run-<short>` derived from the
   active run's `branch_id_runtime_id` — so the same skill invocation
   always finds the same env on retry.

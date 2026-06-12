@@ -1,67 +1,88 @@
-# autocodabench — user guide
+# autocodabench — User Guide
 
-How to install, authenticate, and use autocodabench in each of its four
-surfaces: **CLI**, **Python library**, **MCP host** (Claude Code / Claude
-Desktop), and **Web UI**. Maintainer docs live in
+This guide describes how to install, authenticate, and use autocodabench
+through each of its four surfaces: the command-line interface (CLI), the
+Python library, an MCP host (Claude Code or Claude Desktop), and the web
+user interface. Maintainer documentation is provided in
 [`architecture.md`](./architecture.md).
 
 ---
 
-## 1. Install
+## 1. Installation
 
 ```bash
 pip install -e .        # from a checkout (PyPI release pending)
 ```
 
-Python ≥ 3.10. The agentic features use the Claude Agent SDK (installed
-automatically); the validator and the demo never touch it, so they work in
-any environment — no Node runtime, no keys, no network.
+Python 3.10 or later is required. The agentic features depend on the
+Claude Agent SDK, which is installed automatically. The validator and the
+demo command do not use the SDK and therefore operate in any environment,
+without a Node runtime, credentials, or network access.
 
-Verify:
+To verify the installation:
 
-```bash
-autocodabench --version
-autocodabench demo --out /tmp/acb-demo   # fully offline end-to-end test
-```
+1. Run `autocodabench --version`.
+2. Run `autocodabench demo --out /tmp/acb-demo` to execute a fully offline
+   end-to-end test.
 
 ---
 
-## 2. Authenticate (only for agentic features)
+## 2. Authentication (agentic features only)
 
-Two paths, in the order we recommend:
+Two authentication paths are supported, listed in recommended order.
 
-| Path | Who it's for | Setup |
+| Path | Intended use | Setup |
 |---|---|---|
-| **Claude subscription** (Pro/Max) | local use — the friendliest path | Install Claude Code, run `claude`, type `/login`. Done — autocodabench's agent sessions now draw from your plan's monthly **Agent SDK credit**. |
-| **`ANTHROPIC_API_KEY`** | CI-adjacent automation, users without a subscription, and **required** for any hosted multi-user deployment | `export ANTHROPIC_API_KEY=sk-ant-…` (or put it in `.env`). |
+| **Claude subscription** (Pro or Max) | Local use; the recommended path for individual users | Install Claude Code, run `claude`, and enter `/login`. Subsequent autocodabench agent sessions draw from the plan's monthly Agent SDK credit. |
+| **`ANTHROPIC_API_KEY`** | Automation in CI-adjacent environments, users without a subscription, and any hosted multi-user deployment, for which it is required | `export ANTHROPIC_API_KEY=sk-ant-…`, or place the key in a `.env` file (see below). |
 
-Check what's active:
+To determine which path is active:
 
 ```bash
-autocodabench auth status            # detection + warnings
-autocodabench auth status --probe    # spend one tiny turn to confirm end-to-end
+autocodabench auth status            # detection and warnings
+autocodabench auth status --probe    # spends one minimal turn to confirm end-to-end
 ```
 
-Two rules worth knowing:
+Two rules are important to observe:
 
-1. **An exported `ANTHROPIC_API_KEY` silently wins** over a subscription
-   login (that's the SDK's precedence). `auth status` warns when your
-   subscription is being shadowed — unset the key (don't just blank it)
-   to bill against your plan.
-2. **Hosted multi-user deployments must use an API key.** Anthropic does
-   not permit routing other users' requests through one person's Free/Pro/
-   Max credentials. Running the web UI locally for yourself on your own
-   subscription is fine; deploying it for others (e.g. an HF Space) is
-   API-key-only.
+1. **An exported `ANTHROPIC_API_KEY` takes precedence over a stored
+   subscription login.** This is the SDK's precedence order, and it applies
+   silently. `auth status` issues a warning when a subscription login is
+   being shadowed in this way; to bill against the subscription plan,
+   unset the variable entirely rather than setting it to an empty string.
+2. **Hosted multi-user deployments must use an API key.** Under
+   Anthropic's terms of service, requests from other users may not be
+   routed through one person's Free, Pro, or Max credentials. Running the
+   web UI locally for personal use on a personal subscription is
+   permitted; deploying it for other users (for example, as a Hugging Face
+   Space) requires an API key.
 
-Keyless commands (`validate`, `demo`, `checks list`) ignore auth entirely.
+### `.env` loading and the authentication preflight
+
+The CLI loads `<cwd>/.env` at startup using a minimal parser that never
+overrides variables already present in the real environment. Consequently,
+`ANTHROPIC_API_KEY` may be placed in a `.env` file in the working
+directory instead of being exported.
+
+The commands `autocodabench create` and `codabench-validate --judged`
+perform an authentication preflight before starting a session. When no
+credentials are found and the command is running on an interactive
+terminal, the preflight offers two options: completing a subscription
+login (run `claude`, then `/login`), or entering an API key via hidden
+input, with an optional save to `./.env` (written with file mode 600). In
+non-interactive contexts, these commands exit with status 2 and print
+guidance instead.
+
+Keyless commands (`validate`, `demo`, `checks list`) do not consult
+authentication state at all.
 
 ---
 
-## 3. Validate a bundle (keyless)
+## 3. Validating a bundle (keyless)
 
-Works on any Codabench bundle — generated by autocodabench or written by
-hand — as a directory or a zip:
+The validator accepts any Codabench bundle, whether generated by
+autocodabench or written by hand, supplied as a directory or a zip
+archive:
 
 ```bash
 codabench-validate path/to/bundle/          # or bundle.zip
@@ -69,23 +90,27 @@ codabench-validate bundle.zip --json        # machine-readable report
 autocodabench checks list                   # every check, by tier, with citations
 ```
 
-The report has four sections, and they mean different things:
+The report contains four sections with distinct meanings:
 
-- **Gate failures** — deterministic checks that block upload (missing
-  referenced files, unparseable YAML, leaderboard keys the scoring program
-  never writes…). Exit code 1.
+- **Gate failures** — deterministic checks that block upload, such as
+  missing referenced files, unparseable YAML, or leaderboard keys that the
+  scoring program never writes. These produce exit code 1.
 - **Findings (advisory)** — design risks with citations into Pavão et al.
-  (2024), *AI Competitions and Benchmarks*: no daily submission cap, a dev
-  phase under 40 days, a test set too small for the 100/E rule…
-- **Attestations required** — launch criteria only a human can certify
-  (external review happened, datasheet published, prize legality). The
-  validator surfaces them; it never pretends to have checked them.
-- **Skipped** — checks that need a declared fact you haven't provided.
+  (2024), *AI Competitions and Benchmarks*; examples include the absence
+  of a daily submission cap, a development phase shorter than 40 days, or
+  a test set too small to satisfy the 100/E rule.
+- **Attestations required** — launch criteria that only a human can
+  certify, such as completion of external review, publication of a
+  datasheet, or prize legality. The validator surfaces these criteria; it
+  does not claim to have verified them.
+- **Skipped** — checks that require a declared fact that has not been
+  provided.
 
 ### Declared facts (`competition_facts.yaml`)
 
-Some checks need context the bundle can't carry. Declare it next to
-`competition.yaml` (or pass `--facts path.yaml`):
+Some checks require context that the bundle cannot carry. Declare this
+context in a file placed next to `competition.yaml`, or supply it with
+`--facts path.yaml`:
 
 ```yaml
 anticipated_error_rate: 0.05      # enables the 100/E test-set sizing check
@@ -96,21 +121,22 @@ prizes: false                     # resolves the game-of-skill attestation
 task_type: binary_classification_imbalanced
 ```
 
-### LLM-judged checks (needs auth)
+### LLM-judged checks (authentication required)
 
 ```bash
 codabench-validate path/to/bundle --judged
 ```
 
-Adds advisory checks an LLM grades — e.g. *do the participant-facing pages
-contradict the machine config?* (pages say 5 submissions/day, YAML enforces
-10). Judged results are **findings, never gates**: an LLM's opinion never
-blocks your upload, and an unparseable judge reply degrades to "skipped",
-never to a silent pass.
+This option adds advisory checks graded by an LLM — for example, whether
+the participant-facing pages contradict the machine-readable
+configuration (the pages state five submissions per day while the YAML
+enforces ten). Judged results are findings, never gates: an LLM's
+assessment never blocks an upload, and an unparseable judge reply degrades
+to a skipped result, never to a silent pass.
 
 ---
 
-## 4. Create a competition agentically (needs auth)
+## 4. Creating a competition agentically (authentication required)
 
 ```bash
 autocodabench create "AI-generated-text detection, balanced accuracy, \
@@ -119,24 +145,28 @@ autocodabench create "AI-generated-text detection, balanced accuracy, \
     --verbose
 ```
 
-What happens:
+The pipeline proceeds as follows:
 
-1. **Plan session** — an agent drafts the full competition design (task
-   framing, data, metric, baselines, phases, rules) and saves a locked
-   `implementation_plan.md`. Headless runs make conservative assumptions
-   and state each one explicitly in the plan.
-2. *(You can stop here, edit the plan by hand, and re-run the build.)*
-3. **Build session** — a *fresh* agent reads only the plan and writes the
-   bundle through the MCP tool surface: `competition.yaml`, pages, scoring
-   program, baseline solution, data, then validates and zips.
-4. The check framework (section 3) runs over the result.
+1. **Plan session.** An agent drafts the full competition design — task
+   framing, data, metric, baselines, phases, and rules — and saves a
+   locked `implementation_plan.md`. Headless runs make conservative
+   assumptions and state each one explicitly in the plan.
+2. Optionally, stop at this point, edit the plan by hand, and re-run the
+   build.
+3. **Build session.** A fresh agent reads only the plan and writes the
+   bundle through the MCP tool surface: `competition.yaml`, pages, the
+   scoring program, a baseline solution, and data; it then validates and
+   zips the result.
+4. The check framework described in section 3 runs over the resulting
+   bundle.
 
-Everything lands in a per-run directory under `./.autocodabench/runs/`:
-the plan, the bundle + zip, a full `tool_calls/` audit trail of every
-authoring action, and message traces for both sessions. Useful flags:
-`--model`, `--max-budget-usd` (cost cap per phase).
+All artifacts are written to a per-run directory under
+`./.autocodabench/runs/`: the plan, the bundle and its zip archive, a
+complete `tool_calls/` audit trail of every authoring action, and message
+traces for both sessions. Relevant flags include `--model` and
+`--max-budget-usd` (a cost cap per phase).
 
-From Python:
+The same functionality is available from Python:
 
 ```python
 import autocodabench
@@ -151,14 +181,18 @@ print(report.ok, report.counts)
 
 ---
 
-## 5. Use from an MCP host (Claude Code / Claude Desktop)
+## 5. Using autocodabench from an MCP host (Claude Code or Claude Desktop)
 
-The same tool surface the pipeline uses is a standalone MCP stdio server:
+The tool surface used by the pipeline is also available as a standalone
+MCP stdio server.
+
+For Claude Code:
 
 ```bash
-# Claude Code
 claude mcp add autocodabench -- python -m autocodabench.mcp.server
 ```
+
+For Claude Desktop:
 
 ```json
 // claude_desktop_config.json
@@ -172,53 +206,59 @@ claude mcp add autocodabench -- python -m autocodabench.mcp.server
 }
 ```
 
-20 tools: run/logging, bundle authoring, validate/zip, execution (per-run
-conda envs + scoring runs), and upload. For Claude Code you can also
-symlink the packaged skills into `.claude/skills/` so `/autocodabench-plan`
-and `/autocodabench-implement` drive the same two-phase flow conversationally
-(the experiment harness's `setup.sh` shows the exact links).
+The server exposes 20 tools covering run management and logging, bundle
+authoring, validation and zipping, execution (per-run conda environments
+and scoring runs), and upload. In Claude Code, the packaged skills may
+additionally be symlinked into `.claude/skills/`, so that
+`/autocodabench-plan` and `/autocodabench-implement` drive the same
+two-phase flow conversationally; the experiment harness's `setup.sh`
+shows the exact links.
 
 ---
 
-## 6. Web UI
+## 6. Web user interface
 
-A Chainlit chat surface over the same plan → build flow, with a phase bar,
-cost tracking, and a Publish form.
+The web UI is a Chainlit chat surface over the same plan-then-build flow,
+with a phase bar, cost tracking, and a Publish form.
 
 ```bash
 pip install -r web/requirements.txt
 cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h
 ```
 
-Required `.env` at the repo root (see `.env.example`): `ANTHROPIC_API_KEY`
-(the web UI is API-key-only — see section 2), `SHARED_PASSWORD`,
-`CHAINLIT_AUTH_SECRET`, `OPENALEX_MAILTO`. Operating/deploying the Space is
-documented in [`../web/README.md`](../web/README.md).
+A `.env` file at the repository root is required (see `.env.example`)
+with the following variables: `ANTHROPIC_API_KEY` (the web UI is
+API-key-only; see section 2), `SHARED_PASSWORD`, `CHAINLIT_AUTH_SECRET`,
+and `OPENALEX_MAILTO`. Operating and deploying the Space is documented in
+[`../web/README.md`](../web/README.md).
 
 ---
 
-## 7. Publish to Codabench
+## 7. Publishing to Codabench
 
-Three equivalent routes, all optional and all explicit:
+Three equivalent routes are available; all are optional and all require
+an explicit action:
 
-- **Web UI Publish form** — type your Codabench username/password into the
-  workspace panel; the upload goes straight to codabench.org (never through
-  the LLM).
-- **MCP tool** `autocodabench_upload_bundle` — uses `CODABENCH_USERNAME` /
-  `CODABENCH_PASSWORD` (or `CODABENCH_TOKEN`) from the environment.
-- **Script** — `python -m autocodabench.upload.codabench_api bundle.zip`.
+- **Web UI Publish form.** Enter a Codabench username and password into
+  the workspace panel; the upload is sent directly to codabench.org and
+  never passes through the LLM.
+- **MCP tool** `autocodabench_upload_bundle`. This tool reads
+  `CODABENCH_USERNAME` and `CODABENCH_PASSWORD` (or `CODABENCH_TOKEN`)
+  from the environment.
+- **Script.** Run `python -m autocodabench.upload.codabench_api bundle.zip`.
 
-The 4-step REST flow (token → dataset placeholder → signed PUT → unpack
-poll) is documented in [`codabench-upload-api.md`](./codabench-upload-api.md).
+The four-step REST flow (token, dataset placeholder, signed PUT, unpack
+poll) is documented in
+[`codabench-upload-api.md`](./codabench-upload-api.md).
 
 ---
 
 ## 8. Troubleshooting
 
-| Symptom | Likely cause / fix |
+| Symptom | Likely cause and resolution |
 |---|---|
-| `create` or `--judged` fails to start a session | Run `autocodabench auth status --probe`. No auth at all? Log in to Claude Code or export `ANTHROPIC_API_KEY`. |
-| Usage bills the API instead of your plan | A stale `ANTHROPIC_API_KEY` is exported — `auth status` warns about exactly this. Unset it. |
-| Bundle valid locally, rejected by Codabench | Make sure you uploaded the zip produced by `zip_bundle` / the pipeline — `competition.yaml` must be at the **zip root**, not inside a folder. |
+| `create` or `--judged` fails to start a session | Run `autocodabench auth status --probe`. If no authentication is configured, log in through Claude Code or export `ANTHROPIC_API_KEY` (or place it in `./.env`); on an interactive terminal, the preflight described in section 2 offers these options directly. |
+| Usage is billed to the API instead of the subscription plan | A stale `ANTHROPIC_API_KEY` is exported; `auth status` warns about precisely this condition. Unset the variable. |
+| Bundle validates locally but is rejected by Codabench | Confirm that the uploaded archive is the zip produced by `zip_bundle` or by the pipeline — `competition.yaml` must reside at the zip root, not inside a subdirectory. |
 | Checks report `skipped … requires facts` | Add the named keys to `competition_facts.yaml` (section 3). |
-| Artifacts land in an unexpected place | Roots default to `<cwd>/.autocodabench/`; override with `AUTOCODABENCH_HOME` (or `AUTOCODABENCH_BUNDLES_ROOT` / `AUTOCODABENCH_RUNS_ROOT`). |
+| Artifacts appear in an unexpected location | Roots default to `<cwd>/.autocodabench/`; override with `AUTOCODABENCH_HOME` (or `AUTOCODABENCH_BUNDLES_ROOT` / `AUTOCODABENCH_RUNS_ROOT`). |

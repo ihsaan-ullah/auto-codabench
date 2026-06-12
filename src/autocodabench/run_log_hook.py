@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Claude Code hook — mirror the live session transcript into the active run.
 
-Invoked by `.claude/settings.json` hooks on UserPromptSubmit + Stop. Reads the
-hook payload from stdin, locates `<runs_root>/LATEST/`, copies
+Invoked by `.claude/settings.json` hooks on UserPromptSubmit and Stop.
+Reads the hook payload from stdin, locates `<runs_root>/LATEST/`, copies
 the session's JSONL transcript into it, and regenerates a human-readable
-`transcript.md`.
+`transcript.md` — extending the tool-call audit trail up to the
+conversation layer.
 
-Failure is silent: if no active run exists, if the transcript_path is missing,
-if JSON parsing fails, etc., we exit 0 without touching anything. We do NOT
-want hooks to ever break Claude Code itself.
+Failure is deliberately silent: on any error (no active run, missing
+transcript path, malformed JSON) the hook exits 0 without touching
+anything, because a diagnostic aid must never be capable of breaking the
+Claude Code session it observes.
 """
 from __future__ import annotations
 

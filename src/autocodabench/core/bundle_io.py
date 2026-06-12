@@ -1,13 +1,16 @@
-"""Data layer for bundle authoring. No MCP, no FastMCP — just file I/O on dicts.
+"""Data layer for bundle authoring: pure file I/O on dicts. No MCP, no LLM.
 
 Every function in this module:
-  - takes a bundle root Path and primitive data
-  - writes (or reads) deterministic files inside that bundle
-  - returns plain dicts with a 'written' list of relative paths
+  - takes a bundle root Path and primitive data,
+  - writes (or reads) deterministic files inside that root,
+  - returns a plain dict with a ``written`` list of relative paths.
 
-This separation lets us run the data layer in isolation (a CLI smoke test in
-__main__) without dragging MCP into the loop — same pattern the
-Semantic Scholar reference repo uses.
+Each constraint earns its keep. Pure functions over primitives are
+unit-testable with no keys, network, or server; plain dicts cross the MCP
+boundary as JSON unchanged; and determinism is what allows a recorded tool
+trace to be replayed against this layer to rebuild the identical bundle
+(``backends/replay.py``). The module runs standalone as a smoke test:
+``python -m autocodabench.core.bundle_io``.
 """
 from __future__ import annotations
 
@@ -358,7 +361,8 @@ def validate_bundle(slug: str, root_dir: str | None = None) -> dict[str, Any]:
       2. Every file referenced from competition.yaml exists.
       3. Every leaderboard column.key appears at least once as a key written by
          the scoring program (we statically scan score.py text for
-         `json.dump(...)` or `scores.json` keys; if we can't be sure, we warn).
+         `json.dump(...)` or `scores.json` keys; when the scan is
+         inconclusive we warn rather than gate).
       4. Each scoring/ingestion program has a metadata.yaml with a `command:`.
       5. Phases are sorted, do not overlap, and reference declared tasks.
       6. Tasks referenced from phases/solutions exist by index.
