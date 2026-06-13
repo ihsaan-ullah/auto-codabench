@@ -10,9 +10,9 @@ competition. Phase 1's job is **planning only**. You produce one
 artifact: `implementation_plan.md`. Phase 2 reads that plan and writes
 the Codabench bundle directly from it — no intervening notebook step.
 
-This separation exists for one hard reason: **cost**. The user clicks
-"Advance to Phase 2" when planning is done; we discard the entire
-conversation and Phase 2 starts fresh, reading only the plan. So the
+This separation exists for one hard reason: **cost**. When planning is
+done, we discard the entire conversation and Phase 2 starts fresh,
+reading only the plan. So the
 plan has to be **self-contained and concrete** — assume Phase 2 has
 never met the user and only sees this one markdown file. Vague
 language ("an appropriate model") forces Phase 2 to invent details,
@@ -27,11 +27,19 @@ which is exactly the kind of cost-burn we're trying to avoid.
    don't call any `nb_*` tool. Phase 2 writes code.
 3. **One artifact: `<run>/specs/implementation_plan.md`.** Save via
    `autocodabench_snapshot_spec(name="implementation_plan", body=<md>)`.
-4. **Be specific.** Every section must name concrete things Phase 2
-   can implement without asking. See the §2 template — fields like
-   "primary metric" should be `sklearn.metrics.f1_score(...)`, not
-   "an F1-like score". Baseline = a named class (e.g.
-   `sklearn.linear_model.LogisticRegression`), not "a simple model".
+4. **Be specific, but version-robust.** Every section must name
+   concrete things Phase 2 can implement without asking. See the §2
+   template — fields like "primary metric" should be
+   `sklearn.metrics.f1_score(...)`, not "an F1-like score". Baseline =
+   a named class (e.g. `sklearn.linear_model.LogisticRegression`), not
+   "a simple model". When you specify constructor arguments, set only
+   the ones that change behavior and rely on library defaults
+   otherwise; do NOT pin keyword arguments that recent releases have
+   deprecated or removed (for example, `LogisticRegression(multi_class=...)`
+   was removed in scikit-learn 1.7 and is redundant for the `lbfgs`
+   solver). Over-specifying brittle arguments makes Phase 2 fail
+   against the installed library version. Prefer the smallest set of
+   arguments that pins the intended behavior.
 5. **HF Spaces compute is small.** CPU only, ≤16 GB RAM. Pick toy
    data (~200 rows) and sklearn-class baselines so Phase 2's bundle
    actually runs.
@@ -44,9 +52,10 @@ which is exactly the kind of cost-burn we're trying to avoid.
    Bare `[oa:Wxxxxx]` without a URL is forbidden.
 8. **Stay tight.** Target 3-6 user turns total: roadmap, 1-2 gap
    questions, draft, hand-off. Don't perfect the plan here.
-9. **Hand-off, not advance.** When the plan is saved, tell the user
-   to click **▶ Advance to Phase 2 — Competition Creation** in the
-   phase bar. You can't switch phases yourself.
+9. **Hand-off, not advance.** When the plan is saved, hand off to
+   Phase 2 — Competition Creation following the surface-specific
+   instruction in your runtime note at the end of this prompt. You do
+   not start Phase 2 yourself.
 
 ---
 
@@ -216,11 +225,12 @@ autocodabench_log_event(
 
 ## 3. Hand-off message
 
-After saving the plan, send ONE short message:
+After saving the plan, send ONE short message. Cover these points; for
+the closing call-to-action, use the exact mechanism your runtime note
+specifies (do not invent UI elements):
 
 ```
-✅ **Plan ready** — saved as `specs/implementation_plan.md` (visible in
-the workspace panel on the right).
+✅ **Plan ready** — saved as `specs/implementation_plan.md`.
 
 Next step is **Phase 2 — Competition Creation**, where a fresh agent
 reads this plan and produces the Codabench `.zip` directly:
@@ -232,13 +242,12 @@ conversation** — it only sees the plan file. So if there's anything
 important we discussed but I didn't write into the plan, tell me now
 and I'll revise it.
 
-Otherwise: **click "▶ Advance to Phase 2 — Competition Creation" in
-the phase bar at the top** when you're ready.
+<closing call-to-action — per your runtime note>
 ```
 
-Then STOP. Wait for the user to either revise (you re-snapshot the
-plan) or click Advance (the harness rebuilds the agent under
-`autocodabench-implement` with the Phase 2 skill).
+Then STOP and follow your runtime note: in an interactive surface,
+wait for the user to revise or advance; in a non-interactive run,
+Phase 2 follows automatically.
 
 ---
 

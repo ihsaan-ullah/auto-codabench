@@ -1,9 +1,62 @@
 """CLI surface tests — keyless paths only."""
 import pytest
 
-from autocodabench.cli.main import main
+from autocodabench.cli.main import main, _make_progress_renderer
 
 from conftest import DEMO_SLUG
+
+
+# --- create progress renderer (default vs --debug) -------------------------
+
+_EVENTS = [
+    {"kind": "phase", "index": 2, "total": 3, "title": "Building the bundle",
+     "detail": "writing files; linting; zipping"},
+    {"kind": "tool_use", "name": "mcp__autocodabench__autocodabench_init_bundle",
+     "input": {"slug": "create"}},
+    {"kind": "tool_use", "name": "mcp__autocodabench__autocodabench_log_event",
+     "input": {"kind": "progress", "message": "Wrote the scoring program."}},
+    {"kind": "tool_result", "is_error": True,
+     "preview": "TypeError: unexpected keyword argument 'multi_class'"},
+    {"kind": "tool_result", "is_error": True,
+     "preview": "Cancelled: parallel tool call Bash(...) errored"},
+    {"kind": "tool_use", "name": "mcp__autocodabench__autocodabench_log_event",
+     "input": {"kind": "deviation", "message": "Removed multi_class; acc 0.92."}},
+    {"kind": "text", "text": "Internal reasoning the user need not see."},
+    {"kind": "phase_done", "phase": "build", "ok": True, "num_turns": 23},
+]
+
+
+def _render(events, *, debug):
+    import io
+    import contextlib
+    buf = io.StringIO()
+    r = _make_progress_renderer(debug=debug)
+    with contextlib.redirect_stdout(buf):
+        for e in events:
+            r(e)
+    return buf.getvalue()
+
+
+def test_default_renderer_is_user_oriented():
+    out = _render(_EVENTS, debug=False)
+    # User-facing milestone + deviation messages are shown…
+    assert "Wrote the scoring program." in out
+    assert "Removed multi_class; acc 0.92." in out
+    # …but raw tool calls, raw errors, cancellations, and internal reasoning
+    # are suppressed.
+    assert "init_bundle" not in out
+    assert "TypeError" not in out
+    assert "Cancelled" not in out
+    assert "Internal reasoning" not in out
+
+
+def test_debug_renderer_shows_full_trace_and_softens_cancellations():
+    out = _render(_EVENTS, debug=True)
+    assert "init_bundle(create)" in out
+    assert "TypeError" in out                      # genuine error shown
+    assert "Internal reasoning" in out             # narration shown
+    assert "Cancelled" not in out                  # cascade is reworded…
+    assert "retried" in out                        # …as a benign retry
 
 
 def test_checks_list(capsys):

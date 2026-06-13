@@ -41,13 +41,23 @@ _NON_INTERACTIVE_PLAN_FOOTER = """
 
 ## Runtime note (non-interactive CLI)
 
-You are running headless via `autocodabench create` — there is no user to
-ask. Do NOT ask scoping questions. Make reasonable, conservative assumptions
-for every unresolved design dimension, state each assumption explicitly in
-the plan (so a human can revise it later), and produce the COMPLETE
-implementation plan in this single session. Save it with
+You are running headless via the `autocodabench create` command line — there
+is NO web interface in this session. There is no "workspace panel", no "phase
+bar", no "Advance to Phase 2" button, and nothing for the user to click. Do
+NOT mention any of those, and do not tell the user to click, press, or open
+anything. The plan file is written to disk; refer to it only by its path
+(`specs/implementation_plan.md`).
+
+There is no user to ask. Do NOT ask scoping questions. Make reasonable,
+conservative assumptions for every unresolved design dimension, state each
+assumption explicitly in the plan (so a human can revise it later), and
+produce the COMPLETE implementation plan in this single session. Save it with
 `autocodabench_snapshot_spec(filename="implementation_plan.md", body=...)`
 before finishing.
+
+For the §3 hand-off message, the closing call-to-action is simply a plain
+sentence such as: "Phase 2 — Competition Creation will now run automatically
+and build the bundle from this plan." Then stop.
 """
 
 _BUILD_FOOTER = """
@@ -56,7 +66,10 @@ _BUILD_FOOTER = """
 
 ## Runtime note (non-interactive CLI)
 
-You are running headless via `autocodabench create`. The locked plan is at
+You are running headless via the `autocodabench create` command line — there
+is NO web interface. Do not mention a workspace panel, phase bar, download
+drawer, or Publish form, and do not tell the user to click anything; refer to
+artifacts by their file paths. The locked plan is at
 `<run>/specs/implementation_plan.md` — call `autocodabench_current_run`,
 read the plan with the Read tool, then execute this skill end-to-end
 (generate bundle files → validate → zip) without waiting for instructions.

@@ -59,6 +59,14 @@ class AgentTask:
     trace_path: Path | None = None
     # Optional live text callback (CLI progress, web streaming).
     on_text: Callable[[str], None] | None = None
+    # Optional structured progress callback. Receives one dict per step so a
+    # caller can render activity as it happens (tool calls, results, turn
+    # accounting) — not just the assistant's prose. Kinds emitted by a backend:
+    #   {"kind": "text", "text": str}
+    #   {"kind": "tool_use", "name": str, "input": dict}
+    #   {"kind": "tool_result", "is_error": bool, "preview": str}
+    #   {"kind": "result", "num_turns": int, "cost_usd": float | None}
+    on_event: Callable[[dict], None] | None = None
 
 
 @runtime_checkable

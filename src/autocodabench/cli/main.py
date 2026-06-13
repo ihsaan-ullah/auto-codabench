@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+import textwrap
 from pathlib import Path
 
 from .. import __version__
@@ -125,33 +127,253 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 # create
 # ---------------------------------------------------------------------------
 
+# --- create: progress rendering -------------------------------------------
+
+def _short_tool_name(name: str) -> str:
+    """`mcp__autocodabench__autocodabench_write_scoring_program` → `write_scoring_program`."""
+    return name.split("__")[-1].replace("autocodabench_", "")
+
+
+def _tool_arg_summary(inp: dict) -> str:
+    """A short, identifying summary of a tool call's arguments for one line."""
+    if not isinstance(inp, dict) or not inp:
+        return ""
+    for key in ("name", "slug", "page", "filename", "path", "file_path",
+                "pattern", "spec_name", "kind"):
+        val = inp.get(key)
+        if isinstance(val, str) and val:
+            return f"({val})"
+    for val in inp.values():  # fall back to the first short scalar
+        if isinstance(val, str) and val:
+            return f"({val if len(val) <= 48 else val[:47] + '…'})"
+    return ""
+
+
+# Event kinds an agent uses to address the end user directly (via
+# `autocodabench_log_event(kind=..., message=...)`). These are surfaced in the
+# default, user-oriented view; "deviation" is highlighted as it reports a
+# departure from the locked plan.
+_USER_MESSAGE_KINDS = {"progress", "milestone", "status", "deviation"}
+
+
+def _is_parallel_cancellation(text: str) -> bool:
+    """A tool result that is a sibling-cancellation, not a genuine failure:
+    when one call in a parallel batch errors, the runtime cancels the others."""
+    low = (text or "").lower()
+    return "cancelled" in low and "parallel tool call" in low
+
+
+def _make_progress_renderer(*, debug: bool = False):
+    """Return an `on_event` callback that renders pipeline progress.
+
+    Two registers share one renderer:
+
+    - **default** (``debug=False``) — a concise, user-oriented narrative:
+      phase headers, the milestone messages the agent emits for the user
+      (plain-language progress and deviation notices), and phase completion.
+      Raw tool calls, raw tool output, and the agent's internal reasoning are
+      omitted, as is the benign cancellation of parallel sibling calls.
+    - **debug** (``debug=True``) — the full developer trace: every tool call
+      with its arguments, tool errors (cancellations marked as benign
+      retries), and the agent's narration. Intended for diagnosing the
+      pipeline rather than routine use.
+    """
+    bar = "─" * 60
+
+    def render(ev: dict) -> None:
+        kind = ev.get("kind")
+        if kind == "phase":
+            print(f"\n{bar}")
+            print(f" Phase {ev.get('index')}/{ev.get('total')} · {ev.get('title')}")
+            if debug and ev.get("detail"):
+                print(f" {ev['detail']}")
+            print(bar, flush=True)
+        elif kind == "phase_done":
+            mark = "✓" if ev.get("ok") else "✗"
+            turns = ev.get("num_turns")
+            tail = f" · {turns} turns" if (debug and turns) else ""
+            print(f"  {mark} {ev.get('phase')} phase complete{tail}", flush=True)
+        elif kind == "tool_use":
+            name = _short_tool_name(ev.get("name", "?"))
+            inp = ev.get("input") or {}
+            if name == "log_event":
+                message = inp.get("message")
+                ekind = (inp.get("kind") or "").lower()
+                if message and ekind in _USER_MESSAGE_KINDS:
+                    bullet = "⚠" if ekind == "deviation" else "•"
+                    print(f"  {bullet} {message}", flush=True)
+                elif debug:
+                    print(f"  ⏺ log_event({ekind})", flush=True)
+            elif debug:
+                print(f"  ⏺ {name}{_tool_arg_summary(inp)}", flush=True)
+        elif kind == "tool_result" and ev.get("is_error"):
+            preview = ev.get("preview") or "tool error"
+            if _is_parallel_cancellation(preview):
+                if debug:
+                    print("      ↻ retried (a parallel sibling call was "
+                          "cancelled — not a failure)", flush=True)
+            elif debug:
+                print(f"      ↳ ⚠ {preview}", flush=True)
+        elif kind == "text" and debug:
+            text = (ev.get("text") or "").strip()
+            if text:
+                for line in textwrap.wrap(text, width=84) or [""]:
+                    print(f"  │ {line}", flush=True)
+
+    return render
+
+
+def _bundle_docker_image(bundle_dir) -> str | None:
+    """Read the final `docker_image` a built bundle declares. After the build
+    phase's self-validation loop this is the image the baseline actually
+    passed under — exactly what Codabench will run — so it is worth surfacing."""
+    if not bundle_dir:
+        return None
+    yaml_path = Path(bundle_dir) / "competition.yaml"
+    if not yaml_path.is_file():
+        return None
+    try:
+        import yaml
+        comp = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        image = comp.get("docker_image")
+        return image.strip() if isinstance(image, str) and image.strip() else None
+    except Exception:
+        return None
+
+
+def _print_create_config(*, idea, backend_name, auth_label, model, run_dir,
+                         data, max_budget_usd, validate, verbosity) -> None:
+    """Show the full effective configuration before spending anything, so the
+    run is never an opaque idle."""
+    budget = f"${max_budget_usd:.2f} per phase" if max_budget_usd else "no cap"
+    print("autocodabench create — configuration")
+    print(f"  idea:        {textwrap.shorten(idea, width=72)}")
+    print(f"  backend:     {backend_name}  ({auth_label})")
+    print(f"  model:       {model}")
+    print(f"  output dir:  {run_dir}")
+    print(f"  sample data: {data or '(none)'}")
+    print(f"  cost cap:    {budget}")
+    print(f"  output mode: {verbosity}")
+    print( "  pipeline:    1) plan → specs/implementation_plan.md")
+    print( "               2) build → bundle + zip (via the MCP tools)")
+    print(f"               3) validate → {'registered checks' if validate else 'skipped'}")
+    print(f"  artifacts:   plan, bundle, zip, and a full tool-call audit trail")
+    print(f"               land under the output dir above.")
+
+
 def _cmd_create(args: argparse.Namespace) -> int:
-    from ..agent.pipeline import create
+    from ..agent.pipeline import create_async
+    from ..run_log import open_run
 
     if not _require_live_claude_auth(args.backend):
         return 2
 
-    def on_text(text: str) -> None:
-        print(text, flush=True)
+    # ---- Resolve where output should go (ask if not provided) --------------
+    from ..core.config import runs_root
+    out = args.out
+    if out is None and sys.stdin.isatty():
+        default_root = runs_root()
+        try:
+            ans = input(
+                f"\nWhere should this run's output go?\n"
+                f"  [Enter] = default ({default_root})\n"
+                f"  or type a directory: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\naborted", file=sys.stderr)
+            return 130
+        out = ans or None
+    if out:
+        os.environ["AUTOCODABENCH_RUNS_ROOT"] = str(Path(out).expanduser().resolve())
 
-    backend = None
+    # ---- Construct the backend up front so we can show the real model ------
     if args.backend:
         from ..backends import resolve_backend
         backend = resolve_backend(args.backend, model=args.model)
-    result = create(
+    else:
+        from ..backends import get_claude_backend
+        backend = (get_claude_backend(model=args.model) if args.model
+                   else get_claude_backend())
+    model_shown = getattr(backend, "model", args.model or "(backend default)")
+    if backend.name == "claude":
+        from ..auth import resolve_auth
+        auth_label = {
+            "subscription": "subscription login",
+            "api_key": "ANTHROPIC_API_KEY",
+            "none": "no auth configured",
+        }.get(resolve_auth().effective, "unknown")
+    else:
+        auth_label = "own credentials"
+
+    # ---- Resolve the verbosity tier (quiet | default | debug) --------------
+    debug = bool(args.debug or args.verbose)
+    if args.quiet:
+        verbosity = "quiet (final summary only)"
+    elif debug:
+        verbosity = "debug (full developer trace)"
+    else:
+        verbosity = "summary (user-oriented progress; pass --debug for the full trace)"
+
+    # ---- Create the run dir now so the config banner can name it -----------
+    run_dir = open_run(slug="create").path
+
+    print()
+    _print_create_config(
+        idea=args.idea, backend_name=backend.name, auth_label=auth_label,
+        model=model_shown, run_dir=run_dir, data=args.data,
+        max_budget_usd=args.max_budget_usd, validate=not args.no_validate,
+        verbosity=verbosity)
+
+    if debug:
+        print("\n  Note: --debug prints the full developer trace — every tool "
+              "call, raw\n        tool output, and the agent's internal "
+              "reasoning. It is intended for\n        diagnosing the pipeline, "
+              "not routine use. Omit --debug for a concise,\n        "
+              "user-oriented summary.", file=sys.stderr)
+
+    # ---- Confirm before spending (tty only; --yes skips) -------------------
+    if sys.stdin.isatty() and not args.yes:
+        def _abort() -> int:
+            import shutil
+            shutil.rmtree(run_dir, ignore_errors=True)  # leave nothing behind
+            os.environ.pop("AUTOCODABENCH_RUN_DIR", None)
+            print("aborted (no run created)", file=sys.stderr)
+            return 130
+        try:
+            if input("\nStart the run? [Y/n]: ").strip().lower() not in ("", "y", "yes"):
+                return _abort()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            return _abort()
+
+    renderer = None if args.quiet else _make_progress_renderer(debug=debug)
+    if renderer is None:
+        print("\n(running quietly — omit --quiet to see step-by-step progress)\n")
+
+    result = asyncio.run(create_async(
         args.idea,
         data=args.data,
         backend=backend,
         model=args.model,
         max_budget_usd=args.max_budget_usd,
-        on_text=on_text if args.verbose else None,
-    )
-    print()
-    print(f"run dir:   {result.run_dir}")
-    print(f"plan:      {result.plan_path}")
-    print(f"bundle:    {result.bundle_dir}")
-    print(f"zip:       {result.zip_path}")
-    print(f"cost:      ${result.total_cost_usd:.2f}")
+        on_event=renderer,
+        validate=not args.no_validate,
+    ))
+
+    print("\n" + "═" * 60)
+    print("Done.")
+    print(f"  run dir:   {result.run_dir}")
+    print(f"  plan:      {result.plan_path}")
+    print(f"  bundle:    {result.bundle_dir}")
+    print(f"  zip:       {result.zip_path}")
+    image = _bundle_docker_image(result.bundle_dir)
+    if image:
+        print(f"  docker:    {image}  (declared in competition.yaml; what "
+              "Codabench will run)")
+    updated_plan = (Path(result.run_dir) / "specs" / "updated_implementation_plan.md"
+                    if result.run_dir else None)
+    if updated_plan and updated_plan.is_file():
+        print(f"  changes:   {updated_plan}  (deviations from the original plan)")
+    print(f"  cost:      ${result.total_cost_usd:.2f}")
     if result.validation is not None:
         print()
         print(result.validation.to_markdown())
@@ -311,9 +533,23 @@ def _build_parser() -> argparse.ArgumentParser:
                         "(local, keyless), openai:<model>, or an OpenAI-compatible "
                         "URL with '#<model>'")
     p.add_argument("--model", help="model override for the agent sessions")
+    p.add_argument("--out", default=None,
+                   help="directory for this run's output (the runs root); "
+                        "if omitted you are prompted, defaulting to "
+                        "<cwd>/.autocodabench/runs")
     p.add_argument("--max-budget-usd", type=float, default=None,
                    help="cumulative cost cap per phase")
-    p.add_argument("--verbose", action="store_true", help="stream agent text")
+    p.add_argument("--no-validate", action="store_true",
+                   help="skip the post-build validation pass")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="do not prompt to confirm before starting")
+    p.add_argument("--debug", action="store_true",
+                   help="print the full developer trace (every tool call, raw "
+                        "output, agent reasoning) instead of the concise summary")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress progress; print only the final summary")
+    p.add_argument("--verbose", action="store_true",
+                   help=argparse.SUPPRESS)  # deprecated alias for --debug
     p.set_defaults(func=_cmd_create)
 
     p = sub.add_parser("auth", help="report, choose, and verify which Claude auth path is used")

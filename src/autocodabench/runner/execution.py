@@ -50,6 +50,7 @@ import signal
 import subprocess
 import threading
 import time
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any, IO, TextIO
@@ -107,10 +108,27 @@ _SUBPROCESS_DEFAULTS = {
 # Execution engines
 # ---------------------------------------------------------------------------
 
-# Codabench's platform-wide default when competition.yaml declares no
-# docker_image (Competition model, src/apps/competitions/models.py in
-# codalab/codabench).
-_DEFAULT_DOCKER_IMAGE = "codalab/codalab-legacy:py37"
+# Default docker_image for a bundle that declares none.
+#
+# autocodabench ships two purpose-built base images (docker/*.Dockerfile):
+# autocodabench-base-cpu (Codabench py312 + the essential scientific stack and
+# a pinned starting-kit notebook toolchain) and autocodabench-base-gpu (the
+# gpu310 worker image plus the same stack). Pre-baking the dependencies means
+# the great majority of generated bundles run inside the exact image
+# Codabench's worker will use, with no per-run installation — the platform
+# installs nothing, so a clean local run is evidence of a clean platform run.
+#
+# The names below are the *intended* published locations; they resolve only
+# after the images are built and pushed (docker/build_and_push.sh) under a
+# namespace you control. Override per-environment with AUTOCODABENCH_DOCKER_IMAGE
+# / AUTOCODABENCH_DOCKER_IMAGE_GPU, or set AUTOCODABENCH_DOCKER_NAMESPACE to
+# rewrite just the namespace. Until then, set the env var to a stock image
+# (e.g. codalab/codalab-legacy:py312) to run without the custom base.
+_DOCKER_NAMESPACE = os.environ.get("AUTOCODABENCH_DOCKER_NAMESPACE", "autocodabench")
+_DEFAULT_DOCKER_IMAGE = os.environ.get(
+    "AUTOCODABENCH_DOCKER_IMAGE", f"{_DOCKER_NAMESPACE}/autocodabench-base-cpu:latest")
+_DEFAULT_DOCKER_IMAGE_GPU = os.environ.get(
+    "AUTOCODABENCH_DOCKER_IMAGE_GPU", f"{_DOCKER_NAMESPACE}/autocodabench-base-gpu:latest")
 
 _ENGINES = ("auto", "docker", "conda")
 
@@ -164,14 +182,31 @@ def bundle_docker_image(slug: str, root_dir: str | None = None) -> str:
     return _DEFAULT_DOCKER_IMAGE
 
 
+# The conda engine is deprecated and scheduled for removal: Docker is the only
+# platform-faithful path, so the project is consolidating on it. conda still
+# runs (so Docker-less hosts — CI, HF Spaces — keep working today), but every
+# use emits this notice so operators can migrate before it is removed.
+_CONDA_DEPRECATION = (
+    "the conda execution engine is deprecated and will be removed; it does not "
+    "reflect how Codabench runs programs (inside the bundle's docker_image, "
+    "installing nothing). Install a Docker daemon to use the platform-faithful "
+    "engine. See docker/README.md."
+)
+
+
+def _warn_conda_deprecation() -> None:
+    """Emit the conda-engine deprecation once per process."""
+    warnings.warn(_CONDA_DEPRECATION, DeprecationWarning, stacklevel=3)
+
+
 def resolve_execution_engine(engine: str = "auto") -> dict[str, Any]:
     """Select the engine for scoring/ingestion runs.
 
-    Docker is preferred because it is what the platform does: the
-    Codabench worker executes programs inside the competition's
-    ``docker_image``, and never installs ``requirements.txt``. The conda
-    engine remains available for hosts without a Docker daemon (CI,
-    HF Spaces), with an explicit note that fidelity is approximate.
+    Docker is the platform-faithful path: the Codabench worker executes
+    programs inside the competition's ``docker_image`` and never installs
+    ``requirements.txt``. The conda engine is **deprecated** and kept only as a
+    fallback for hosts without a Docker daemon (CI, HF Spaces); selecting it
+    emits a ``DeprecationWarning`` and an explanatory note.
 
     Returns ``{"engine": "docker"|"conda"|None, "note": ..., "error": ...}``.
     """
@@ -185,17 +220,17 @@ def resolve_execution_engine(engine: str = "auto") -> dict[str, Any]:
                 "error": "engine='docker' requested but no Docker daemon is "
                          "reachable (is Docker installed and running?)"}
     if engine == "conda":
+        _warn_conda_deprecation()
         return {"engine": "conda",
-                "note": "conda engine requested explicitly; platform fidelity is "
-                        "approximate — Codabench executes programs inside the "
-                        "bundle's docker_image and installs nothing",
+                "note": "conda engine requested explicitly (DEPRECATED). "
+                        + _CONDA_DEPRECATION,
                 "error": None}
     if _docker_available():
         return {"engine": "docker", "note": None, "error": None}
+    _warn_conda_deprecation()
     return {"engine": "conda",
-            "note": "Docker unavailable — fell back to the conda engine; this "
-                    "verifies the programs but not the platform image (install "
-                    "Docker for a platform-faithful run)",
+            "note": "Docker unavailable — fell back to the conda engine "
+                    "(DEPRECATED). " + _CONDA_DEPRECATION,
             "error": None}
 
 

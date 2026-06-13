@@ -94,19 +94,36 @@ async def create_async(
     model: str | None = None,
     max_budget_usd: float | None = None,
     on_text: Callable[[str], None] | None = None,
+    on_event: Callable[[dict], None] | None = None,
     validate: bool = True,
 ) -> CreateResult:
-    """Idea (or proposal text) → validated Codabench bundle, in two phases."""
+    """Idea (or proposal text) → validated Codabench bundle, in two phases.
+
+    ``on_event`` (optional) receives structured progress dicts so a caller can
+    show step-by-step activity. The pipeline emits phase lifecycle events
+    (``{"kind": "phase", ...}`` / ``{"kind": "phase_done", ...}``) and threads
+    the same callback into each backend task, which adds tool-call and result
+    events. Without it the run is silent, as before.
+    """
     if backend is None:
         from ..backends import get_claude_backend
         backend = get_claude_backend(model=model) if model else get_claude_backend()
 
+    def emit(event: dict) -> None:
+        if on_event is not None:
+            on_event(event)
+
     info = open_run(slug="create")
     run_dir = info.path
+    emit({"kind": "run_opened", "run_dir": str(run_dir)})
     mcp_servers = _mcp_servers(run_dir)
     env = {**os.environ, "AUTOCODABENCH_RUN_DIR": str(run_dir)}
 
     # ---- Phase 1: plan -----------------------------------------------------
+    emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
+          "title": "Planning the competition design",
+          "detail": "drafting specs/implementation_plan.md (task, data, metric, "
+                    "baseline, rules, ethics, schedule)"})
     plan_prompt = (
         "Open the run with autocodabench_open_run, then produce the "
         "implementation plan for this competition idea:\n\n"
@@ -127,7 +144,11 @@ async def create_async(
         max_budget_usd=max_budget_usd,
         trace_path=run_dir / "agent_trace" / "plan.jsonl",
         on_text=on_text,
+        on_event=on_event,
     ))
+    emit({"kind": "phase_done", "phase": "plan", "ok": plan_result.ok,
+          "num_turns": plan_result.num_turns,
+          "cost_usd": plan_result.total_cost_usd})
     plan_path = run_dir / "specs" / "implementation_plan.md"
     if not plan_result.ok or not plan_path.is_file():
         return CreateResult(
@@ -138,6 +159,10 @@ async def create_async(
         )
 
     # ---- Phase 2: build (fresh session; only the plan carries over) --------
+    emit({"kind": "phase", "phase": "build", "index": 2, "total": 3,
+          "title": "Building the bundle",
+          "detail": "writing competition.yaml, pages, scoring program, baseline "
+                    "solution, and data; then linting and zipping"})
     build_result = await backend.run(AgentTask(
         prompt=("The locked implementation plan is at "
                 f"{plan_path}. Read it and build the bundle now."),
@@ -149,7 +174,11 @@ async def create_async(
         max_budget_usd=max_budget_usd,
         trace_path=run_dir / "agent_trace" / "build.jsonl",
         on_text=on_text,
+        on_event=on_event,
     ))
+    emit({"kind": "phase_done", "phase": "build", "ok": build_result.ok,
+          "num_turns": build_result.num_turns,
+          "cost_usd": build_result.total_cost_usd})
     bundle_dir, zip_path = _find_bundle(run_dir)
     if not build_result.ok or bundle_dir is None:
         return CreateResult(
@@ -161,8 +190,13 @@ async def create_async(
     # ---- Validate through the check framework ------------------------------
     report = None
     if validate:
+        emit({"kind": "phase", "phase": "validate", "index": 3, "total": 3,
+              "title": "Validating the bundle",
+              "detail": "running the registered pre-launch checks"})
         from ..checks import validate_bundle_path_async
         report = await validate_bundle_path_async(bundle_dir)
+        emit({"kind": "phase_done", "phase": "validate",
+              "ok": report.ok if report is not None else True})
 
     return CreateResult(
         ok=report.ok if report is not None else True,

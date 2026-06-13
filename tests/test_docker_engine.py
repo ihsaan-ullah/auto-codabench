@@ -22,9 +22,19 @@ def test_auto_prefers_docker_when_available(monkeypatch):
 
 def test_auto_falls_back_to_conda_with_note(monkeypatch):
     monkeypatch.setattr(ex, "_docker_available", lambda: False)
-    r = ex.resolve_execution_engine("auto")
+    with pytest.warns(DeprecationWarning, match="conda execution engine is deprecated"):
+        r = ex.resolve_execution_engine("auto")
     assert r["engine"] == "conda"
     assert "Docker unavailable" in r["note"]
+    assert "DEPRECATED" in r["note"]
+
+
+def test_explicit_conda_warns_deprecation(monkeypatch):
+    # The conda engine still runs (Docker-less fallback) but is deprecated; any
+    # selection emits a DeprecationWarning so operators can migrate.
+    with pytest.warns(DeprecationWarning, match="will be removed"):
+        r = ex.resolve_execution_engine("conda")
+    assert r["engine"] == "conda" and r["error"] is None
 
 
 def test_explicit_docker_errors_without_daemon(monkeypatch):
@@ -95,11 +105,15 @@ def test_bundle_docker_image_reads_declared_image(tmp_path):
     assert ex.bundle_docker_image("demo", str(tmp_path)) == "myorg/myimage:1.2"
 
 
-def test_bundle_docker_image_defaults_to_platform_default(tmp_path):
+def test_bundle_docker_image_defaults_to_autocodabench_base(tmp_path):
     bundle = tmp_path / "demo"
     bundle.mkdir()
     (bundle / "competition.yaml").write_text("title: t\n", encoding="utf-8")
-    assert ex.bundle_docker_image("demo", str(tmp_path)) == "codalab/codalab-legacy:py37"
+    # With no declared image, the runner falls back to the autocodabench CPU
+    # base image (overridable via AUTOCODABENCH_DOCKER_IMAGE).
+    got = ex.bundle_docker_image("demo", str(tmp_path))
+    assert got == ex._DEFAULT_DOCKER_IMAGE
+    assert "autocodabench-base-cpu" in got
 
 
 # -- engine plumbing through the sandbox runner ---------------------------------

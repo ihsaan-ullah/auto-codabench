@@ -42,6 +42,25 @@ def _to_jsonable(obj: Any) -> Any:
     return repr(obj)
 
 
+def _result_preview(content: Any, limit: int = 160) -> str:
+    """One-line, length-capped preview of a tool result for progress display.
+    Tool-result content is a string or a list of content blocks."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text", "")))
+            else:
+                parts.append(str(getattr(item, "text", item)))
+        text = " ".join(p for p in parts if p)
+    else:
+        text = str(content)
+    text = " ".join(text.split())  # collapse whitespace/newlines
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class ClaudeAgentBackend:
     """Execute a phase as one Claude Agent SDK session."""
 
@@ -73,6 +92,25 @@ class ClaudeAgentBackend:
             TextBlock,
             query,
         )
+        # Block/message types for progress events vary slightly across SDK
+        # versions; import defensively so a missing name degrades to "no tool
+        # events" rather than breaking the run.
+        try:
+            from claude_agent_sdk import ToolUseBlock
+        except ImportError:  # pragma: no cover
+            ToolUseBlock = ()  # type: ignore[assignment]
+        try:
+            from claude_agent_sdk import ToolResultBlock, UserMessage
+        except ImportError:  # pragma: no cover
+            ToolResultBlock = ()  # type: ignore[assignment]
+            UserMessage = ()      # type: ignore[assignment]
+
+        def emit(event: dict) -> None:
+            if task.on_event is not None:
+                try:
+                    task.on_event(event)
+                except Exception:  # a rendering bug must never kill the run
+                    log.debug("on_event callback raised", exc_info=True)
 
         options = ClaudeAgentOptions(
             model=task.model or self.model,
@@ -104,8 +142,22 @@ class ClaudeAgentBackend:
                             texts.append(block.text)
                             if task.on_text is not None:
                                 task.on_text(block.text)
+                            emit({"kind": "text", "text": block.text})
+                        elif ToolUseBlock and isinstance(block, ToolUseBlock):
+                            emit({"kind": "tool_use",
+                                  "name": getattr(block, "name", "?"),
+                                  "input": getattr(block, "input", {}) or {}})
+                elif UserMessage and isinstance(message, UserMessage):
+                    for block in (getattr(message, "content", None) or []):
+                        if ToolResultBlock and isinstance(block, ToolResultBlock):
+                            emit({"kind": "tool_result",
+                                  "is_error": bool(getattr(block, "is_error", False)),
+                                  "preview": _result_preview(getattr(block, "content", None))})
                 elif isinstance(message, ResultMessage):
                     result_msg = message
+                    emit({"kind": "result",
+                          "num_turns": getattr(message, "num_turns", None),
+                          "cost_usd": getattr(message, "total_cost_usd", None)})
         except Exception as e:
             log.exception("Claude backend run failed")
             return AgentRunResult(
