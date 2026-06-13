@@ -58,20 +58,53 @@ source of truth.
    - shrink the bundle to fit CPU when the plan asked for GPU.
 6. **Upload only on explicit user request.** Uploading creates a
    public Codabench competition.
-7. **Log progress.**
-   - `stage_started` for `8.bundle` at the very start,
-   - one `bundle_file_written` per major artifact (yaml, scoring,
-     solution, pages),
-   - `attempt_started` / `attempt_finished` events for each
-     baseline-run / notebook-run iteration,
-   - `stage_done` at the end with the zip path (only on full success).
-8. **Synthetic data is forbidden.** If the plan calls for real data
+7. **Log progress (two channels).**
+   - *Audit channel* (machine trail): `stage_started` for `8.bundle` at
+     the very start; one `bundle_file_written` per major artifact (yaml,
+     scoring, solution, pages); `attempt_started` / `attempt_finished`
+     per baseline-run / notebook-run iteration; `stage_done` at the end
+     with the zip path (only on full success).
+   - *User channel* (what a non-expert reads as the run proceeds): emit
+     `autocodabench_log_event(kind="progress", message="<one plain,
+     non-technical sentence>")` at each meaningful milestone — for
+     example, "Wrote the scoring program and competition pages.",
+     "Generated the dataset (200 train / 100 test).", "Baseline ran
+     successfully: balanced accuracy 0.92.", "Packaged the bundle as a
+     zip archive." Keep each message short and free of stack traces,
+     tool names, and file dumps; the surface decides whether to show the
+     audit channel. Aim for roughly one `progress` message per numbered
+     step below, so the run never appears idle.
+8. **Report every deviation in plain language.** Whenever you adapt the
+   bundle under rule 5 (port a broken API, drop or correct a removed
+   keyword argument, change `docker_image`, pin a package), emit
+   `autocodabench_log_event(kind="deviation", message="<what the plan
+   specified → why it did not work here → what you changed → the result,
+   e.g. the resulting metric>")`. Example: "The plan specified
+   `LogisticRegression(multi_class='multinomial')`, but that argument was
+   removed in scikit-learn 1.7; it is the default for the chosen solver,
+   so we removed it. The baseline now runs with balanced accuracy 0.92."
+   Each deviation must ALSO be recorded in `updated_implementation_plan.md`
+   (rule 9).
+9. **Synthetic data is forbidden.** If the plan calls for real data
    (any dataset that exists outside `sklearn.datasets`-style synthetic
    generators) and you can't access it, STOP and report
    `validate_runtime: false` with `error: "real data inaccessible
    from this session"`. Generating fake stand-ins to make the
    pipeline complete would silently invalidate every downstream
    experiment.
+10. **Record deviations in `updated_implementation_plan.md`.** If — and
+    only if — you adapted the bundle under rule 5/8, write
+    `autocodabench_snapshot_spec(filename="updated_implementation_plan.md",
+    body=...)` capturing the bundle as actually built. Leave the original
+    `implementation_plan.md` untouched (it is the locked provenance
+    record). The updated plan MUST open with a section
+    `## Changes from the original plan` that lists each change as a short
+    bullet — *original specification → what changed → why* — written for a
+    non-expert, so the reader sees at a glance what differs and what does
+    not. The remainder restates the plan with the changes applied, so the
+    file is a complete and accurate description of the delivered bundle. If
+    you made no deviations, do NOT create this file; its absence means the
+    bundle was built exactly as planned.
 
 ---
 
@@ -201,15 +234,30 @@ feedback + one final, dates "TBD"), tasks (scoring_program,
 input_data, reference_data references), leaderboards (one column per
 metric in plan §3), pages (the four written above).
 
-Also set `docker_image:` — pick a reasonable Codabench-hosted image
-matching the plan's requirements (e.g. `codalab/codalab-legacy:py3`
-for pure sklearn; a tensorflow image only if the plan explicitly
-asks). This choice is load-bearing: Codabench's worker runs your
-programs INSIDE this image and never installs `requirements.txt`,
-and the local runner does the same whenever Docker is available
-(the docker engine — the per-run conda env in the next section is
-the fallback for hosts without Docker, and hosts the notebook either
-way). Pick an image that already ships the bundle's dependencies.
+Also set `docker_image:`. **Default to the autocodabench base images**,
+which ship the essential scientific stack and a working notebook
+toolchain: `autocodabench/autocodabench-base-cpu:latest` for a CPU
+bundle, or `autocodabench/autocodabench-base-gpu:latest` if the plan
+requires a GPU. (Substitute the registry namespace your deployment
+publishes them under; if they are not available, fall back to a stock
+Codabench image that ships the dependencies — e.g.
+`codalab/codalab-legacy:py312` for current scikit-learn — never the old
+`:py3`/`:py37`, which predate symbols like `balanced_accuracy_score`.)
+
+This choice is load-bearing: Codabench's worker runs your programs
+INSIDE this image and never installs `requirements.txt`, and the local
+runner does the same whenever Docker is available. Pick an image that
+already ships the bundle's dependencies.
+
+**Record the final, working image.** If you change `docker_image` during
+the self-validation loop (§5) to make the baseline run — for example,
+moving to an image that ships a needed library — the value in
+`competition.yaml` MUST be the image the run finally PASSED under, not
+the one you started from. The image in `competition.yaml` is exactly
+what Codabench will use, so it has to be the one proven to work here.
+When you change it, emit a `deviation` event (rule 8) naming the old and
+new image and the reason, and report the final image in the closing
+summary (§7).
 
 ---
 
@@ -367,11 +415,21 @@ Emit one of two closing blocks.
   validate_bundle  — passed
   baseline_run     — passed: <metric_key>=<score> in <N>s
   starting_kit     — passed: <N> cells executed in <M>s
+  docker_image     — `<the image competition.yaml now declares>` (what the
+                      baseline passed under, and what Codabench will use)
   env              — `<env_name>` (<package_count> packages, install via <uv|pip>)
 
 Choices I made where the plan was ambiguous:
   - <list any defaults you picked, or "none — the plan was fully concrete">
+
+Changes from the plan:
+  - <"none — built exactly as planned", OR a one-line pointer:
+     "see specs/updated_implementation_plan.md for N change(s)">
 ```
+
+Before this block, emit a final
+`autocodabench_log_event(kind="progress", message="Bundle packaged and
+self-tested successfully.")` so the user channel ends on a clear note.
 
 Then:
 ```

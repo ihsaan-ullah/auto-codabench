@@ -77,6 +77,24 @@ by a locked, human-editable `implementation_plan.md`. The build agent acts
 exclusively through a typed MCP tool surface, so every authoring action is
 logged and the finished run is replayable.
 
+**Runtime fidelity through the platform's own container.** The build phase
+does not merely lint the bundle; it *executes* the bundle's baseline and
+starting-kit notebook inside the competition's declared `docker_image` — the
+same image, mounted the same way, that Codabench's worker uses — and iterates
+until both run. Two consequences make the result trustworthy. First, when the
+self-validation loop must change `docker_image` to obtain a working run (for
+instance, moving off a legacy image whose scikit-learn predates a needed
+symbol), the *final, proven* image is what `competition.yaml` records and what
+`create` reports — so the value uploaded to Codabench is the one already shown
+to work, not a guess. Second, autocodabench ships two purpose-built base
+images (see [`docker/`](docker/)) — `autocodabench-base-cpu` and
+`autocodabench-base-gpu`, derived from the Codabench `py312` and `gpu310`
+worker images and pre-loaded with the essential scientific-Python stack and a
+known-good notebook toolchain. Using them as the default starting point means
+the common case runs with no per-run installation, which both removes a
+frequent source of build-time failure and conserves the operator's model
+budget.
+
 We support two authentication paths, in order of preference for local use.
 If Claude Code is installed and logged in (Pro/Max), no further
 configuration is needed: usage draws from the plan's monthly Agent SDK

@@ -1,0 +1,40 @@
+# Essential scientific-Python stack pre-installed in the autocodabench base
+# images, so the great majority of generated competition bundles execute with
+# no per-run installation at all. This is the single source of truth for both
+# the CPU and GPU images (see autocodabench-cpu.Dockerfile /
+# autocodabench-gpu.Dockerfile).
+#
+# Two design points are load-bearing:
+#
+#  1. The core data-science stack is left unpinned so each image picks up the
+#     latest release compatible with its interpreter. This is deliberate: a
+#     recurring failure mode is a base image whose scikit-learn predates a
+#     symbol a bundle uses (for example, codalab/codalab-legacy:py3 ships
+#     scikit-learn 0.19.1, which lacks balanced_accuracy_score). Building on a
+#     current interpreter (Python 3.12 / 3.10) and installing the current
+#     stack removes that class of error.
+#
+#  2. The notebook-execution toolchain IS pinned. The starting-kit runner
+#     invokes `jupyter execute --inplace --allow-errors=false`; nbclient 0.7.x
+#     exposes those as traitlets-style flags, whereas nbclient >= 0.10 moved to
+#     an argparse CLI that rejects `--allow-errors=false`. Pinning nbclient to
+#     the compatible line is what lets the starting-kit notebook run
+#     unattended instead of failing on flag parsing.
+
+# --- core scientific-Python stack (the curated autocodabench whitelist) ------
+numpy
+pandas
+scikit-learn
+scipy
+matplotlib
+seaborn
+pillow
+joblib
+openpyxl
+
+# --- starting-kit notebook toolchain (pinned; see note 2 above) --------------
+nbclient==0.7.4
+nbconvert>=7,<8
+nbformat
+ipykernel
+jupyter-client<8

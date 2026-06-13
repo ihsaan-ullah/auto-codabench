@@ -172,9 +172,37 @@ to a skipped result, never to a silent pass.
 ```bash
 autocodabench create "AI-generated-text detection, balanced accuracy, \
     two phases, result submission" \
-    --data ./sample_data/ \
-    --verbose
+    --data ./sample_data/
 ```
+
+Before any tokens are spent, `create` prints its full effective configuration
+— backend and auth path, model, the exact output directory, sample data, cost
+cap, output mode, and the three pipeline stages — then (on a terminal) asks
+where the output should go and confirms before starting.
+
+The run reports progress at one of three levels of detail:
+
+- **Default** — a concise, user-oriented narrative: a header per phase and the
+  plain-language milestone messages the agent emits, including any *deviation*
+  from the plan stated in non-technical terms (for example, that the plan named
+  a scikit-learn argument removed in a recent release, that it was corrected,
+  and the resulting metric). Raw tool calls, raw tool output, and the agent's
+  internal reasoning are not shown.
+- **`--debug`** — the full developer trace: every tool call with its arguments,
+  tool errors, and the agent's reasoning. A notice before the run explains that
+  this mode is intended for diagnosing the pipeline rather than routine use.
+- **`--quiet`** — only the final summary.
+
+If the build phase departs from the locked plan in any way, it writes
+`specs/updated_implementation_plan.md`, which opens with a *Changes from the
+original plan* section enumerating each change (original specification → what
+changed → why); the original `implementation_plan.md` is preserved unchanged as
+the provenance record. Absence of the updated file means the bundle was built
+exactly as planned.
+
+Other useful flags: `--out DIR` (set the output location non-interactively),
+`--yes` (skip the confirmation), `--model` (override the model), and
+`--max-budget-usd` (a cost cap per phase).
 
 The pipeline proceeds as follows:
 

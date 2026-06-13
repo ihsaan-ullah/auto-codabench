@@ -6,6 +6,17 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Deprecated
+- **The conda execution engine.** Docker is the only platform-faithful path
+  (the Codabench worker runs programs inside the bundle's `docker_image` and
+  installs nothing), so the project is consolidating on it. The conda engine
+  still runs — it remains the fallback for hosts without a Docker daemon (CI,
+  HF Spaces) and the current starting-kit notebook host — but
+  `resolve_execution_engine` now emits a `DeprecationWarning` and an
+  explanatory note whenever conda is selected. Removal is planned once the base
+  images are validated in production and Docker-less environments have a
+  migration path (notebook execution moving into the container).
+
 ### Changed
 - **`auth status` and `auth use` now verify by default.** Both realize the
   resolved auth preference and authenticate the agent SDK with it — one
@@ -23,6 +34,12 @@ All notable changes to autocodabench. Format follows
   bundle directory or zip, hand-written or generated.
 
 ### Fixed
+- CLI `create` runs no longer tell the user to click a "workspace panel",
+  "phase bar", or "Advance to Phase 2" button — UI elements that do not exist
+  on the command line. The plan skill body was made surface-neutral and the
+  non-interactive footers now explicitly suppress web-UI references and supply
+  a plain-text hand-off ("Phase 2 will now run automatically"); the web UI is
+  unaffected (it keeps its own footer with the phase-bar wording).
 - Runner misclassified a λ-style (prediction-file) bundle as γ-style when
   `ingestion_program/` existed but was empty — `init_bundle` creates that
   skeleton directory for every bundle, so the runner then tried to execute
@@ -34,7 +51,56 @@ All notable changes to autocodabench. Format follows
   found by validating the STYLE-TRANS-FAIR production reference bundle;
   regression-tested.
 
-### Added
+- **autocodabench base container images** (`docker/`): `autocodabench-base-cpu`
+  (from `codalab/codalab-legacy:py312`) and `autocodabench-base-gpu` (from
+  `codalab/codalab-legacy:gpu310`), each pre-loaded with the essential
+  scientific-Python stack and a pinned starting-kit notebook toolchain
+  (`nbclient` compatible with the runner's `jupyter execute --inplace
+  --allow-errors=false`, the source of a long version-resolution loop in
+  practice). `docker/build_and_push.sh` builds and publishes both under a
+  chosen namespace. These become the runner's default `docker_image`, resolved
+  from `AUTOCODABENCH_DOCKER_IMAGE` / `AUTOCODABENCH_DOCKER_IMAGE_GPU` (or
+  `AUTOCODABENCH_DOCKER_NAMESPACE`), replacing the legacy
+  `codalab/codalab-legacy:py37` default. Pre-baking the dependencies lets most
+  bundles run with no per-run installation — removing a frequent build failure
+  and conserving model budget.
+- **Final docker image is recorded and reported.** When the build phase's
+  self-validation loop changes `docker_image` to obtain a passing run, the
+  *final, proven* image is what `competition.yaml` records; `create` now prints
+  it in the summary ("what Codabench will run"), and the build skill reports it
+  in its closing block and as a `deviation` message — so the value uploaded to
+  Codabench is the one already shown to work locally.
+- **`create` is no longer an opaque idle.** It now prints its full effective
+  configuration before spending anything (backend, auth path, model, the exact
+  output directory, sample data, cost cap, output mode, and the three pipeline
+  stages), prompts for the output location when `--out` is not given, and
+  confirms before starting (skip with `--yes`). An aborted confirmation removes
+  the freshly created run dir. New `create` flags: `--out`, `--yes`/`-y`,
+  `--debug`, `--quiet`, `--no-validate`.
+- **Three-tier, user-oriented progress reporting for `create`.** The default
+  output is a concise narrative for end users — a header per phase plus the
+  plain-language milestone and *deviation* messages the agent emits (raw tool
+  calls, raw output, internal reasoning, and benign parallel-call cancellations
+  are omitted). `--debug` shows the full developer trace (cancellation cascades
+  are relabelled as benign retries rather than errors), preceded by a notice
+  that it is for diagnosing the pipeline, not routine use. `--quiet` prints only
+  the final summary. Mechanism: a structured `on_event` callback on the backend
+  contract (`AgentTask.on_event`; the Claude backend emits `tool_use` /
+  `tool_result` / `text` / `result` events), and a user-facing channel carried
+  by `autocodabench_log_event(kind="progress"|"deviation", message=...)`.
+- **`updated_implementation_plan.md`.** When the build phase departs from the
+  locked plan (for example, correcting a keyword argument removed in a recent
+  library release), it records the bundle as actually built in
+  `specs/updated_implementation_plan.md`, opening with a *Changes from the
+  original plan* section (original specification → what changed → why). The
+  original `implementation_plan.md` is preserved unchanged as the provenance
+  record; absence of the updated file means the bundle matched the plan.
+- **Version-robust planning guidance.** The planning skill now instructs the
+  agent to specify the smallest set of constructor arguments that pins the
+  intended behavior and to avoid keyword arguments deprecated or removed in
+  recent library releases (so a concrete plan does not fail against the
+  installed version), with `LogisticRegression(multi_class=...)` cited as the
+  motivating case.
 - **In-place Claude sign-in.** When the subscription path is chosen but no
   login is found (the `auth status` picker, `auth use subscription`, or the
   `create` / `--judged` preflight), autocodabench now asks for consent and,
