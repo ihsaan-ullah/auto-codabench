@@ -46,7 +46,6 @@ Issues = "https://github.com/ktgiahieu/auto-codabench/issues"
 
 [project.scripts]
 autocodabench = "autocodabench.cli.main:main"
-codabench-validate = "autocodabench.cli.main:validate_main"
 autocodabench-mcp-server = "autocodabench.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]

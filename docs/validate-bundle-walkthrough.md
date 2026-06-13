@@ -1,9 +1,9 @@
-# An execution trace of `codabench-validate`
+# An execution trace of `autocodabench validate-bundle`
 
 This document presents a complete execution trace of the command
 
 ```bash
-codabench-validate experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate-bundle experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
 ```
 
 from shell invocation to process exit code. It is written for a reader who
@@ -22,10 +22,10 @@ position).
 ## Overview: the call graph
 
 ```
-shell: codabench-validate <bundle>
-  └─ cli/main.py: validate_main()            ← console-script entry point
+shell: autocodabench validate-bundle <bundle>
+  └─ cli/main.py: main()                     ← console-script entry point
        ├─ auth.load_dotenv()                 ← read <cwd>/.env (never overrides real env)
-       ├─ argparse                           ← parse flags
+       ├─ argparse: _build_parser()          ← parse subcommand + flags
        └─ _cmd_validate()
             ├─ [--judged only] auth preflight
             └─ checks/api.py: validate_bundle_path()
@@ -57,34 +57,41 @@ Two design properties organize everything that follows:
 
 ## 1. Stage 0 — from shell to Python
 
-`codabench-validate` is not a shell script. `pyproject.toml` declares:
+`autocodabench` is not a shell script. `pyproject.toml` declares:
 
 ```toml
 [project.scripts]
-codabench-validate = "autocodabench.cli.main:validate_main"
+autocodabench = "autocodabench.cli.main:main"
 ```
 
 When the package is installed with `pip install -e .`, pip writes a small
 launcher onto the `PATH` that imports `autocodabench.cli.main` and calls
-`validate_main()`. The first line of project code that executes is
-therefore `validate_main` in `src/autocodabench/cli/main.py`.
+`main()`. The first line of project code that executes is therefore
+`main` in `src/autocodabench/cli/main.py`.
 
-(The subcommand form `autocodabench validate …` reaches the identical
-code through `main()`; the alias exists so that the validator behaves as
-a standalone tool that can be pointed at any bundle, whether hand-written
-or generated.)
+(`validate-bundle` is a subcommand of the single `autocodabench` entry
+point, so the validator behaves as a standalone tool that can be pointed
+at any bundle, whether hand-written or generated. `validate` is retained
+as a back-compatible alias for the same subcommand.)
 
-## 2. Stage 1 — CLI: argument parsing, `.env` loading, and auth preflight
+## 2. Stage 1 — CLI: argument parsing, `.env` loading, and dispatch
 
 **File: `src/autocodabench/cli/main.py`**
 
 ```python
-def validate_main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="codabench-validate", ...)
-    _add_validate_args(parser)        # bundle, --facts, --judged, --backend, --model, --json
+def main(argv=None) -> int:
     from ..auth import load_dotenv
     load_dotenv()                     # <cwd>/.env, if present
-    return _cmd_validate(parser.parse_args(argv))
+    args = _build_parser().parse_args(argv)
+    return args.func(args)            # → _cmd_validate for the validate-bundle subcommand
+```
+
+`_build_parser()` registers the subcommand and its flag surface:
+
+```python
+p = sub.add_parser("validate-bundle", aliases=["validate"], ...)
+_add_validate_args(p)                 # bundle, --facts, --judged, --backend, --model, --json
+p.set_defaults(func=_cmd_validate)
 ```
 
 - `_add_validate_args` defines the flag surface. With no flags, the
@@ -419,13 +426,13 @@ this page.
 ```bash
 # the human-built production bundle (passes the gates; 4 advisory findings,
 # incl. uncapped submissions — which --judged then catches contradicting its own pages)
-codabench-validate experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate-bundle experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
 
 # machine-readable
-codabench-validate <bundle> --json | python -m json.tool
+autocodabench validate-bundle <bundle> --json | python -m json.tool
 
 # add the LLM-judged advisory tier (prompts for auth if you have none)
-codabench-validate <bundle> --judged
+autocodabench validate-bundle <bundle> --judged
 
 # the full check inventory, by tier, with citations
 autocodabench checks list

@@ -16,12 +16,12 @@ python -m pytest tests/                   # unit suite — fast, fully keyless, 
 
 # Keyless CLI paths (work with no Claude auth at all):
 autocodabench demo --out /tmp/demo        # rebuild+validate the demo bundle from a recorded run
-codabench-validate <bundle-dir-or-zip> [--facts facts.yaml]
+autocodabench validate-bundle <bundle-dir-or-zip> [--facts facts.yaml]
 autocodabench checks list                 # registered checks by tier, with citations
 
 # Auth-requiring paths (subscription login preferred; ANTHROPIC_API_KEY second):
 autocodabench auth status [--probe]       # which auth path is active + foot-gun warnings
-codabench-validate <bundle> --judged      # adds LLM-judged advisory checks
+autocodabench validate-bundle <bundle> --judged      # adds LLM-judged advisory checks
 autocodabench create "<idea>" [--data D]  # agentic plan→build pipeline
 
 python -m autocodabench.core.bundle_io    # core smoke test (demo bundle in a tempdir)
@@ -56,6 +56,6 @@ Seven-phase pipeline (plan → implement+self-validate → per-submission reform
 ## Conventions
 
 - `fastmcp` is pinned to exactly `2.14.7` — looser constraints break on HF Spaces (see pyproject comment and the Dockerfile install-order comment). Don't relax it.
-- The unit suite must stay keyless and fast: live-SDK behavior is verified manually (`codabench-validate --judged`, `autocodabench auth status --probe`), never in `tests/`.
+- The unit suite must stay keyless and fast: live-SDK behavior is verified manually (`autocodabench validate-bundle --judged`, `autocodabench auth status --probe`), never in `tests/`.
 - Judged checks emit FINDINGs, never PASS/FAIL gates — "valid" is defined by executable checks only. Preserve the three-status report semantics (FAIL gates; FINDING advises; ATTESTATION_REQUIRED surfaces).
 - Do not add a Claude co-author trailer to commits or PRs.

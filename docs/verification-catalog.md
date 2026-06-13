@@ -6,9 +6,9 @@ The catalog is organized into four layers, distinguished by *what is under test*
 
 | Layer | Object under test | Mechanism | Section |
 |---|---|---|---|
-| 1 | The organizer's bundle (static) | 17 registered checks (`codabench-validate`) | §2 |
+| 1 | The organizer's bundle (static) | 17 registered checks (`autocodabench validate-bundle`) | §2 |
 | 2 | The organizer's bundle (dynamic) | Actual execution of the bundle's programs | §3 |
-| 3 | autocodabench itself | 64-test keyless unit suite (`tests/`) | §4 |
+| 3 | autocodabench itself | 65-test keyless unit suite (`tests/`) | §4 |
 | 4 | The system end to end | CI matrix, seeded-defect instrument, blinded experiment harness | §5 |
 
 Layers 1–2 answer the organizer's question, "what will be tested about my competition?" Layers 3–4 answer the reviewer's question, "why should the answers from layers 1–2 be trusted?"
@@ -28,7 +28,7 @@ Every registered check carries a citation, either to the Codabench bundle schema
 
 ---
 
-## 2. Layer 1 — static checks on the bundle (`codabench-validate`)
+## 2. Layer 1 — static checks on the bundle (`autocodabench validate-bundle`)
 
 ### 2.1 The structural gate: `bundle-schema`
 
@@ -96,7 +96,7 @@ In the agentic `create` pipeline these steps are mandatory self-validation: a bu
 
 ## 4. Layer 3 — the unit suite: verifying the verifier
 
-The 64 tests in `tests/` verify autocodabench itself. The suite is **keyless, network-free, and sub-second** as a hard rule: every agentic code path is exercised through the recorded-replay backend rather than a live model, which is what allows continuous integration and reviewers to run all of it with no credentials. The tests are listed in full because a substantial fraction of them verify the *epistemic contract* of §1 — that gates gate, findings advise, and skips never pass — rather than ordinary plumbing.
+The 65 tests in `tests/` verify autocodabench itself. The suite is **keyless, network-free, and sub-second** as a hard rule: every agentic code path is exercised through the recorded-replay backend rather than a live model, which is what allows continuous integration and reviewers to run all of it with no credentials. The tests are listed in full because a substantial fraction of them verify the *epistemic contract* of §1 — that gates gate, findings advise, and skips never pass — rather than ordinary plumbing.
 
 ### 4.1 The check framework checked (`test_checks.py`, 13 tests)
 
@@ -186,13 +186,14 @@ The 64 tests in `tests/` verify autocodabench itself. The suite is **keyless, ne
 | `test_bundle_docker_image_defaults_to_platform_default` | An undeclared image resolves to Codabench's default (`codalab/codalab-legacy:py37`) |
 | `test_run_user_submission_requires_daemon_for_explicit_docker` | The engine error propagates through the public scoring entry point |
 
-### 4.7 The CLI contract (`test_cli.py`, 5 tests)
+### 4.7 The CLI contract (`test_cli.py`, 6 tests)
 
 | Test | What it establishes |
 |---|---|
 | `test_checks_list` | The registry listing renders with all tiers |
 | `test_demo_then_validate` | The full keyless path — replay a recorded run, then validate the result — works end to end |
-| `test_validate_json_output` | `--json` emits a machine-readable report |
+| `test_validate_json_output` | `validate-bundle --json` emits a machine-readable report |
+| `test_validate_legacy_alias_still_works` | `validate` remains a back-compatible alias for `validate-bundle` |
 | `test_validate_exit_code_on_gate_failure` | A gated failure exits non-zero (the contract scripts and CI depend on) |
 | `test_version` | `--version` reports the package version |
 
@@ -214,7 +215,7 @@ CI runs the entire layer-3 suite across a Python 3.10–3.13 × Linux/macOS matr
 
 ### 5.4 What is deliberately *not* unit-tested
 
-Live-SDK behavior (a real Claude session, a real judged check) is verified manually before releases (`codabench-validate --judged`, `autocodabench auth status --probe`) and measured by the experiments, never placed in `tests/`. Live model calls are slow, billed, and non-deterministic; admitting them into the unit suite would trade a fast, trustworthy oracle for a flaky one. The same boundary applies to actual container execution: the docker engine's selection logic and command construction are unit-tested (§4.6), while pulling and running a real image is verified manually and by experiment runs on Docker-equipped hosts. The boundary is stated as an invariant in [`architecture.md`](./architecture.md).
+Live-SDK behavior (a real Claude session, a real judged check) is verified manually before releases (`autocodabench validate-bundle --judged`, `autocodabench auth status --probe`) and measured by the experiments, never placed in `tests/`. Live model calls are slow, billed, and non-deterministic; admitting them into the unit suite would trade a fast, trustworthy oracle for a flaky one. The same boundary applies to actual container execution: the docker engine's selection logic and command construction are unit-tested (§4.6), while pulling and running a real image is verified manually and by experiment runs on Docker-equipped hosts. The boundary is stated as an invariant in [`architecture.md`](./architecture.md).
 
 ---
 
@@ -225,7 +226,7 @@ Live-SDK behavior (a real Claude session, a real judged check) is verified manua
 | Registered checks on the bundle | 17 (11 deterministic, of which 1 gates; 1 judged; 5 attestation) |
 | Structural lint condition families inside the gate | 6 |
 | Dynamic execution stages | 3 (baseline, starting kit, external submission) |
-| Unit tests on the tool | 64 across 7 modules, keyless and sub-second |
+| Unit tests on the tool | 65 across 7 modules, keyless and sub-second |
 | Execution engines | 2 (docker — platform-faithful; conda — fallback with fidelity note) |
 | Seeded defect classes in the validator instrument | 12 (9 deterministic-tier, 3 judged-tier) |
 | CI matrix | Python 3.10–3.13 × Linux/macOS, plus offline demo and wheel checks |

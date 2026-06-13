@@ -2,14 +2,14 @@
 
 Entry points are tiered by their authentication demands, keyless first:
 
-  autocodabench validate BUNDLE [--facts F] [--judged]   # keyless (unless --judged)
-  autocodabench demo [--out DIR]                          # keyless replay demo
-  autocodabench create "IDEA" [--data PATH]               # agentic; subscription or API key
+  autocodabench validate-bundle BUNDLE [--facts F] [--judged]  # keyless (unless --judged)
+  autocodabench demo [--out DIR]                               # keyless replay demo
+  autocodabench create "IDEA" [--data PATH]                    # agentic; subscription or API key
   autocodabench auth status [--probe]
   autocodabench checks list
 
-``codabench-validate`` is an alias console script for the validator, usable
-on any bundle — including hand-written ones that never touched an agent.
+``validate-bundle`` validates any bundle — including hand-written ones that
+never touched an agent (``validate`` remains as a back-compatible alias).
 
 The CLI is a thin argument-parsing layer over the library: it contributes
 ``.env`` loading and the live-auth preflight, and contains no validation
@@ -214,7 +214,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("validate", help="validate a bundle directory or zip (keyless)")
+    p = sub.add_parser("validate-bundle", aliases=["validate"],
+                       help="validate a bundle directory or zip (keyless)")
     _add_validate_args(p)
     p.set_defaults(func=_cmd_validate)
 
@@ -260,21 +261,6 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()  # <cwd>/.env, if present; never overrides real env vars
     args = _build_parser().parse_args(argv)
     return args.func(args)
-
-
-def validate_main(argv: list[str] | None = None) -> int:
-    """Entry point for the ``codabench-validate`` alias."""
-    parser = argparse.ArgumentParser(
-        prog="codabench-validate",
-        description="Validate a Codabench bundle (deterministic checks are "
-                    "keyless; --judged adds LLM-graded advisory checks).",
-    )
-    parser.add_argument("--version", action="version",
-                        version=f"%(prog)s {__version__}")
-    _add_validate_args(parser)
-    from ..auth import load_dotenv
-    load_dotenv()
-    return _cmd_validate(parser.parse_args(argv))
 
 
 if __name__ == "__main__":  # pragma: no cover

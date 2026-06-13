@@ -214,6 +214,6 @@ The `auto_codabench/` package was restructured into the pip-installable `src/aut
 - `setup.sh` symlink sources now point at `src/autocodabench/skills/`; re-run the script once per checkout.
 - The MCP server module is `python -m autocodabench.mcp.server` (the old `auto_codabench.mcp_server.server` path no longer exists).
 - Default artifact roots moved from `auto_codabench/{runs,bundles}/` to `./.autocodabench/{runs,bundles}/` (override with `AUTOCODABENCH_HOME`).
-- The per-bundle deterministic checks that previously lived only in `validate_bundle` are now the `codabench-validate` CLI and check registry; future harness phases should call that interface instead of re-implementing the lint.
+- The per-bundle deterministic checks that previously lived only in `validate_bundle` are now the `autocodabench validate-bundle` CLI and check registry; future harness phases should call that interface instead of re-implementing the lint.
 
 Recorded artifacts inside old runs still reference the old layout; this is expected and harmless.

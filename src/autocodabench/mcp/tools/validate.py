@@ -2,8 +2,8 @@
 
 A thin ``@logged_tool`` wrapper over :func:`core.bundle_io.validate_bundle`
 (the schema lint); the full three-tier check framework is the separate
-``codabench-validate`` surface. Keeping the wrapper logic-free guarantees
-that agent-side and CLI-side linting cannot diverge.
+``autocodabench validate-bundle`` surface. Keeping the wrapper logic-free
+guarantees that agent-side and CLI-side linting cannot diverge.
 """
 from __future__ import annotations
 

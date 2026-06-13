@@ -64,7 +64,7 @@ overrides variables already present in the real environment. Consequently,
 `ANTHROPIC_API_KEY` may be placed in a `.env` file in the working
 directory instead of being exported.
 
-The commands `autocodabench create` and `codabench-validate --judged`
+The commands `autocodabench create` and `autocodabench validate-bundle --judged`
 perform an authentication preflight before starting a session. When no
 credentials are found and the command is running on an interactive
 terminal, the preflight offers two options: completing a subscription
@@ -73,7 +73,7 @@ input, with an optional save to `./.env` (written with file mode 600). In
 non-interactive contexts, these commands exit with status 2 and print
 guidance instead.
 
-Keyless commands (`validate`, `demo`, `checks list`) do not consult
+Keyless commands (`validate-bundle`, `demo`, `checks list`) do not consult
 authentication state at all.
 
 ---
@@ -85,8 +85,8 @@ autocodabench or written by hand, supplied as a directory or a zip
 archive:
 
 ```bash
-codabench-validate path/to/bundle/          # or bundle.zip
-codabench-validate bundle.zip --json        # machine-readable report
+autocodabench validate-bundle path/to/bundle/          # or bundle.zip
+autocodabench validate-bundle bundle.zip --json        # machine-readable report
 autocodabench checks list                   # every check, by tier, with citations
 ```
 
@@ -124,7 +124,7 @@ task_type: binary_classification_imbalanced
 ### LLM-judged checks (authentication required)
 
 ```bash
-codabench-validate path/to/bundle --judged
+autocodabench validate-bundle path/to/bundle --judged
 ```
 
 This option adds advisory checks graded by an LLM — for example, whether

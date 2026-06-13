@@ -94,7 +94,7 @@ cannot detect).
 
 ```bash
 autocodabench demo --out /tmp/demo
-codabench-validate /tmp/demo/demo-ai-text-detection.zip
+autocodabench validate-bundle /tmp/demo/demo-ai-text-detection.zip
 ```
 
 **Procedure.** Every live run records each MCP tool call (name and full
@@ -165,7 +165,7 @@ was $2.69, and the run comprised 61 fully audited tool calls.
 ### 3.4 The check framework: competition design as an executable checklist **[implemented]**
 
 ```bash
-codabench-validate <bundle-dir-or-zip> [--facts facts.yaml] [--judged]
+autocodabench validate-bundle <bundle-dir-or-zip> [--facts facts.yaml] [--judged]
 autocodabench checks list        # the live inventory, by tier, with citations
 ```
 
@@ -445,10 +445,10 @@ authentication requirement.
 |------|---------|-------------|
 | Unit suite | `python -m pytest tests/` | no |
 | Core smoke | `python -m autocodabench.core.bundle_io` | no |
-| Offline E2E + validation | `autocodabench demo --out /tmp/d && codabench-validate /tmp/d/demo-ai-text-detection.zip` | no |
+| Offline E2E + validation | `autocodabench demo --out /tmp/d && autocodabench validate-bundle /tmp/d/demo-ai-text-detection.zip` | no |
 | Check inventory | `autocodabench checks list` | no |
 | E3 deterministic baseline | `python experiments/backbone_bench/run_judge_bench.py` | no |
-| Judged tier | `codabench-validate <bundle> --judged [--backend ollama:<model>]` | Claude auth, or none with a local Ollama model |
+| Judged tier | `autocodabench validate-bundle <bundle> --judged [--backend ollama:<model>]` | Claude auth, or none with a local Ollama model |
 | Judge bench per backbone | `python experiments/backbone_bench/run_judge_bench.py --backend <spec> --runs 3` | per backbone |
 | Full live pipeline | `autocodabench create "<idea>" [--backend <spec>] --verbose` | per backbone |
 | Ground-truth harness | see `experiments/bundle_creation_test/README.md` | yes |

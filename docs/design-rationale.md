@@ -4,7 +4,7 @@ This document explains *why* autocodabench is structured the way it is. It is wr
 
 We answer that question constructively. Section 2 presents exactly that single-file design and takes it seriously. Each subsequent section identifies one concrete way the simple design fails, states the design decision that resolves the failure, names the package directory that embodies the decision, and — where the decision was genuinely contested during development — records the alternative we rejected and why. By the end, every directory under `src/autocodabench/` has been derived from a failure of a simpler design, rather than asserted.
 
-A companion document, [`architecture.md`](./architecture.md), gives the resulting structure as a reference map; [`codabench-validate-walkthrough.md`](./codabench-validate-walkthrough.md) traces one command through the code line by line. This document sits before both: it explains why the map looks the way it does.
+A companion document, [`architecture.md`](./architecture.md), gives the resulting structure as a reference map; [`validate-bundle-walkthrough.md`](./validate-bundle-walkthrough.md) traces one command through the code line by line. This document sits before both: it explains why the map looks the way it does.
 
 ---
 
@@ -80,7 +80,7 @@ This is the oldest idea in the document (layered architecture), and it was not c
 
 The two engines make different promises, and the difference is the point. The conda engine answers "do the programs run?" — but it is strictly *more permissive* than the platform, precisely because it installs the bundle's requirements while the platform installs nothing: a scorer that depends on a package present in the cloned environment but absent from the declared `docker_image` passes the conda run and fails on Codabench. The docker engine answers the question the organizer actually has: "will this run on the platform?" A clean run under it is evidence of platform behavior — a subsequent failure on Codabench points at the server, not at the bundle — which is why it is the default whenever Docker is available, and why every conda-engine result carries an explicit fidelity note rather than passing silently for more than it proved.
 
-Why is this a *separate directory* from `core/` rather than a submodule of it? Because the two have different trust and cost profiles, and code that depends only on `core/` should be able to say so. Parsing a YAML file is instantaneous and safe; cloning a conda environment takes minutes and executes third-party code. The import boundary makes the distinction checkable: `checks/deterministic.py` imports `core` and not `runner`, and a reader can verify from the imports alone that running `codabench-validate` never executes bundle code.
+Why is this a *separate directory* from `core/` rather than a submodule of it? Because the two have different trust and cost profiles, and code that depends only on `core/` should be able to say so. Parsing a YAML file is instantaneous and safe; cloning a conda environment takes minutes and executes third-party code. The import boundary makes the distinction checkable: `checks/deterministic.py` imports `core` and not `runner`, and a reader can verify from the imports alone that running `autocodabench validate-bundle` never executes bundle code.
 
 One further choice deserves a sentence: the runner provides *one-shot* functions (`prepare_run_env`, `run_baseline_submission`, ...) and deliberately contains no retry loop. Iteration — "the run failed with `ModuleNotFoundError`, install the package, try again" — is judgment, and judgment belongs to the agent (or the human) driving the runner, where it is logged. A retry loop buried in library code hides failures; the same loop driven through logged tool calls is an audit trail.
 
@@ -115,7 +115,7 @@ One further choice deserves a sentence: the runner provides *one-shot* functions
 **Failure mode.** Three arguments eventually overturned it.
 
 1. *The circularity argument.* If the only bundles the validator ever sees are bundles our own pipeline produced, then the validator and the generator co-evolve: the generator learns to produce whatever the validator accepts, and the validator is never confronted with the diversity of real bundles. Its verdicts become claims about our pipeline, not about Codabench.
-2. *The standalone-value argument.* Most competition organizers already have a bundle — hand-written, inherited, exported from a previous year. A validator that can only check freshly generated bundles is useless to them; a validator that accepts any directory or zip is an independently publishable tool. This is why `codabench-validate` is its own console script taking a path, not a flag on `create`.
+2. *The standalone-value argument.* Most competition organizers already have a bundle — hand-written, inherited, exported from a previous year. A validator that can only check freshly generated bundles is useless to them; a validator that accepts any directory or zip is an independently publishable tool. This is why `validate-bundle` is a first-class subcommand taking a path, not a flag on `create`.
 3. *The empirical argument*, which settled the debate: pointing the validator at a production reference bundle we did not generate (STYLE-TRANS-FAIR) immediately exposed a false gate — the legacy `metadata` filename of (a) above — that no generated bundle would ever have triggered. The fix and its regression test are in the changelog. Imported bundles are not just an audience; they are the validator's own test suite.
 
 The same generality applies one step downstream: the upload utility (`upload/`, documented in [`codabench-upload-api.md`](./codabench-upload-api.md)) takes any bundle zip, not a handle to a pipeline run.
@@ -196,7 +196,7 @@ Behavioral contracts complete the picture: each phase's instructions are a versi
 | Regime | Location | Properties | What it establishes |
 |---|---|---|---|
 | Unit suite | `tests/` | Keyless, deterministic, sub-second; replay covers the agent path | The deterministic layers are correct |
-| Live smoke | manual (`codabench-validate --judged`, `auth status --probe`) | Requires auth; run by a human before release | The live wiring works |
+| Live smoke | manual (`autocodabench validate-bundle --judged`, `auth status --probe`) | Requires auth; run by a human before release | The live wiring works |
 | Experiments | `experiments/` | Full pipeline, blinded phases, recorded artifacts, written reports | *How well* the system performs, quantitatively |
 
 The rule "nothing in `tests/` may require a key or the network" is enforced socially and stated as an invariant, because it is the property the other two regimes lean on: when an experiment fails, the unit suite's keylessness is what licenses the inference that the failure is agentic, not infrastructural. The experiment harness, conversely, is held to standards the unit suite is not — blinding rules, a no-retry rule at the orchestrator level (a failed phase is a defect to record, not to paper over), and a prohibition on synthetic stand-in data — because its outputs are evidence in [`scientific-validation.md`](./scientific-validation.md), not green checkmarks.
@@ -207,7 +207,7 @@ The rule "nothing in `tests/` may require a key or the network" is enforced soci
 
 The directories not yet derived follow from the decisions above rather than adding new ones:
 
-- **`cli/`** — argument parsing over the library. Both console scripts (`autocodabench`, `codabench-validate`) call the same functions importable as `autocodabench.validate()` / `.create()`; the CLI adds `.env` loading and the auth preflight (Section 9) and contains no logic of its own.
+- **`cli/`** — argument parsing over the library. The single `autocodabench` console script and its subcommands (`validate-bundle`, `create`, …) call the same functions importable as `autocodabench.validate()` / `.create()`; the CLI adds `.env` loading and the auth preflight (Section 9) and contains no logic of its own.
 - **`upload/`** — the four-step Codabench REST flow (token → placeholder dataset → upload → poll), shared verbatim by the CLI, the MCP tool, and the web UI so that there is exactly one implementation of "publish."
 - **`run_log_hook.py`** — mirrors Claude Code session transcripts into the run directory, extending the Section-8 audit trail to the conversation layer.
 - **`web/`** (outside the package) — a Chainlit chat front-end that consumes the installed library. Its existence is itself a small design assertion: if the web UI ever needed code the library does not export, the library's public surface would be wrong.
@@ -233,4 +233,4 @@ The table below restates the document in one pass: each directory, the simpler d
 
 Two threads run through every row. First, **epistemic honesty about who established what**: code gates, LLMs advise, humans attest, citations anchor, skipped checks announce themselves. Second, **artifacts over conversations**: every boundary in the system — between phases, between layers, between live and replay, between run and audit — is a file on disk that a human can read, diff, and replay. A reader who retains only those two principles can re-derive most of the table.
 
-For the structure that results, see [`architecture.md`](./architecture.md); to watch one command traverse it, see [`codabench-validate-walkthrough.md`](./codabench-validate-walkthrough.md); for the complete inventory of checks and tests, see [`verification-catalog.md`](./verification-catalog.md); for the evidence that the result works, see [`scientific-validation.md`](./scientific-validation.md).
+For the structure that results, see [`architecture.md`](./architecture.md); to watch one command traverse it, see [`validate-bundle-walkthrough.md`](./validate-bundle-walkthrough.md); for the complete inventory of checks and tests, see [`verification-catalog.md`](./verification-catalog.md); for the evidence that the result works, see [`scientific-validation.md`](./scientific-validation.md).

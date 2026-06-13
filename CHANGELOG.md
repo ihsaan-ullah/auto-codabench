@@ -6,6 +6,13 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Changed
+- The standalone `codabench-validate` console script is removed; bundle
+  validation is now the `autocodabench validate-bundle` subcommand (with
+  `validate` kept as a back-compatible alias). One console script,
+  `autocodabench`, with subcommands; the validator still accepts any
+  bundle directory or zip, hand-written or generated.
+
 ### Fixed
 - Runner misclassified a λ-style (prediction-file) bundle as γ-style when
   `ingestion_program/` existed but was empty — `init_bundle` creates that
@@ -35,16 +42,17 @@ All notable changes to autocodabench. Format follows
   end-to-end: the demo bundle's baseline scores identically (accuracy
   0.825) under both engines, the docker run executing inside the real
   `codalab/codalab-legacy:py39` image.
-- **Interactive auth preflight**: `create` and `validate --judged` now check
-  for a usable Claude auth path *before* starting a live session. On an
+- **Interactive auth preflight**: `create` and `validate-bundle --judged` now
+  check for a usable Claude auth path *before* starting a live session. On an
   interactive terminal with no auth, the CLI walks you through it —
   subscription login re-check, or paste an API key (input hidden, optional
   save to `./.env` with mode 600). Non-interactive contexts get a clear
   refusal (exit 2) with guidance instead of an opaque SDK failure mid-run.
 - The CLI loads `<cwd>/.env` at startup (stdlib parser; never overrides
   real environment variables) — same convention as the web UI.
-- `docs/codabench-validate-walkthrough.md`: a line-by-line execution trace
-  of `codabench-validate` for newcomers, with debugger breakpoints per stage.
+- `docs/validate-bundle-walkthrough.md`: a line-by-line execution trace
+  of `autocodabench validate-bundle` for newcomers, with debugger
+  breakpoints per stage.
 - `docs/verification-catalog.md`: a complete inventory of all verification,
   in four layers — the 17 registered bundle checks (with the six lint
   condition families inside the structural gate), the dynamic execution
@@ -62,7 +70,7 @@ All notable changes to autocodabench. Format follows
   an in-process tool registry exposing the same `autocodabench_*`
   tool surface and writing the same `tool_calls/` audit trail as the
   MCP layer. `--backend claude[:model] | ollama:<model> |
-  openai:<model> | <url>#<model>` on `create` and `validate --judged`;
+  openai:<model> | <url>#<model>` on `create` and `validate-bundle --judged`;
   `resolve_backend()` in the library.
 - **Backbone benchmark** (`experiments/backbone_bench/`): axis A
   (validator/judge quality — the E3 seeded-defect instrument,

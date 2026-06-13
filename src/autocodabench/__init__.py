@@ -2,7 +2,7 @@
 
 Public surface:
 
-- :func:`autocodabench.validate` / ``codabench-validate`` CLI — deterministic,
+- :func:`autocodabench.validate` / ``autocodabench validate-bundle`` CLI — deterministic,
   LLM-free bundle validation (plus optional LLM-judged advisory checks).
 - :func:`autocodabench.create` / ``autocodabench create`` CLI — agentic
   plan→build pipeline on the Claude Agent SDK.
