@@ -2,11 +2,13 @@
 
 These are the runtime counterparts to the file-writer tools in
 `bundle.py`. The implementer skill (`autocodabench-implement`) uses
-them to self-validate the bundle it just wrote: prepare a per-run
-conda env, run the bundle's own baseline through the scoring pipeline,
-execute the starting-kit notebook end-to-end. The reformat-and-run
-skill uses `run_user_submission` to score an external (ground-truth)
-submission after it has been adapted to the bundle's interface.
+them to self-validate the bundle it just wrote: run the bundle's own
+baseline through the scoring pipeline (inside the bundle's declared
+`docker_image` when Docker is available — the platform-faithful path —
+falling back to a per-run conda env otherwise) and execute the
+starting-kit notebook end-to-end. The reformat-and-run skill uses
+`run_user_submission` to score an external (ground-truth) submission
+after it has been adapted to the bundle's interface.
 
 The MCP wrappers are pure one-shots — the *skill* drives any retry
 loop based on the returned `error` / `stderr_tail`. The loop belongs in
@@ -102,6 +104,7 @@ async def autocodabench_run_baseline_submission(
     env_name: str,
     subdir: str = "solution_baseline",
     extra_env: dict[str, str] | None = None,
+    engine: str = "auto",
 ) -> dict[str, Any]:
     """Run the bundle's OWN baseline submission through ingestion + scoring.
 
@@ -110,36 +113,49 @@ async def autocodabench_run_baseline_submission(
     plumbing actually works on real (toy) data, before any external
     submission ever touches it.
 
+    Engine selection (`engine="auto"`, the default): when a Docker
+    daemon is reachable, the programs run inside the bundle's declared
+    `docker_image` exactly as the Codabench worker runs them — no
+    dependency installation, working dir `/app/program` — so a clean
+    run is evidence of platform behavior. Without Docker, the conda
+    engine runs them in `env_name` with requirements installed; the
+    result's `engine` / `engine_note` fields say which path ran. A
+    failure under the docker engine that the conda engine does not show
+    usually means a dependency is missing from the `docker_image` —
+    fix the image choice in competition.yaml, not the env.
+
     Falls back gracefully to other common subdir names
     (`sample_code_submission`, `solution1`) if `subdir` does not exist.
 
-    The harness already exports safe BLAS/OMP/TF single-thread defaults
-    into the subprocess env at .so-load time (this prevents the macOS
-    libomp deadlock that hangs TF 2.21 + Keras 3 sessions). Pass
-    `extra_env` ONLY to override one of those (e.g.
-    `{"OMP_NUM_THREADS": "4"}` for a perf test) — most callers can
-    omit it.
+    Under the conda engine, safe BLAS/OMP/TF single-thread defaults are
+    exported at .so-load time (prevents the macOS libomp deadlock that
+    hangs TF 2.21 + Keras 3 sessions); the docker engine keeps the
+    image's own defaults, as the platform does. Pass `extra_env` ONLY
+    to override (e.g. `{"OMP_NUM_THREADS": "4"}` for a perf test).
 
     Args:
         slug:      bundle slug.
-        env_name:  env returned by `autocodabench_prepare_run_env`.
+        env_name:  env returned by `autocodabench_prepare_run_env`
+                   (consumed only by the conda engine).
         subdir:    directory under `solutions/` containing the baseline.
         extra_env: optional env-var overrides applied at subprocess
-                   start time, before python imports any C extensions.
+                   start time (passed as `-e` under docker).
+        engine:    "auto" (default) | "docker" | "conda".
 
     Returns:
-        Dict: `ok`, `stage` ("ingestion"|"scoring"), `ingestion`
+        Dict: `ok`, `stage` ("ingestion"|"scoring"), `engine`,
+              `docker_image`, `engine_note`, `ingestion`
               (`exit_code`/`stdout_tail`/`stderr_tail`/`duration_s`,
               `null` if λ-style), `scoring` (same shape), `scores`,
               `scores_format`, `sandbox_dir`, `logs_dir`, `error`.
               The `scores` dict mirrors the bundle's `scores.json`
               top-level keys verbatim.
     """
-    log.info("run_baseline slug=%s env=%s subdir=%s extra_env=%s",
-             slug, env_name, subdir, list((extra_env or {}).keys()))
+    log.info("run_baseline slug=%s env=%s subdir=%s engine=%s extra_env=%s",
+             slug, env_name, subdir, engine, list((extra_env or {}).keys()))
     try:
         return await asyncio.to_thread(run_baseline_submission, slug, env_name, subdir,
-                                       extra_env)
+                                       extra_env, engine)
     except Exception as e:
         return {"ok": False, "error": f"run_baseline_submission crashed: {e}"}
 
@@ -152,35 +168,43 @@ async def autocodabench_run_user_submission(
     submission_dir: str,
     label: str,
     extra_env: dict[str, str] | None = None,
+    engine: str = "auto",
 ) -> dict[str, Any]:
     """Run an external submission directory through ingestion + scoring.
 
     Used by `autocodabench-reformat-and-run` to score a ground-truth
     submission after it has been adapted to the bundle's interface. Same
-    pipeline as `run_baseline_submission` but the submission code is
-    sourced from `submission_dir` instead of the bundle's `solutions/`.
+    pipeline and engine semantics as `run_baseline_submission` (docker
+    preferred — the bundle's declared `docker_image`, as the platform
+    runs it; conda fallback consumes `env_name`), but the submission
+    code is sourced from `submission_dir` instead of the bundle's
+    `solutions/`.
 
-    Default BLAS/OMP/TF thread pools are single-threaded (set in the
-    subprocess env at .so-load time to avoid the macOS libomp
-    deadlock). Pass `extra_env` only to override per-call.
+    Under the conda engine, BLAS/OMP/TF thread pools default to
+    single-threaded (set at .so-load time to avoid the macOS libomp
+    deadlock); the docker engine keeps the image's defaults. Pass
+    `extra_env` only to override per-call.
 
     Args:
         slug:           bundle slug.
-        env_name:       env returned by `autocodabench_prepare_run_env`.
+        env_name:       env returned by `autocodabench_prepare_run_env`
+                        (consumed only by the conda engine).
         submission_dir: absolute path to the submission folder.
         label:          short identifier scoping the run logs (e.g.
                         `"sub_1.attempt_2"`); appears in `logs_dir`.
         extra_env:      optional env-var overrides applied at subprocess
                         start time.
+        engine:         "auto" (default) | "docker" | "conda".
 
     Returns:
         Same shape as `run_baseline_submission`.
     """
-    log.info("run_user slug=%s env=%s sub=%s label=%s extra_env=%s",
-             slug, env_name, submission_dir, label, list((extra_env or {}).keys()))
+    log.info("run_user slug=%s env=%s sub=%s label=%s engine=%s extra_env=%s",
+             slug, env_name, submission_dir, label, engine,
+             list((extra_env or {}).keys()))
     try:
         return await asyncio.to_thread(run_user_submission, slug, env_name, submission_dir,
-                                       label, extra_env)
+                                       label, extra_env, engine)
     except Exception as e:
         return {"ok": False, "error": f"run_user_submission crashed: {e}"}
 

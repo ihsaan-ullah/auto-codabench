@@ -1,9 +1,24 @@
 """Execution-side helpers for the autocodabench MCP server.
 
 The bundle-write side (`bundle_io.py`) only knows about *files*. This
-module is the runtime counterpart: it can build a per-bundle conda
-env, install requirements, invoke the bundle's scoring / ingestion
-programs end-to-end, and execute the bundle's `starting_kit` notebook.
+module is the runtime counterpart: it stages the Codabench sandbox
+layout, invokes the bundle's scoring / ingestion programs end-to-end,
+and executes the bundle's `starting_kit` notebook.
+
+Two execution engines exist, with different fidelity to the platform:
+
+- **docker** (preferred when a daemon is reachable) — runs each program
+  inside the bundle's declared ``docker_image`` exactly as the Codabench
+  compute worker does: working directory ``/app/program``, the sandbox
+  mounted under ``/app``, and **no dependency installation** (the worker
+  never installs ``requirements.txt``; dependencies must be baked into
+  the image). A clean run under this engine is evidence the bundle will
+  execute on the platform; a subsequent platform failure points at the
+  server, not the bundle.
+- **conda** (fallback; required for the notebook) — a per-run cloned
+  conda env with the bundle's ``requirements.txt`` installed. Strictly
+  *more permissive* than the platform, so it verifies the programs but
+  not the image; results carry an explicit fidelity note.
 
 Used by the `autocodabench-implement` skill so it can self-validate
 the bundle it just wrote (run its own sample submission + starting
@@ -38,6 +53,8 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any, IO, TextIO
+
+import yaml  # PyYAML — already a dependency via fastmcp
 
 from ..core.config import resolve_bundle_dir
 from ..run_log import current_run, log_event
@@ -87,6 +104,172 @@ _SUBPROCESS_DEFAULTS = {
 
 
 # ---------------------------------------------------------------------------
+# Execution engines
+# ---------------------------------------------------------------------------
+
+# Codabench's platform-wide default when competition.yaml declares no
+# docker_image (Competition model, src/apps/competitions/models.py in
+# codalab/codabench).
+_DEFAULT_DOCKER_IMAGE = "codalab/codalab-legacy:py37"
+
+_ENGINES = ("auto", "docker", "conda")
+
+# Worker-faithful container paths. The Codabench compute worker mounts the
+# *active program directory* (scoring OR ingestion, run as separate
+# invocations) at /app/program, with the working directory set there, and
+# the data/output trees at the paths below (compute_worker.py). It also
+# substitutes legacy $variables in metadata commands with these paths
+# before execution. We honor both spellings — the literal /app/... path
+# and its $variable — so a bundle authored either way runs unchanged.
+#
+# `_WORKER_PATHS` maps each (variable, absolute) spelling to the role used
+# to resolve it per engine. Order is longest-first so that, e.g.,
+# `/app/input_data` is matched before `/app/input`.
+_WORKER_ROLES = (
+    # (role, container_abs_path, variable_alias)
+    ("input_data", "/app/input_data", "$input_data"),
+    ("ingested_program", "/app/ingested_program", "$ingested_program"),
+    ("submission", "/app/submission", "$submission"),
+    ("program", "/app/program", "$program"),
+    ("output", "/app/output", "$output"),
+    ("input", "/app/input", "$input"),
+)
+
+
+def _docker_available() -> bool:
+    """True when a Docker CLI and a reachable daemon are both present."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        probe = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return probe.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def bundle_docker_image(slug: str, root_dir: str | None = None) -> str:
+    """The image competition.yaml declares; Codabench's default otherwise."""
+    yaml_path = resolve_bundle_dir(slug, root_dir) / "competition.yaml"
+    if yaml_path.is_file():
+        try:
+            comp = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+            image = comp.get("docker_image")
+            if isinstance(image, str) and image.strip():
+                return image.strip()
+        except yaml.YAMLError:
+            pass
+    return _DEFAULT_DOCKER_IMAGE
+
+
+def resolve_execution_engine(engine: str = "auto") -> dict[str, Any]:
+    """Select the engine for scoring/ingestion runs.
+
+    Docker is preferred because it is what the platform does: the
+    Codabench worker executes programs inside the competition's
+    ``docker_image``, and never installs ``requirements.txt``. The conda
+    engine remains available for hosts without a Docker daemon (CI,
+    HF Spaces), with an explicit note that fidelity is approximate.
+
+    Returns ``{"engine": "docker"|"conda"|None, "note": ..., "error": ...}``.
+    """
+    if engine not in _ENGINES:
+        return {"engine": None, "note": None,
+                "error": f"unknown engine {engine!r}; expected one of {_ENGINES}"}
+    if engine == "docker":
+        if _docker_available():
+            return {"engine": "docker", "note": None, "error": None}
+        return {"engine": None, "note": None,
+                "error": "engine='docker' requested but no Docker daemon is "
+                         "reachable (is Docker installed and running?)"}
+    if engine == "conda":
+        return {"engine": "conda",
+                "note": "conda engine requested explicitly; platform fidelity is "
+                        "approximate — Codabench executes programs inside the "
+                        "bundle's docker_image and installs nothing",
+                "error": None}
+    if _docker_available():
+        return {"engine": "docker", "note": None, "error": None}
+    return {"engine": "conda",
+            "note": "Docker unavailable — fell back to the conda engine; this "
+                    "verifies the programs but not the platform image (install "
+                    "Docker for a platform-faithful run)",
+            "error": None}
+
+
+def _host_path_for_role(role: str, sandbox: Path, program_subdir: str) -> Path:
+    """Real on-disk path the worker would mount for a container role."""
+    if role == "program":
+        return sandbox / "program" / program_subdir
+    if role == "ingested_program":
+        return sandbox / "program" / "ingestion_program"
+    return sandbox / role  # input, output, input_data, submission
+
+
+def _resolve_command(cmd: str, eng: str, sandbox: Path, program_subdir: str) -> str:
+    """Resolve worker path tokens in a metadata command for the given engine.
+
+    Under docker, `$program`/`$input`/... become the worker's absolute
+    container paths (the mounts make them real); literal `/app/...` paths
+    are already correct and left untouched. Under conda there is no
+    `/app`, so both the `$variable` and the absolute `/app/...` spellings
+    are rewritten to real host sandbox paths. Longest tokens are replaced
+    first so prefixes (``/app/input`` vs ``/app/input_data``) do not clash.
+    """
+    if eng == "docker":
+        for _role, abspath, var in _WORKER_ROLES:
+            cmd = cmd.replace(var, abspath)
+        return cmd
+    # conda: map every spelling to the host path
+    pairs: list[tuple[str, str]] = []
+    for role, abspath, var in _WORKER_ROLES:
+        host = str(_host_path_for_role(role, sandbox, program_subdir))
+        pairs.append((abspath, host))
+        pairs.append((var, host))
+    for token, host in sorted(pairs, key=lambda kv: -len(kv[0])):
+        cmd = cmd.replace(token, host)
+    return cmd
+
+
+def _docker_run(image: str, sandbox: Path, program_subdir: str, cmd: str,
+                extra_env: dict[str, str] | None, has_ingestion: bool) -> str:
+    """Build the ``docker run`` invocation that mirrors the compute worker.
+
+    The active program directory is mounted at ``/app/program`` with the
+    working directory set there, and the data/output trees at
+    ``/app/input`` / ``/app/output`` / ``/app/input_data`` /
+    ``/app/submission`` — exactly the worker's layout, so a bundle's
+    ``/app/...`` metadata command runs verbatim. Nothing is installed
+    into the container: the worker never installs ``requirements.txt``,
+    so neither do we. The first run of a new image pulls it, which can
+    take minutes and counts against the timeout.
+    """
+    mounts: list[tuple[Path, str, str]] = [
+        (_host_path_for_role("program", sandbox, program_subdir), "/app/program", "rw"),
+        (sandbox / "input", "/app/input", "rw"),
+        (sandbox / "output", "/app/output", "rw"),
+    ]
+    for role in ("input_data", "submission", "public_data", "sample_data"):
+        if (sandbox / role).exists():
+            mounts.append((sandbox / role, f"/app/{role}", "rw"))
+    if has_ingestion and program_subdir != "ingestion_program":
+        mounts.append((sandbox / "program" / "ingestion_program",
+                       "/app/ingested_program", "ro"))
+
+    env = {"PYTHONUNBUFFERED": "1"}
+    if extra_env:
+        env.update(extra_env)
+    env_flags = " ".join(f"-e {shlex.quote(f'{k}={v}')}" for k, v in env.items())
+    vol_flags = " ".join(
+        f"-v {shlex.quote(str(h))}:{c}:{m}" for h, c, m in mounts)
+    resolved = _resolve_command(cmd, "docker", sandbox, program_subdir)
+    return (f"docker run --rm {env_flags} {vol_flags} -w /app/program "
+            f"{shlex.quote(image)} bash -c {shlex.quote(resolved)}")
+
+
+# ---------------------------------------------------------------------------
 # Env management
 # ---------------------------------------------------------------------------
 
@@ -117,7 +300,7 @@ def _pump(src: IO[str], sink: TextIO | None, tail: deque[str], counter: list[int
     Each line is flushed to disk immediately. `bufsize=1` on the Popen
     + `flush()` here is what makes the on-disk file actually live —
     important for long-running TF/torch jobs where the only signal that
-    they're alive is the steady drip of progress lines.
+    they are alive is the steady drip of progress lines.
     """
     try:
         for line in iter(src.readline, ""):
@@ -271,6 +454,11 @@ def _gather_requirements(slug: str) -> list[Path]:
 
 def prepare_run_env(slug: str, force_recreate: bool = False) -> dict[str, Any]:
     """Clone base conda env and install the bundle's per-program requirements.
+
+    The env serves the conda fallback engine and the starting-kit
+    notebook (which runs participant-side, not on the platform worker).
+    Scoring/ingestion runs prefer the docker engine, which uses the
+    bundle's declared image and needs no env.
 
     Returns `{env_name, requirements_path, package_count, install_method,
     duration_s, logs_dir, ok, error}`.
@@ -449,12 +637,17 @@ def _run_submission_in_sandbox(
     slug: str, env_name: str, submission_dir: Path,
     label: str,
     extra_env: dict[str, str] | None = None,
+    engine: str = "auto",
 ) -> dict[str, Any]:
     """Stage a sandbox, run ingestion (if defined) + scoring, parse scores.
 
     `label` is used to scope the run-logs dir (e.g. "baseline", "sub_1.attempt_1").
+    `engine` selects how the programs execute: "docker" (inside the
+    bundle's declared docker_image, as the platform does), "conda" (the
+    per-run env named by `env_name`), or "auto" (docker when available,
+    conda otherwise). The result records which engine ran.
 
-    Layout inside the sandbox:
+    Layout inside the sandbox (mounted at /app under the docker engine):
       sandbox/
         program/                 # scoring_program (and ingestion_program if present)
         input/
@@ -468,6 +661,28 @@ def _run_submission_in_sandbox(
         return {"ok": False, "error": f"bundle dir not found: {bundle_dir}"}
     if not submission_dir.exists():
         return {"ok": False, "error": f"submission dir not found: {submission_dir}"}
+
+    resolved = resolve_execution_engine(engine)
+    if resolved["error"]:
+        return {"ok": False, "error": resolved["error"]}
+    eng: str = resolved["engine"]
+    engine_note = resolved["note"]
+    image = bundle_docker_image(slug) if eng == "docker" else None
+
+    def _run_stage(program_subdir: str, raw_cmd: str,
+                   out: Path, err: Path) -> dict[str, Any]:
+        """Run one program stage under the active engine, worker-faithfully."""
+        if eng == "docker":
+            full = _docker_run(image, sandbox, program_subdir, raw_cmd,
+                               extra_env, has_ingestion)
+            cwd = None  # working dir is set inside the container (/app/program)
+            env = None
+        else:
+            translated = _resolve_command(raw_cmd, "conda", sandbox, program_subdir)
+            full = f"{_conda_run_prefix(env_name)} bash -c {shlex.quote(translated)}"
+            cwd = sandbox / "program" / program_subdir
+            env = extra_env or None
+        return _bash(full, cwd=cwd, stdout=out, stderr=err, env=env)
 
     logs = _run_logs_dir(slug) / label
     logs.mkdir(parents=True, exist_ok=True)
@@ -486,7 +701,12 @@ def _run_submission_in_sandbox(
     if scoring_src.exists():
         shutil.copytree(scoring_src, sandbox / "program" / "scoring_program")
     ingestion_src = bundle_dir / "ingestion_program"
-    has_ingestion = ingestion_src.exists()
+    # An ingestion program "exists" only if its directory holds runnable
+    # content. `init_bundle` creates an empty `ingestion_program/` skeleton
+    # for every bundle, so testing the directory alone misclassifies a
+    # λ-style (prediction-file) competition as γ-style and then fails on a
+    # nonexistent ingestion script. Require an actual file.
+    has_ingestion = ingestion_src.is_dir() and any(ingestion_src.iterdir())
     if has_ingestion:
         shutil.copytree(ingestion_src, sandbox / "program" / "ingestion_program")
 
@@ -511,21 +731,19 @@ def _run_submission_in_sandbox(
 
     # --- Stage 1: ingestion (γ-style) or copy predictions (λ-style) ---
     if has_ingestion:
-        # ingestion_program/metadata.yaml has a `command:` we honor
+        # ingestion_program/metadata.yaml has a `command:` we honor; the
+        # fallback uses the canonical worker tokens so it resolves under
+        # either engine.
         meta_path = sandbox / "program" / "ingestion_program" / "metadata.yaml"
         ing_cmd = _read_command_from_metadata(meta_path,
-                    fallback="python3 ingestion_program/ingestion.py "
-                             "input_data submission input/res")
-        ing = _bash(
-            f"{_conda_run_prefix(env_name)} bash -c {shlex.quote(ing_cmd)}",
-            cwd=sandbox / "program",
-            stdout=logs / "ingestion_stdout.txt",
-            stderr=logs / "ingestion_stderr.txt",
-            env=extra_env or None,
-        )
+                    fallback="python3 $program/ingestion.py "
+                             "$input_data $submission $input/res")
+        ing = _run_stage("ingestion_program", ing_cmd,
+                         logs / "ingestion_stdout.txt", logs / "ingestion_stderr.txt")
         if ing["exit_code"] != 0 or ing["timed_out"]:
             return {
                 "ok": False, "stage": "ingestion",
+                "engine": eng, "docker_image": image, "engine_note": engine_note,
                 "ingestion": ing,
                 "scoring": None,
                 "score": None, "scores": None,
@@ -546,14 +764,9 @@ def _run_submission_in_sandbox(
     # --- Stage 2: scoring ---
     meta_path = sandbox / "program" / "scoring_program" / "metadata.yaml"
     score_cmd = _read_command_from_metadata(meta_path,
-                fallback="python3 scoring_program/score.py input output")
-    score_run = _bash(
-        f"{_conda_run_prefix(env_name)} bash -c {shlex.quote(score_cmd)}",
-        cwd=sandbox / "program",
-        stdout=logs / "scoring_stdout.txt",
-        stderr=logs / "scoring_stderr.txt",
-        env=extra_env or None,
-    )
+                fallback="python3 $program/score.py $input $output")
+    score_run = _run_stage("scoring_program", score_cmd,
+                           logs / "scoring_stdout.txt", logs / "scoring_stderr.txt")
 
     scores_blob = _read_scores(sandbox / "output")
 
@@ -561,6 +774,7 @@ def _run_submission_in_sandbox(
         "ok": score_run["exit_code"] == 0 and not score_run["timed_out"]
               and scores_blob.get("scores") is not None,
         "stage": "scoring",
+        "engine": eng, "docker_image": image, "engine_note": engine_note,
         "ingestion": ing if has_ingestion else None,
         "scoring": score_run,
         "scores": scores_blob.get("scores"),
@@ -592,16 +806,22 @@ def _read_command_from_metadata(meta_path: Path, fallback: str) -> str:
 def run_baseline_submission(slug: str, env_name: str,
                             subdir: str = "solution_baseline",
                             extra_env: dict[str, str] | None = None,
+                            engine: str = "auto",
                             ) -> dict[str, Any]:
     """Run the bundle's own baseline through its scoring pipeline.
 
-    The bundle ships `solutions/<subdir>/` as a working example. We
-    run it the same way Codabench would run a participant submission
-    so the implementer can verify the bundle is end-to-end functional.
+    The bundle ships `solutions/<subdir>/` as a working example. Under
+    the docker engine (preferred; selected by `engine="auto"` whenever a
+    daemon is reachable) it runs inside the bundle's declared
+    `docker_image` exactly as Codabench's worker would run a participant
+    submission, so a clean run is evidence of platform behavior.
+    `env_name` is used only by the conda fallback engine.
 
     `extra_env` (optional) overrides per-subprocess env vars at process
-    start time. Use sparingly — the host has sane defaults for
-    BLAS/OMP/TF thread pools that you usually want.
+    start time (passed as `-e` flags under docker). Use sparingly — the
+    conda engine has sane defaults for BLAS/OMP/TF thread pools, and the
+    docker engine deliberately keeps the image's own defaults, as the
+    platform does.
     """
     bundle_dir = resolve_bundle_dir(slug)
     candidates = [
@@ -615,34 +835,40 @@ def run_baseline_submission(slug: str, env_name: str,
         return {"ok": False,
                 "error": f"no baseline submission found under bundle's solutions/ "
                          f"(checked: {[str(c) for c in candidates]})"}
-    log_event("run_baseline_started", slug=slug, env_name=env_name, submission=str(sub_dir))
+    log_event("run_baseline_started", slug=slug, env_name=env_name,
+              submission=str(sub_dir), engine=engine)
     res = _run_submission_in_sandbox(slug, env_name, sub_dir, label="baseline",
-                                     extra_env=extra_env)
+                                     extra_env=extra_env, engine=engine)
     log_event("run_baseline_finished", slug=slug, ok=res["ok"],
-              error=res.get("error"), score=res.get("scores"))
+              engine=res.get("engine"), error=res.get("error"),
+              score=res.get("scores"))
     return res
 
 
 def run_user_submission(slug: str, env_name: str, submission_dir: str,
                         label: str,
                         extra_env: dict[str, str] | None = None,
+                        engine: str = "auto",
                         ) -> dict[str, Any]:
     """Run an arbitrary submission directory through the bundle's scoring pipeline.
 
     `label` namespaces this run's logs (e.g. "sub_1.attempt_2"). Used
     by the reformat-and-run skill against a ground-truth submission
-    that's been adapted to the bundle's interface.
+    after it has been adapted to the bundle's interface. Engine
+    semantics match `run_baseline_submission`: docker preferred,
+    `env_name` consumed only by the conda fallback.
 
     `extra_env` (optional) overrides per-subprocess env vars at process
     start time.
     """
     sub_dir = Path(submission_dir).resolve()
     log_event("run_user_started", slug=slug, env_name=env_name,
-              submission=str(sub_dir), label=label)
+              submission=str(sub_dir), label=label, engine=engine)
     res = _run_submission_in_sandbox(slug, env_name, sub_dir, label=label,
-                                     extra_env=extra_env)
+                                     extra_env=extra_env, engine=engine)
     log_event("run_user_finished", slug=slug, label=label, ok=res["ok"],
-              error=res.get("error"), score=res.get("scores"))
+              engine=res.get("engine"), error=res.get("error"),
+              score=res.get("scores"))
     return res
 
 

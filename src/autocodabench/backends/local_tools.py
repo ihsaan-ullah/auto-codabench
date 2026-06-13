@@ -171,12 +171,18 @@ _TOOLS: list[LocalTool] = [
               _obj({"env_name": _S, "packages": {"type": "array", "items": _S}},
                    ["env_name", "packages"]), runner.install_env_extras),
     LocalTool("autocodabench_run_baseline_submission",
-              "Run the bundle's own baseline through its scoring pipeline in a sandbox.",
-              _obj({"slug": _S, "env_name": _S, "subdir": _S}, ["slug", "env_name"]),
+              "Run the bundle's own baseline through its scoring pipeline in a sandbox "
+              "(engine: auto|docker|conda — docker runs inside the bundle's declared "
+              "docker_image, as Codabench does).",
+              _obj({"slug": _S, "env_name": _S, "subdir": _S, "engine": _S},
+                   ["slug", "env_name"]),
               runner.run_baseline_submission),
     LocalTool("autocodabench_run_user_submission",
-              "Run an arbitrary submission directory through the bundle's scoring pipeline.",
-              _obj({"slug": _S, "env_name": _S, "submission_dir": _S, "label": _S},
+              "Run an arbitrary submission directory through the bundle's scoring pipeline "
+              "(engine: auto|docker|conda — docker runs inside the bundle's declared "
+              "docker_image, as Codabench does).",
+              _obj({"slug": _S, "env_name": _S, "submission_dir": _S, "label": _S,
+                    "engine": _S},
                    ["slug", "env_name", "submission_dir", "label"]),
               runner.run_user_submission),
     LocalTool("autocodabench_run_starting_kit",

@@ -27,8 +27,10 @@ src/autocodabench/
 │   └── bundle_io.py         # init/write/attach/validate/zip on dicts + files
 │
 ├── runner/                  # runtime counterpart of core
-│   └── execution.py         # per-run conda envs, ingestion/scoring/notebook
-│                            #   execution, live-tee'd subprocess logs
+│   └── execution.py         # ingestion/scoring execution; two engines:
+│                            #   docker (bundle's docker_image, as the
+│                            #   platform runs it) + conda fallback;
+│                            #   notebook execution; live-tee'd logs
 │
 ├── checks/                  # the validation framework
 │   ├── base.py              # Check / CheckResult / CheckContext / registry
@@ -109,6 +111,14 @@ The following table summarizes the principal design decisions, the principle eac
 - **The unit suite remains keyless.** Live-SDK behavior is verified manually
   (`codabench-validate --judged`, `autocodabench auth status --probe`);
   nothing in `tests/` may require authentication or network access.
+- **The docker engine installs nothing.** The Codabench worker executes
+  programs inside the competition's `docker_image` and never installs
+  `requirements.txt`; the local docker engine preserves that parity —
+  the active program directory mounted at `/app/program`, data and output
+  at `/app/input` and `/app/output` — which is the basis of its
+  platform-fidelity claim. The conda fallback installs requirements and
+  therefore only verifies the programs, never the image; it honors the same
+  worker path tokens by rewriting them to host paths.
 - **`fastmcp` is pinned to exactly 2.14.7.** Looser constraints allow pip's
   solver to select a release that breaks on HF Spaces (see the pyproject and
   Dockerfile comments).
@@ -138,7 +148,7 @@ flowchart TB
   subgraph offline["Offline layers (no LLM, no keys)"]
     checks["checks/ registry<br/>deterministic + attestations"]
     core["core/ bundle_io<br/>init/write/validate/zip"]
-    runner["runner/ execution<br/>conda env + scoring runs"]
+    runner["runner/ execution<br/>scoring runs: docker (bundle image)<br/>or conda fallback"]
   end
 
   mcp["mcp/ stdio server (20 tools)<br/>every call → tool_calls/ + events.jsonl"]

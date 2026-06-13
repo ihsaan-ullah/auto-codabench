@@ -207,8 +207,10 @@ For Claude Desktop:
 ```
 
 The server exposes 20 tools covering run management and logging, bundle
-authoring, validation and zipping, execution (per-run conda environments
-and scoring runs), and upload. In Claude Code, the packaged skills may
+authoring, validation and zipping, execution (scoring runs execute inside
+the bundle's declared Docker image when Docker is available — the same way
+Codabench's worker runs them — with a per-run conda environment as the
+fallback), and upload. In Claude Code, the packaged skills may
 additionally be symlinked into `.claude/skills/`, so that
 `/autocodabench-plan` and `/autocodabench-implement` drive the same
 two-phase flow conversationally; the experiment harness's `setup.sh`

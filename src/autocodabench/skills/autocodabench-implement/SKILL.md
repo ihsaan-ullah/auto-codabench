@@ -204,9 +204,12 @@ metric in plan §3), pages (the four written above).
 Also set `docker_image:` — pick a reasonable Codabench-hosted image
 matching the plan's requirements (e.g. `codalab/codalab-legacy:py3`
 for pure sklearn; a tensorflow image only if the plan explicitly
-asks). Note: the per-run conda env (next section) is a LOCAL
-substitute for this; the docker image is what Codabench will use
-when the bundle eventually runs on their workers.
+asks). This choice is load-bearing: Codabench's worker runs your
+programs INSIDE this image and never installs `requirements.txt`,
+and the local runner does the same whenever Docker is available
+(the docker engine — the per-run conda env in the next section is
+the fallback for hosts without Docker, and hosts the notebook either
+way). Pick an image that already ships the bundle's dependencies.
 
 ---
 
@@ -242,7 +245,11 @@ If `env["ok"]` is False, the per-program requirements have a defect
 stderr, fix the offending `requirements.txt`, and retry. Don't move
 on with a half-installed env.
 
-Save `env_name` — every subsequent runner call needs it.
+Save `env_name` — every subsequent runner call needs it. (The env
+serves the starting-kit notebook run in 5b and the conda fallback
+engine; the baseline run in 5a executes inside the bundle's
+`docker_image` instead when Docker is available. Prepare the env
+regardless — the notebook always needs it.)
 
 ---
 
@@ -264,9 +271,19 @@ baseline = autocodabench_run_baseline_submission(slug, env_name)
 ```
 
 The returned dict carries `ok`, `stage` (which phase failed:
-"ingestion" or "scoring"), `ingestion` / `scoring` exit codes +
-stderr tails, parsed `scores`, and `sandbox_dir` for forensic
-inspection.
+"ingestion" or "scoring"), `engine` / `docker_image` / `engine_note`
+(how it ran), `ingestion` / `scoring` exit codes + stderr tails,
+parsed `scores`, and `sandbox_dir` for forensic inspection.
+
+Check `engine` first: `"docker"` means the run executed inside the
+bundle's declared `docker_image` exactly as Codabench will — the
+platform-faithful path. `"conda"` means the per-run env was used
+(no Docker daemon on this host; `engine_note` says so) — the run
+verifies the programs but not the image. Diagnosis differs by
+engine: under docker, a missing module means the `docker_image` YOU
+declared lacks the dependency — fix `competition.yaml`'s
+`docker_image` (or vendor a pure-Python module into the program
+dir); `install_env_extras` affects only the conda engine.
 
 If `baseline["ok"]` is True, log
 `autocodabench_log_event(kind="baseline_passed",
@@ -276,7 +293,7 @@ If False, diagnose:
 
 | stderr pattern | fix |
 |---|---|
-| `ModuleNotFoundError: No module named '<X>'` | `autocodabench_install_env_extras(env_name, ["<pypi_name_for_X>"])`. Common map: skimage→scikit-image, cv2→opencv-python-headless, PIL→Pillow, bs4→beautifulsoup4, yaml→PyYAML, sklearn→scikit-learn. |
+| `ModuleNotFoundError: No module named '<X>'` | Conda engine: `autocodabench_install_env_extras(env_name, ["<pypi_name_for_X>"])`. Common map: skimage→scikit-image, cv2→opencv-python-headless, PIL→Pillow, bs4→beautifulsoup4, yaml→PyYAML, sklearn→scikit-learn. Docker engine: the declared `docker_image` lacks `<X>` — switch `competition.yaml` to an image that ships it (then re-run), or vendor a small pure-Python module into the program dir; the platform will hit the same error otherwise. |
 | `ImportError: cannot import name X from Y` / `AttributeError: module Y has no attribute X` / `not supported in Keras [0-9]` | Edit the file that uses the broken API (in the BUNDLE, e.g. `solutions/solution_baseline/model.py` or `scoring_program/score.py`). Port to the available API. Common: `tf.keras.optimizers.legacy.Adam` → `tf.keras.optimizers.Adam`; `from keras.preprocessing import X` → `from tensorflow.keras.preprocessing import X`. |
 | `FileNotFoundError: <path>` | Either ingestion is looking for the wrong path or the scoring stage's input/output dirs differ from Codabench convention. Re-read the relevant `metadata.yaml`'s `command:` and the script's `sys.argv` use. Fix the script. |
 | `ValueError: shapes (n,m) and (p,q) ...` / metric-side numeric failure | Mismatch between baseline's predictions format and scoring's reader. Fix one or the other (whichever the plan unambiguously specifies). |

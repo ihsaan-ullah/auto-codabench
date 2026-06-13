@@ -122,10 +122,16 @@ schema-perfect and still fail on its first real submission.
 
 **Procedure.** After the build agent writes a bundle:
 
-1. A fresh conda environment is cloned and the bundle's own
+1. An execution environment is prepared. On Docker-equipped hosts the
+   programs run inside the bundle's declared `docker_image`, exactly as
+   Codabench's worker runs them (no dependency installation — the
+   platform installs nothing), which makes the oracle platform-faithful.
+   Otherwise a fresh conda environment is cloned and the bundle's own
    per-program `requirements.txt` files are installed
    (`prepare_run_env`), so that the bundle's declared dependencies,
-   rather than the developer's environment, are what is tested.
+   rather than the developer's environment, are what is tested; this
+   fallback is more permissive than the platform, and each recorded
+   result names the engine that produced it.
 2. **Baseline oracle** (`run_baseline_submission`): the bundle's own
    shipped baseline solution is staged into a sandbox laid out exactly
    as Codabench's worker lays it out (`program/`, `input/res`,

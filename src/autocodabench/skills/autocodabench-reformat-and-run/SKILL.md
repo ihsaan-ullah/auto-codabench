@@ -73,6 +73,17 @@ that's the orchestrator's job after you finish.
    You do NOT have permission to `pip install` directly. Use the MCP
    tool `autocodabench_install_env_extras` for that.
 
+   **Engine awareness.** The runner prefers the docker engine when
+   Docker is available: scoring runs execute inside the bundle's
+   declared `docker_image`, not the conda env — the run result's
+   `engine` field says which ran. When `engine` is `"docker"`, probe
+   the image instead of the env:
+   - `docker run --rm <docker_image> pip list --format=freeze`
+   - `docker run --rm <docker_image> python3 -c "import X; print(X.__version__)"`
+   and adapt the submission to what the image ships —
+   `autocodabench_install_env_extras` affects only the conda fallback
+   and cannot add packages to the image.
+
    **Always pass the per-run env name** (the one the orchestrator handed
    you, e.g. `acb-run-<run_id>`) — NEVER pass `env_name="base"`.
    Installing into `base` pollutes the user's host environment and

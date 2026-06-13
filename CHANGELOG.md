@@ -7,12 +7,34 @@ All notable changes to autocodabench. Format follows
 ## [Unreleased]
 
 ### Fixed
+- Runner misclassified a λ-style (prediction-file) bundle as γ-style when
+  `ingestion_program/` existed but was empty — `init_bundle` creates that
+  skeleton directory for every bundle, so the runner then tried to execute
+  a nonexistent `ingestion.py`. Now requires the directory to hold
+  runnable content. Surfaced by the first real docker-engine run of the
+  demo bundle.
 - `validate_bundle` falsely gated bundles using the legacy extensionless
   `metadata` program filename, which production Codabench accepts —
   found by validating the STYLE-TRANS-FAIR production reference bundle;
   regression-tested.
 
 ### Added
+- **Docker execution engine** (platform-faithful runs):
+  `run_baseline_submission` / `run_user_submission` (library + MCP tools)
+  accept `engine: auto|docker|conda`. The docker engine — selected by
+  default whenever a daemon is reachable — executes programs inside the
+  bundle's declared `docker_image` exactly as the Codabench worker does
+  (sandbox mounted at `/app`, working dir `/app/program`, legacy
+  `$input`/`$output`/`$program` substitution, **no** requirements
+  installation, platform default `codalab/codalab-legacy:py37`), so a
+  clean local run is evidence the bundle will execute on Codabench. The
+  conda engine remains the fallback (and the starting-kit notebook host),
+  and honors the same worker path tokens by rewriting `$program`/`$input`/
+  `$output` (and the `/app/...` spellings) to host sandbox paths; every
+  result records `engine` / `docker_image` / `engine_note`. Verified
+  end-to-end: the demo bundle's baseline scores identically (accuracy
+  0.825) under both engines, the docker run executing inside the real
+  `codalab/codalab-legacy:py39` image.
 - **Interactive auth preflight**: `create` and `validate --judged` now check
   for a usable Claude auth path *before* starting a live session. On an
   interactive terminal with no auth, the CLI walks you through it —
