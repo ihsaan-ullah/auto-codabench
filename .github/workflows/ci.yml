@@ -30,8 +30,8 @@ jobs:
       - name: Offline end-to-end (replay demo → validate zip)
         run: |
           autocodabench demo --out /tmp/acb-demo
-          codabench-validate /tmp/acb-demo/demo-ai-text-detection.zip
-          codabench-validate /tmp/acb-demo/demo-ai-text-detection --json > /tmp/report.json
+          autocodabench validate-bundle /tmp/acb-demo/demo-ai-text-detection.zip
+          autocodabench validate-bundle /tmp/acb-demo/demo-ai-text-detection --json > /tmp/report.json
           python -c "import json; r = json.load(open('/tmp/report.json')); assert r['ok'], r"
       - name: Wheel builds and ships package data
         run: |
