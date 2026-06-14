@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..backends.base import AgentBackend, AgentRunResult, AgentTask
-from ..run_log import open_run
+from ..run_log import SessionInfo, open_run, open_session, record_session_phase
 from . import prompts
 
 # Tool allowlists per phase — the narrow capability surface is the contract.
@@ -45,11 +45,14 @@ BUILD_TOOLS = [
 @dataclass
 class CreateResult:
     ok: bool
-    run_dir: Path
+    run_dir: Path                       # the session dir (shared phase prefix)
     plan_path: Path | None = None
     bundle_dir: Path | None = None
     zip_path: Path | None = None
     validation: Any = None              # checks.ValidationReport | None
+    plan_dir: Path | None = None
+    build_dir: Path | None = None
+    validate_dir: Path | None = None
     plan: AgentRunResult | None = None
     build: AgentRunResult | None = None
     error: str | None = None
@@ -96,6 +99,7 @@ async def create_async(
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
     validate: bool = True,
+    session: SessionInfo | None = None,
 ) -> CreateResult:
     """Idea (or proposal text) → validated Codabench bundle, in two phases.
 
@@ -113,13 +117,19 @@ async def create_async(
         if on_event is not None:
             on_event(event)
 
-    info = open_run(slug="create")
-    run_dir = info.path
+    session = session or open_session()
+    run_dir = session.path                      # the shared-prefix session dir
+    sid_kw = {"session_dir": run_dir, "branch_id": session.branch_id,
+              "runtime_id": session.runtime_id}
     emit({"kind": "run_opened", "run_dir": str(run_dir)})
-    mcp_servers = _mcp_servers(run_dir)
-    env = {**os.environ, "AUTOCODABENCH_RUN_DIR": str(run_dir)}
+
+    def _phase_env(phase_dir: Path):
+        return ({**os.environ, "AUTOCODABENCH_RUN_DIR": str(phase_dir)},
+                _mcp_servers(phase_dir))
 
     # ---- Phase 1: plan -----------------------------------------------------
+    p1 = open_run(slug="create", phase="phase1_plan", **sid_kw)
+    env, mcp_servers = _phase_env(p1.path)
     emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
           "title": "Planning the competition design",
           "detail": "drafting specs/implementation_plan.md (task, data, metric, "
@@ -142,23 +152,28 @@ async def create_async(
         env=env,
         model=model,
         max_budget_usd=max_budget_usd,
-        trace_path=run_dir / "agent_trace" / "plan.jsonl",
+        trace_path=p1.path / "agent_trace" / "plan.jsonl",
         on_text=on_text,
         on_event=on_event,
     ))
     emit({"kind": "phase_done", "phase": "plan", "ok": plan_result.ok,
           "num_turns": plan_result.num_turns,
           "cost_usd": plan_result.total_cost_usd})
-    plan_path = run_dir / "specs" / "implementation_plan.md"
+    plan_path = p1.path / "specs" / "implementation_plan.md"
+    record_session_phase(run_dir, "phase1_plan", {
+        "dir": str(p1.path), "ok": bool(plan_result.ok and plan_path.is_file()),
+        "cost_usd": plan_result.total_cost_usd, "num_turns": plan_result.num_turns})
     if not plan_result.ok or not plan_path.is_file():
         return CreateResult(
-            ok=False, run_dir=run_dir,
+            ok=False, run_dir=run_dir, plan_dir=p1.path,
             plan=plan_result,
             error=plan_result.error or (
                 "plan phase finished without saving specs/implementation_plan.md"),
         )
 
     # ---- Phase 2: build (fresh session; only the plan carries over) --------
+    p2 = open_run(slug="create", phase="phase2_build", **sid_kw)
+    env, mcp_servers = _phase_env(p2.path)
     emit({"kind": "phase", "phase": "build", "index": 2, "total": 3,
           "title": "Building the bundle",
           "detail": "writing competition.yaml, pages, scoring program, baseline "
@@ -172,29 +187,50 @@ async def create_async(
         env=env,
         model=model,
         max_budget_usd=max_budget_usd,
-        trace_path=run_dir / "agent_trace" / "build.jsonl",
+        trace_path=p2.path / "agent_trace" / "build.jsonl",
         on_text=on_text,
         on_event=on_event,
     ))
     emit({"kind": "phase_done", "phase": "build", "ok": build_result.ok,
           "num_turns": build_result.num_turns,
           "cost_usd": build_result.total_cost_usd})
-    bundle_dir, zip_path = _find_bundle(run_dir)
+    bundle_dir, zip_path = _find_bundle(p2.path)
+    record_session_phase(run_dir, "phase2_build", {
+        "dir": str(p2.path), "ok": bool(build_result.ok and bundle_dir is not None),
+        "bundle_dir": str(bundle_dir) if bundle_dir else None,
+        "zip_path": str(zip_path) if zip_path else None,
+        "cost_usd": build_result.total_cost_usd, "num_turns": build_result.num_turns})
     if not build_result.ok or bundle_dir is None:
         return CreateResult(
             ok=False, run_dir=run_dir, plan_path=plan_path,
+            plan_dir=p1.path, build_dir=p2.path,
             plan=plan_result, build=build_result,
             error=build_result.error or "build phase produced no bundle",
         )
 
-    # ---- Validate through the check framework ------------------------------
+    # ---- Phase 3: validate through the check framework ---------------------
     report = None
+    validate_dir = None
     if validate:
+        p3 = open_run(slug="create", phase="phase3_validate", **sid_kw)
+        validate_dir = p3.path
         emit({"kind": "phase", "phase": "validate", "index": 3, "total": 3,
               "title": "Validating the bundle",
-              "detail": "running the registered pre-launch checks"})
+              "detail": "running the registered pre-launch checks, including "
+                        "executing the bundle (reusing the build phase's runs)"})
         from ..checks import validate_bundle_path_async
-        report = await validate_bundle_path_async(bundle_dir)
+        report = await validate_bundle_path_async(bundle_dir, execute=True)
+        try:
+            (p3.path / "validation_report.md").write_text(
+                report.to_markdown(), encoding="utf-8")
+            import json as _json
+            (p3.path / "validation_report.json").write_text(
+                _json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")
+        except OSError:
+            pass
+        record_session_phase(run_dir, "phase3_validate", {
+            "dir": str(p3.path), "ok": report.ok,
+            "counts": report.counts})
         emit({"kind": "phase_done", "phase": "validate",
               "ok": report.ok if report is not None else True})
 
@@ -205,6 +241,9 @@ async def create_async(
         bundle_dir=bundle_dir,
         zip_path=zip_path,
         validation=report,
+        plan_dir=p1.path,
+        build_dir=p2.path,
+        validate_dir=validate_dir,
         plan=plan_result,
         build=build_result,
     )

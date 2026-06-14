@@ -6,6 +6,30 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Execution-based validation**: `validate-bundle` (and `create`'s phase 3)
+  now *runs* the bundle, not just inspects it. Two new deterministic checks
+  execute the bundle inside its declared `docker_image` — `baseline-execution`
+  (runs the baseline through ingestion+scoring; gates on a missing score) and
+  `starting-kit-execution` (executes the notebook; advisory). The report gains
+  an **Execution** section recording which image ran, its host/arch fit
+  (native vs QEMU), wall-clock duration, the scores produced, and which data
+  was consumed. On by default in the CLI (`--no-execute` for static-only);
+  off by default in the `validate_bundle_path(..., execute=False)` library call
+  so programmatic/keyless use stays static and fast.
+- **Execution cache**: successful baseline/notebook runs are recorded next to
+  the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash of
+  the bundle. Phase 3 reuses the build phase's runs when the bundle is
+  unchanged and re-executes when any file changed (e.g. a hand-edit between a
+  separately-run build and a later `validate-bundle`), so a stale result can
+  never be trusted.
+- **Per-phase output folders**: a `create` run is now one session directory
+  (`<branch>_<timestamp>/`) with `phase1_plan/`, `phase2_build/`, and
+  `phase3_validate/` subdirectories and a session `manifest.json`; phase 3
+  writes `validation_report.md`/`.json`. A standalone `validate-bundle --execute`
+  gets its own session (different prefix) containing only `phase3_validate/`,
+  so generation and validation runs never share a prefix.
+
 ### Removed
 - **The conda execution engine.** Execution is now **Docker-only**: every run
   — scoring, ingestion, and the starting-kit notebook — executes inside the

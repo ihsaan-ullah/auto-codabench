@@ -61,6 +61,13 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
                                    "(default: <bundle>/competition_facts.yaml if present)")
     p.add_argument("--judged", action="store_true",
                    help="also run LLM-judged advisory checks (needs an LLM backend)")
+    p.add_argument("--execute", "--run", action="store_true", dest="execute",
+                   help="(default) run the bundle: execute its baseline through "
+                        "scoring and its starting-kit notebook in Docker, reusing "
+                        "any runs the build phase already did")
+    p.add_argument("--no-execute", "--static", action="store_false", dest="execute",
+                   help="schema/static checks only — do not run the bundle")
+    p.set_defaults(execute=True)
     p.add_argument("--backend", default=None,
                    help="LLM backend for --judged: claude[:model] (default), "
                         "ollama:<model> (local, keyless), openai:<model>, or an "
@@ -73,19 +80,23 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
-    # Docker runtime preflight — informational here (static validation does not
-    # itself run Docker), so the user sees which image Codabench will run this
-    # bundle under and whether it fits the host. Suppressed for --json.
+    # Docker runtime preflight. When executing (the default) Docker is a real
+    # prerequisite for the run checks; with --no-execute it is informational
+    # (static validation does not itself run Docker). Suppressed for --json.
     if not args.as_json:
         declared = _bundle_declared_image(args.bundle)
         image = declared or _default_docker_image()
         src = ("declared in competition.yaml" if declared
                else "bundle declares none — Codabench/autocodabench default")
-        _print_docker_preflight(
-            image, required=False,
-            note=(f"Codabench will run this bundle inside the image above ({src}). "
-                  "Docker is needed only for the run phases (e.g. `create` "
-                  "self-validation), not for this static schema validation."))
+        if args.execute:
+            note = (f"Codabench will run this bundle inside the image above ({src}). "
+                    "This validation will run the bundle's baseline and starting-kit "
+                    "in it (reusing the build phase's runs when unchanged); pass "
+                    "--no-execute for static checks only.")
+        else:
+            note = (f"Codabench will run this bundle inside the image above ({src}). "
+                    "Static validation only (--no-execute): the bundle is not run.")
+        _print_docker_preflight(image, required=args.execute, note=note)
         print()
 
     if args.judged and not _require_live_claude_auth(args.backend):
@@ -94,12 +105,37 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.judged and (args.backend or args.model):
         from ..backends import resolve_backend
         backend = resolve_backend(args.backend, model=args.model)
+
+    # When executing, give this standalone run its own session dir
+    # (phase3_validate) so re-run logs and the saved report land in one
+    # organized place — a separate prefix from any `create` session, so the
+    # two provenances never get confused.
+    run_dir = None
+    if args.execute:
+        from ..run_log import open_run, open_session
+        session = open_session(kind="validate")
+        run_dir = open_run(slug="validate", phase="phase3_validate",
+                           session_dir=session.path).path
+
     report = validate_bundle_path(args.bundle, facts_path=args.facts,
-                                  judged=args.judged, backend=backend)
+                                  judged=args.judged, execute=args.execute,
+                                  backend=backend)
+
+    if run_dir is not None:
+        try:
+            (run_dir / "validation_report.md").write_text(
+                report.to_markdown(), encoding="utf-8")
+            (run_dir / "validation_report.json").write_text(
+                json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")
+        except OSError:
+            pass
+
     if args.as_json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
         print(report.to_markdown())
+        if run_dir is not None:
+            print(f"\nReport + run logs: {run_dir}")
     return 0 if report.ok else 1
 
 
@@ -382,7 +418,7 @@ def _print_create_config(*, idea, backend_name, auth_label, model, run_dir,
 
 def _cmd_create(args: argparse.Namespace) -> int:
     from ..agent.pipeline import create_async
-    from ..run_log import open_run
+    from ..run_log import open_session
 
     if not _require_live_claude_auth(args.backend):
         return 2
@@ -432,8 +468,11 @@ def _cmd_create(args: argparse.Namespace) -> int:
     else:
         verbosity = "summary (user-oriented progress; pass --debug for the full trace)"
 
-    # ---- Create the run dir now so the config banner can name it -----------
-    run_dir = open_run(slug="create").path
+    # ---- Create the session dir now so the config banner can name it -------
+    # (per-phase subdirs phase1_plan / phase2_build / phase3_validate land
+    # under this shared prefix.)
+    session = open_session()
+    run_dir = session.path
 
     print()
     _print_create_config(
@@ -486,20 +525,23 @@ def _cmd_create(args: argparse.Namespace) -> int:
         max_budget_usd=args.max_budget_usd,
         on_event=renderer,
         validate=not args.no_validate,
+        session=session,
     ))
 
     print("\n" + "═" * 60)
     print("Done.")
-    print(f"  run dir:   {result.run_dir}")
+    print(f"  session:   {result.run_dir}  (phase1_plan / phase2_build / phase3_validate)")
     print(f"  plan:      {result.plan_path}")
     print(f"  bundle:    {result.bundle_dir}")
     print(f"  zip:       {result.zip_path}")
+    if result.validate_dir:
+        print(f"  report:    {Path(result.validate_dir) / 'validation_report.md'}")
     image = _bundle_docker_image(result.bundle_dir)
     if image:
         print(f"  docker:    {image}  (declared in competition.yaml; what "
               "Codabench will run)")
-    updated_plan = (Path(result.run_dir) / "specs" / "updated_implementation_plan.md"
-                    if result.run_dir else None)
+    updated_plan = (Path(result.build_dir) / "specs" / "updated_implementation_plan.md"
+                    if result.build_dir else None)
     if updated_plan and updated_plan.is_file():
         print(f"  changes:   {updated_plan}  (deviations from the original plan)")
     print(f"  cost:      ${result.total_cost_usd:.2f}")
