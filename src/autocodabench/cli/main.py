@@ -73,6 +73,21 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
+    # Docker runtime preflight — informational here (static validation does not
+    # itself run Docker), so the user sees which image Codabench will run this
+    # bundle under and whether it fits the host. Suppressed for --json.
+    if not args.as_json:
+        declared = _bundle_declared_image(args.bundle)
+        image = declared or _default_docker_image()
+        src = ("declared in competition.yaml" if declared
+               else "bundle declares none — Codabench/autocodabench default")
+        _print_docker_preflight(
+            image, required=False,
+            note=(f"Codabench will run this bundle inside the image above ({src}). "
+                  "Docker is needed only for the run phases (e.g. `create` "
+                  "self-validation), not for this static schema validation."))
+        print()
+
     if args.judged and not _require_live_claude_auth(args.backend):
         return 2
     backend = None
@@ -241,6 +256,110 @@ def _bundle_docker_image(bundle_dir) -> str | None:
         return None
 
 
+def _default_docker_image() -> str:
+    """The CPU base image a bundle gets when it declares none — what `create`
+    will start from and what Codabench falls back to."""
+    from ..runner.execution import _DEFAULT_DOCKER_IMAGE
+    return _DEFAULT_DOCKER_IMAGE
+
+
+def _bundle_declared_image(bundle_path) -> str | None:
+    """The `docker_image` a bundle declares — works for a directory or a .zip."""
+    p = Path(bundle_path)
+    text = None
+    if p.is_dir():
+        yp = p / "competition.yaml"
+        if yp.is_file():
+            text = yp.read_text(encoding="utf-8", errors="replace")
+    elif p.is_file() and p.suffix == ".zip":
+        import zipfile
+        try:
+            with zipfile.ZipFile(p) as z:
+                for name in z.namelist():
+                    if name.endswith("competition.yaml") and name.count("/") <= 1:
+                        text = z.read(name).decode("utf-8", "replace")
+                        break
+        except (zipfile.BadZipFile, OSError):
+            return None
+    if not text:
+        return None
+    try:
+        import yaml
+        comp = yaml.safe_load(text) or {}
+        img = comp.get("docker_image")
+        return img.strip() if isinstance(img, str) and img.strip() else None
+    except Exception:
+        return None
+
+
+def _print_docker_preflight(image, *, required: bool, note: str | None = None) -> dict:
+    """Report the Docker runtime up front: which image will run, its CPU
+    architecture versus the host (native vs slow QEMU emulation), and whether
+    Docker is installed and running.
+
+    `required=True` (the run phases — `create`) makes a missing daemon a loud
+    prerequisite warning; `required=False` (static `validate-bundle`) keeps it
+    informational. Returns the underlying preflight dict.
+    """
+    from ..runner import docker_preflight
+
+    p = docker_preflight(image)
+    d = p["docker"]
+    host, host_os = p["host_arch"], p["host_os"]
+    warn = []  # lines to also echo to stderr when this is a hard prerequisite
+
+    print("Docker runtime")
+    if not d["cli_installed"]:
+        print("  status:    ✗ Docker is not installed")
+        warn.append("Docker is not installed. autocodabench executes every bundle "
+                    "inside Docker — install Docker Desktop "
+                    "(https://docs.docker.com/get-docker/) and start it before running.")
+    elif not d["daemon_running"]:
+        print("  status:    ✗ Docker is installed but its daemon is not reachable")
+        warn.append("The Docker daemon is not running. Start Docker Desktop "
+                    "(or `colima start`), then retry.")
+    else:
+        ver = d["server_version"] or "?"
+        print(f"  status:    ✓ Docker {ver} · daemon running ({d['os']}/{d['arch']})")
+
+    print(f"  image:     {image}")
+    if note:
+        for line in textwrap.wrap(note, width=66):
+            print(f"             {line}")
+
+    if p["runs_natively"] is True:
+        avail = "/".join(p["image_available_arches"])
+        tag = f"multi-arch ({avail})" if p["image_multi_arch"] else avail
+        src = "" if p["image_present_locally"] else " — Docker will pull it on first run"
+        print(f"  image fit: {tag} includes {host} → runs natively{src}")
+    elif p["runs_natively"] is False:
+        only = "/".join(p["image_available_arches"])
+        print(f"  image fit: ⚠ {only}-only — host is {host}; runs under QEMU emulation (slow)")
+        print(f"             For local testing prefer a native {host} image, e.g.:")
+        print(f"               export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312")
+        print(f"             (a multi-arch tag Docker resolves to {host} here)")
+    else:  # architecture undetermined (not pulled, registry unreachable/private)
+        err = (p["image_error"] or "").lower()
+        if "denied" in err or "unauthorized" in err or "not found" in err:
+            reason = "not in the local image store and not published to a registry"
+        else:
+            reason = p["image_error"] or "architecture undetermined"
+        print(f"  image fit: ? undetermined — {reason}")
+        if d["daemon_running"]:
+            print(f"             Not in the local store and no registry manifest. Build the")
+            print(f"             autocodabench base image locally (docker/build_and_push.sh,")
+            print(f"             no --push), or set AUTOCODABENCH_DOCKER_IMAGE to a pulled image")
+            print(f"             such as codalab/codalab-legacy:py312 (native {host}).")
+
+    print(f"  host:      {host} ({host_os})")
+
+    if warn and required:
+        print()
+        for w in warn:
+            print(f"WARNING: {w}", file=sys.stderr)
+    return p
+
+
 def _print_create_config(*, idea, backend_name, auth_label, model, run_dir,
                          data, max_budget_usd, validate, verbosity) -> None:
     """Show the full effective configuration before spending anything, so the
@@ -322,6 +441,16 @@ def _cmd_create(args: argparse.Namespace) -> int:
         model=model_shown, run_dir=run_dir, data=args.data,
         max_budget_usd=args.max_budget_usd, validate=not args.no_validate,
         verbosity=verbosity)
+
+    # Docker runtime preflight — a hard prerequisite for `create`: the build
+    # phase self-validates the bundle by running its baseline and starting-kit
+    # notebook inside Docker. Show the starting image (the build may change it;
+    # the final image is reported at the end), its arch fit, and daemon status.
+    print()
+    _print_docker_preflight(
+        _default_docker_image(), required=True,
+        note="Starting image. The build phase may change docker_image to make "
+             "the bundle pass; the final image is reported when the run finishes.")
 
     if debug:
         print("\n  Note: --debug prints the full developer trace — every tool "

@@ -1,6 +1,6 @@
 ---
 name: autocodabench-implement
-description: Phase 2 of an AutoCodabench session — read the locked `implementation_plan.md`, write a complete Codabench bundle, then SELF-VALIDATE end-to-end by (a) running the bundle's own baseline submission through the scoring pipeline and (b) executing the starting-kit notebook in a per-run conda env. Iterates on runtime errors (missing packages, API breaks) by installing extras or editing bundle code, capped at N attempts per artifact. STRICT EXIT: both the baseline run and the notebook MUST execute successfully for the skill to finish "pass".
+description: Phase 2 of an AutoCodabench session — read the locked `implementation_plan.md`, write a complete Codabench bundle, then SELF-VALIDATE end-to-end by (a) running the bundle's own baseline submission through the scoring pipeline and (b) executing the starting-kit notebook inside the bundle's Docker image. Iterates on runtime errors (missing dependencies → change docker_image; API breaks → edit bundle code), capped at N attempts per artifact. STRICT EXIT: both the baseline run and the notebook MUST execute successfully for the skill to finish "pass".
 ---
 
 # AutoCodabench — Phase 2: Competition Creation (self-validating)
@@ -11,8 +11,9 @@ twofold:
 
 1. **Write** a complete Codabench bundle from that plan.
 2. **Self-validate** it: run the bundle's own baseline submission AND
-   execute the starting-kit notebook end-to-end inside a per-run
-   conda env. Iterate on runtime errors until both succeed.
+   execute the starting-kit notebook end-to-end, both inside the
+   bundle's declared Docker image. Iterate on runtime errors until both
+   succeed.
 
 This is a strict pipeline. A bundle that lints clean but whose own
 baseline can't run is a broken bundle — the iteration loop catches
@@ -46,7 +47,7 @@ source of truth.
    A bundle whose own baseline can't run shouldn't ship.
 5. **Adapt code, not behavior.** When iterating on a runtime failure,
    you may:
-   - install missing PyPI packages via `autocodabench_install_env_extras`,
+   - change the bundle's `docker_image` to one that ships a missing dependency (run-time installation is not available under Docker-only execution),
    - port an API call that broke (`tf.keras.optimizers.legacy.Adam` →
      `tf.keras.optimizers.Adam`) by editing the bundle file,
    - tighten a path / file-naming bug in `score.py` / `ingestion.py`.
@@ -126,7 +127,7 @@ When the plan IS present, send a one-paragraph confirmation:
 > Reading `implementation_plan.md`. Task: <kind>; metric:
 > `<sklearn func>`; baseline: `<class>`; data: <source>. I'll
 > generate `competition.yaml`, `scoring_program/`, `solution/`, and
-> the standard pages; lint; clone a per-run conda env; then run the
+> the standard pages; lint; confirm the Docker image is available; then run the
 > baseline + starting-kit notebook to verify end-to-end. If anything
 > errors I'll diagnose stderr and retry.
 
@@ -277,27 +278,26 @@ Once clean: `autocodabench_log_event(kind="bundle_validated")`.
 
 ---
 
-## 4. Prepare the per-run conda env
+## 4. Ensure the docker image is available
+
+Execution is **Docker-only**: every run (baseline, user submission, and
+the starting-kit notebook) executes inside the bundle's declared
+`docker_image`, exactly as Codabench's worker does. There is no conda
+env to build.
 
 ```
 env = autocodabench_prepare_run_env(slug=<slug>)
 ```
 
-This clones `base`, installs the union of the bundle's per-program
-`requirements.txt` files via `uv pip install` (or `pip` as fallback),
-and returns `env_name` + `env_python` + `package_count`. Logs land in
-`<run>/run_logs/<slug>/env/`.
-
-If `env["ok"]` is False, the per-program requirements have a defect
-— the requirements union failed to install. Read the install
-stderr, fix the offending `requirements.txt`, and retry. Don't move
-on with a half-installed env.
-
-Save `env_name` — every subsequent runner call needs it. (The env
-serves the starting-kit notebook run in 5b and the conda fallback
-engine; the baseline run in 5a executes inside the bundle's
-`docker_image` instead when Docker is available. Prepare the env
-regardless — the notebook always needs it.)
+This confirms the bundle's `docker_image` is in the local Docker store
+(pulling it once if needed) and returns `{ok, image, ...}`. A Docker
+daemon is required; if `env["ok"]` is False, read `env["note"]`: either
+no daemon is reachable, or the declared image is not available locally
+and could not be pulled. In the latter case, set the bundle's
+`docker_image` (§2.8) to an image that IS available — the autocodabench
+base images once built locally, or a stock Codabench image — and retry.
+You do not need to save anything; later runner calls resolve the image
+from `competition.yaml` themselves.
 
 ---
 
@@ -315,23 +315,19 @@ MAX_ATTEMPTS_NOTEBOOK = 4
 ### 5a. Run the bundle's own baseline
 
 ```
-baseline = autocodabench_run_baseline_submission(slug, env_name)
+baseline = autocodabench_run_baseline_submission(slug)
 ```
 
 The returned dict carries `ok`, `stage` (which phase failed:
-"ingestion" or "scoring"), `engine` / `docker_image` / `engine_note`
-(how it ran), `ingestion` / `scoring` exit codes + stderr tails,
-parsed `scores`, and `sandbox_dir` for forensic inspection.
-
-Check `engine` first: `"docker"` means the run executed inside the
-bundle's declared `docker_image` exactly as Codabench will — the
-platform-faithful path. `"conda"` means the per-run env was used
-(no Docker daemon on this host; `engine_note` says so) — the run
-verifies the programs but not the image. Diagnosis differs by
-engine: under docker, a missing module means the `docker_image` YOU
-declared lacks the dependency — fix `competition.yaml`'s
-`docker_image` (or vendor a pure-Python module into the program
-dir); `install_env_extras` affects only the conda engine.
+"ingestion" or "scoring"), `engine` (always `"docker"`) /
+`docker_image` (the image it ran in), `ingestion` / `scoring` exit
+codes + stderr tails, parsed `scores`, and `sandbox_dir` for forensic
+inspection. The run executes inside the bundle's declared
+`docker_image` exactly as Codabench will, so a clean run is evidence of
+platform behavior — and a missing dependency is the declared image's
+problem, fixed by changing the image, never by installing at run time
+(`install_env_extras` is unavailable in Docker-only mode, because the
+platform installs nothing).
 
 If `baseline["ok"]` is True, log
 `autocodabench_log_event(kind="baseline_passed",
@@ -341,25 +337,17 @@ If False, diagnose:
 
 | stderr pattern | fix |
 |---|---|
-| `ModuleNotFoundError: No module named '<X>'` | Conda engine: `autocodabench_install_env_extras(env_name, ["<pypi_name_for_X>"])`. Common map: skimage→scikit-image, cv2→opencv-python-headless, PIL→Pillow, bs4→beautifulsoup4, yaml→PyYAML, sklearn→scikit-learn. Docker engine: the declared `docker_image` lacks `<X>` — switch `competition.yaml` to an image that ships it (then re-run), or vendor a small pure-Python module into the program dir; the platform will hit the same error otherwise. |
-| `ImportError: cannot import name X from Y` / `AttributeError: module Y has no attribute X` / `not supported in Keras [0-9]` | Edit the file that uses the broken API (in the BUNDLE, e.g. `solutions/solution_baseline/model.py` or `scoring_program/score.py`). Port to the available API. Common: `tf.keras.optimizers.legacy.Adam` → `tf.keras.optimizers.Adam`; `from keras.preprocessing import X` → `from tensorflow.keras.preprocessing import X`. |
+| `ModuleNotFoundError: No module named '<X>'` | The declared `docker_image` does not ship `<X>`. Change `competition.yaml`'s `docker_image` to one that does — the autocodabench base images already include the common scientific stack (numpy, pandas, scikit-learn, scipy, matplotlib, seaborn, pillow); for anything heavier (e.g. tensorflow, torch) choose a public image that ships it, or extend an autocodabench base image and rebuild (docker/README.md). Then re-run. Record the image change as a `deviation` (rule 8). Do NOT try to install the package at run time — the Codabench worker installs nothing, so it would pass here and fail on the platform. |
+| `ImportError: cannot import name X from Y` / `AttributeError: module Y has no attribute X` / `not supported in Keras [0-9]` | Edit the file that uses the broken API (in the BUNDLE, e.g. `solutions/solution_baseline/model.py` or `scoring_program/score.py`). Port to the available API. Common: `tf.keras.optimizers.legacy.Adam` → `tf.keras.optimizers.Adam`; `from keras.preprocessing import X` → `from tensorflow.keras.preprocessing import X`. (If the image simply ships the wrong major version, prefer changing `docker_image`.) |
 | `FileNotFoundError: <path>` | Either ingestion is looking for the wrong path or the scoring stage's input/output dirs differ from Codabench convention. Re-read the relevant `metadata.yaml`'s `command:` and the script's `sys.argv` use. Fix the script. |
 | `ValueError: shapes (n,m) and (p,q) ...` / metric-side numeric failure | Mismatch between baseline's predictions format and scoring's reader. Fix one or the other (whichever the plan unambiguously specifies). |
-| Process killed / `SIGTERM` / no traceback | Native library conflict (e.g. abseil deadlock between TF and pyarrow). Try uninstalling the conflicting non-essential package via `install_env_extras(env_name, ["pyarrow<7"])` or pinning to a compatible version. If still failing after one such fix, fall through to "exhausted" — this class of failure is upstream of any code edit you can do. |
-| **Process alive, ~0% CPU, no stderr output, hangs indefinitely** | macOS libomp / OpenBLAS / TF multi-thread deadlock. The harness sets `OMP_NUM_THREADS=1` + `TF_NUM_INTEROP_THREADS=1` + `TF_NUM_INTRAOP_THREADS=1` + sibling vars as defaults in the subprocess env BEFORE python starts, so this should be already handled. If it still hangs, the bundle's own code is overriding one of those vars somewhere — grep `scoring_program/`, `ingestion_program/`, `solutions/` for `OMP_NUM_THREADS` / `TF_NUM_*` and remove the override. Do NOT add `os.environ.setdefault("OMP_NUM_THREADS", "1")` to bundle code as a "fix" — by the time that line runs, libomp is already loaded with the wrong thread count. |
+| Process killed / `SIGTERM` / hangs with no output | A native-library conflict or thread-pool deadlock inside the image (e.g. abseil/TF, or BLAS/OMP oversubscription). Prefer a `docker_image` whose pinned versions are mutually compatible. If a thread deadlock is suspected, pass single-thread overrides for the call via `extra_env`, e.g. `{"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "TF_NUM_INTEROP_THREADS": "1", "TF_NUM_INTRAOP_THREADS": "1"}` (these are applied as `-e` flags before the container's python starts). If it persists after one image change, fall through to "exhausted". |
 
-The harness automatically exports the following defaults into every
-subprocess it launches (set BEFORE the child python starts, so libomp
-and BLAS read them at .so-load time): `OMP_NUM_THREADS=1`,
-`OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
-`VECLIB_MAXIMUM_THREADS=1`, `NUMEXPR_NUM_THREADS=1`,
-`TF_NUM_INTEROP_THREADS=1`, `TF_NUM_INTRAOP_THREADS=1`,
-`TF_CPP_MIN_LOG_LEVEL=2`, `PYTHONUNBUFFERED=1`. You can override
-any of them per-call via the `extra_env` arg on
-`autocodabench_run_baseline_submission`, `_run_user_submission`, or
-`_run_starting_kit`, but the defaults are intentional — they
-prevent the macOS deadlock. The toy-scale data used in self-validation
-doesn't benefit from multi-threading anyway.
+Runs execute inside a Linux container, so the image's own library
+defaults apply; the runner only sets `PYTHONUNBUFFERED=1`. Use the
+`extra_env` arg on `autocodabench_run_baseline_submission`,
+`_run_user_submission`, or `_run_starting_kit` to pass any additional
+container env vars for a call (e.g. the single-thread vars above).
 
 Re-run baseline. Cap at `MAX_ATTEMPTS_BASELINE`. If exhausted, set
 `validate_runtime = false`, record `baseline_status = "fail"` in the
@@ -368,11 +356,13 @@ closing message, and SKIP to step 7 (do not zip).
 ### 5b. Run the starting-kit notebook
 
 ```
-nb = autocodabench_run_starting_kit(slug, env_name)
+nb = autocodabench_run_starting_kit(slug)
 ```
 
-Returns `ok`, `cells_executed`, `exit_code`, `stderr_tail`,
-`executed_notebook` (path to the executed copy for review).
+Runs the notebook inside the bundle's `docker_image` (which ships the
+notebook toolchain), with the bundle mounted as the working directory
+so relative paths resolve. Returns `ok`, `cells_executed`, `exit_code`,
+`stderr_tail`, `executed_notebook` (path to the executed copy for review).
 
 If `nb["ok"]` is True, log
 `autocodabench_log_event(kind="starting_kit_passed",
@@ -416,8 +406,8 @@ Emit one of two closing blocks.
   baseline_run     — passed: <metric_key>=<score> in <N>s
   starting_kit     — passed: <N> cells executed in <M>s
   docker_image     — `<the image competition.yaml now declares>` (what the
-                      baseline passed under, and what Codabench will use)
-  env              — `<env_name>` (<package_count> packages, install via <uv|pip>)
+                      baseline + notebook passed under, and what Codabench
+                      will use)
 
 Choices I made where the plan was ambiguous:
   - <list any defaults you picked, or "none — the plan was fully concrete">
@@ -441,7 +431,7 @@ autocodabench_log_event(
              "validate_runtime": true,
              "baseline_scores": {...},
              "cells_executed": <int>,
-             "env_name": "<...>"},
+             "docker_image": "<final image>"},
 )
 ```
 
@@ -453,7 +443,7 @@ autocodabench_log_event(
   validate_bundle  — passed
   baseline_run     — <pass|fail>: <one-line reason if fail>
   starting_kit     — <pass|fail>: <one-line reason if fail>
-  env              — `<env_name>`
+  docker_image     — `<the image competition.yaml declares>`
   attempts used    — baseline: <K>/5, notebook: <K>/4
 
 Last failing stderr (excerpted):
@@ -498,11 +488,12 @@ autocodabench_log_event(
   because "it's simpler".
 - ❌ Generating synthetic data when the plan asked for a real
   dataset. Stop and report instead.
-- ❌ Calling `install_env_extras` to install something the plan
-  asked for but you forgot to put in `requirements.txt`. The right
-  fix is to add it to the bundle's `requirements.txt` AND
-  `install_env_extras` so this session can proceed — that way the
-  bundle is correct for any future session too.
+- ❌ Trying to install a dependency at run time. Execution is
+  Docker-only and the Codabench worker installs nothing, so a run-time
+  install would pass here and fail on the platform. The right fix is to
+  declare a `docker_image` that already ships the dependency (a richer
+  public image, or an autocodabench base image extended and rebuilt),
+  so the bundle is correct for the platform and every future run.
 - ❌ Catching exceptions inside `score.py` to make the run "succeed".
   If scoring can't read the predictions, that's a bug to fix, not to
   swallow.

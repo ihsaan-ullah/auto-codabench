@@ -24,7 +24,13 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
  && rm -f /tmp/autocodabench-base-requirements.txt
 
 # Fail the build if the notebook toolchain cannot satisfy the runner's exact
-# invocation, so a broken pin never ships silently.
-RUN jupyter execute --help >/dev/null 2>&1 \
- && python -c "import numpy, pandas, sklearn, scipy, matplotlib, seaborn, PIL; \
-print('autocodabench-base-cpu: stack import OK')"
+# invocation, so a broken pin never ships silently. We do not merely check
+# `--help`: we author a one-cell notebook and run it through the same command
+# the starting-kit runner uses (`jupyter nbconvert --to notebook --execute
+# --inplace`), which exercises nbconvert -> nbclient -> ipykernel end to end.
+RUN python -c "import numpy, pandas, sklearn, scipy, matplotlib, seaborn, PIL; \
+print('autocodabench-base-cpu: stack import OK')" \
+ && python -c "import json; json.dump({'cells':[{'cell_type':'code','metadata':{},'source':['print(1+1)'],'outputs':[],'execution_count':None}],'metadata':{'kernelspec':{'name':'python3','display_name':'Python 3'},'language_info':{'name':'python'}},'nbformat':4,'nbformat_minor':5}, open('/tmp/smoke.ipynb','w'))" \
+ && jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 /tmp/smoke.ipynb \
+ && rm -f /tmp/smoke.ipynb \
+ && echo "autocodabench-base-cpu: notebook toolchain OK"

@@ -25,6 +25,27 @@ To verify the installation:
 2. Run `autocodabench demo --out /tmp/acb-demo` to execute a fully offline
    end-to-end test.
 
+### Docker (required to *run* bundles)
+
+autocodabench executes every bundle program — scoring, ingestion, and the
+starting-kit notebook — inside the competition's Docker image, exactly as the
+Codabench compute worker does. **Docker must be installed and running** for the
+run phases: `create`'s build self-validation, and any direct call to the
+runner. Static `validate-bundle` and `demo` do not need it.
+
+Both `create` and `validate-bundle` open with a **Docker preflight banner** that
+reports the image that will run, its CPU architecture versus your host (native
+vs. slow QEMU emulation), and whether the daemon is up — so the runtime is never
+a surprise. On Apple silicon, prefer the multi-arch `codalab/codalab-legacy:py312`
+(Docker resolves it to arm64) for fast local testing:
+
+```bash
+export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312
+```
+
+See `docs/post-create-pipeline.md` for exactly what runs after `create` and how
+to test each step, and `docker/README.md` for the autocodabench base images.
+
 ---
 
 ## 2. Authentication (agentic features only)
@@ -266,10 +287,10 @@ For Claude Desktop:
 ```
 
 The server exposes 20 tools covering run management and logging, bundle
-authoring, validation and zipping, execution (scoring runs execute inside
-the bundle's declared Docker image when Docker is available — the same way
-Codabench's worker runs them — with a per-run conda environment as the
-fallback), and upload. In Claude Code, the packaged skills may
+authoring, validation and zipping, execution (scoring, ingestion, and the
+starting-kit notebook all run inside the bundle's declared Docker image —
+the same way Codabench's worker runs them; a Docker daemon is required),
+and upload. In Claude Code, the packaged skills may
 additionally be symlinked into `.claude/skills/`, so that
 `/autocodabench-plan` and `/autocodabench-implement` drive the same
 two-phase flow conversationally; the experiment harness's `setup.sh`

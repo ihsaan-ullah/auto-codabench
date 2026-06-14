@@ -141,9 +141,9 @@ schema-perfect and still fail on its first real submission.
    occurs, and a parseable `scores.json` is produced whose keys cover
    the leaderboard columns.
 3. **Starting-kit oracle** (`run_starting_kit`): the participant-facing
-   notebook is executed top-to-bottom (`jupyter execute`,
-   `--allow-errors=false`); the run passes if and only if the exit code
-   is 0 and all code cells executed.
+   notebook is executed top-to-bottom (`jupyter nbconvert --to notebook
+   --execute --inplace`, which stops nonzero on the first cell error); the
+   run passes if and only if the exit code is 0 and all code cells executed.
 4. The generating agent receives the stderr and may retry, bounded at
    5 baseline attempts and 4 notebook attempts. Exhausting the budget
    is recorded as failure, and the agent is forbidden from weakening

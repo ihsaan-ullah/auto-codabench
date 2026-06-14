@@ -4,9 +4,9 @@ These are the runtime counterparts to the file-writer tools in
 `bundle.py`. The implementer skill (`autocodabench-implement`) uses
 them to self-validate the bundle it just wrote: run the bundle's own
 baseline through the scoring pipeline (inside the bundle's declared
-`docker_image` when Docker is available — the platform-faithful path —
-falling back to a per-run conda env otherwise) and execute the
-starting-kit notebook end-to-end. The reformat-and-run skill uses
+`docker_image`, exactly as the Codabench worker does — execution is
+Docker-only) and execute the starting-kit notebook end-to-end (also
+inside the image). The reformat-and-run skill uses
 `run_user_submission` to score an external (ground-truth) submission
 after it has been adapted to the bundle's interface.
 
@@ -43,25 +43,22 @@ async def autocodabench_prepare_run_env(
     slug: str,
     force_recreate: bool = False,
 ) -> dict[str, Any]:
-    """Clone the base conda env and install the bundle's per-program requirements.
+    """Ensure the bundle's docker_image is available locally before runs.
 
-    Idempotent: if an env named `acb-run-<short>` already exists for
-    this session's run, it is reused unless `force_recreate=True`. The
-    requirements union covers `scoring_program/requirements.txt`,
-    `ingestion_program/requirements.txt`, and any bundle-root
-    `requirements.txt`.
-
-    Use `uv pip install` when uv is on PATH (much faster), falls back
-    to pip. Installer stdout/stderr are tee'd to `<run>/run_logs/<slug>/env/`.
+    Docker-only execution has no per-run environment to build (programs run
+    inside the bundle's declared `docker_image`, as on the platform). This
+    checks the image is in the local Docker store and, if not, attempts one
+    `docker pull`. If the image is an autocodabench base image you have not
+    built/pulled, build it locally first (docker/build_and_push.sh, no --push)
+    or point the bundle's docker_image at an available image.
 
     Args:
         slug:           bundle slug.
-        force_recreate: if True, remove an existing env first.
+        force_recreate: accepted for compatibility; ignored.
 
     Returns:
-        Dict: `ok`, `env_name`, `env_python`, `requirements_path`,
-              `package_count`, `install_method` (uv|pip|skip),
-              `duration_s`, `logs_dir`, `error`.
+        Dict: `ok`, `image`, `env_name` (= image), `present_locally`,
+              `pulled`, `logs_dir`, `note`, `error`.
     """
     log.info("prepare_run_env slug=%s force_recreate=%s", slug, force_recreate)
     try:
@@ -76,19 +73,16 @@ async def autocodabench_install_env_extras(
     env_name: str,
     packages: list[str],
 ) -> dict[str, Any]:
-    """Install extra PyPI packages into an existing per-run env.
+    """Unavailable under Docker-only execution (returns a guidance error).
 
-    Use when the implementer diagnoses a `ModuleNotFoundError` or a
-    version conflict from a previous run's stderr — pass the PyPI
-    name(s) and retry. Empty list is a logged no-op.
-
-    Args:
-        env_name: env returned by `autocodabench_prepare_run_env`.
-        packages: list of PyPI specs (e.g. `["scikit-image", "tf_keras>=2.15"]`).
+    The Codabench worker installs nothing into the image, so a run-time pip
+    install would make the bundle pass locally but fail on the platform. To
+    add a dependency, set the bundle's `docker_image` to one that already
+    ships it (a richer public image, or an autocodabench base image extended
+    and rebuilt — see docker/README.md), then re-run.
 
     Returns:
-        Dict: `ok`, `installed`, `install_method`, `duration_s`,
-              `stderr_tail`, `stdout_path`, `stderr_path`, `error`.
+        Dict: `ok=False`, `packages`, `error` (with the guidance above), `note`.
     """
     log.info("install_env_extras env=%s pkgs=%s", env_name, packages)
     try:
@@ -113,34 +107,27 @@ async def autocodabench_run_baseline_submission(
     plumbing actually works on real (toy) data, before any external
     submission ever touches it.
 
-    Engine selection (`engine="auto"`, the default): when a Docker
-    daemon is reachable, the programs run inside the bundle's declared
-    `docker_image` exactly as the Codabench worker runs them — no
-    dependency installation, working dir `/app/program` — so a clean
-    run is evidence of platform behavior. Without Docker, the conda
-    engine runs them in `env_name` with requirements installed; the
-    result's `engine` / `engine_note` fields say which path ran. A
-    failure under the docker engine that the conda engine does not show
-    usually means a dependency is missing from the `docker_image` —
-    fix the image choice in competition.yaml, not the env.
+    Docker-only: the programs run inside the bundle's declared `docker_image`
+    exactly as the Codabench worker runs them — no dependency installation,
+    working dir `/app/program` — so a clean run is evidence of platform
+    behavior. A Docker daemon is required; without one this returns an error.
+    A `ModuleNotFoundError` means the declared `docker_image` lacks the
+    dependency — change the image in competition.yaml to one that ships it
+    (run-time installation is not available and would not be platform-faithful).
 
     Falls back gracefully to other common subdir names
     (`sample_code_submission`, `solution1`) if `subdir` does not exist.
 
-    Under the conda engine, safe BLAS/OMP/TF single-thread defaults are
-    exported at .so-load time (prevents the macOS libomp deadlock that
-    hangs TF 2.21 + Keras 3 sessions); the docker engine keeps the
-    image's own defaults, as the platform does. Pass `extra_env` ONLY
-    to override (e.g. `{"OMP_NUM_THREADS": "4"}` for a perf test).
+    The container keeps the image's own thread/BLAS defaults, as the platform
+    does. Pass `extra_env` ONLY to override (e.g. `{"OMP_NUM_THREADS": "4"}`).
 
     Args:
         slug:      bundle slug.
-        env_name:  env returned by `autocodabench_prepare_run_env`
-                   (consumed only by the conda engine).
+        env_name:  accepted for compatibility; ignored (Docker-only).
         subdir:    directory under `solutions/` containing the baseline.
         extra_env: optional env-var overrides applied at subprocess
                    start time (passed as `-e` under docker).
-        engine:    "auto" (default) | "docker" | "conda".
+        engine:    "auto" (default) | "docker" (both require Docker).
 
     Returns:
         Dict: `ok`, `stage` ("ingestion"|"scoring"), `engine`,
@@ -174,27 +161,23 @@ async def autocodabench_run_user_submission(
 
     Used by `autocodabench-reformat-and-run` to score a ground-truth
     submission after it has been adapted to the bundle's interface. Same
-    pipeline and engine semantics as `run_baseline_submission` (docker
-    preferred — the bundle's declared `docker_image`, as the platform
-    runs it; conda fallback consumes `env_name`), but the submission
-    code is sourced from `submission_dir` instead of the bundle's
+    pipeline and engine semantics as `run_baseline_submission` (Docker-only —
+    the bundle's declared `docker_image`, as the platform runs it), but the
+    submission code is sourced from `submission_dir` instead of the bundle's
     `solutions/`.
 
-    Under the conda engine, BLAS/OMP/TF thread pools default to
-    single-threaded (set at .so-load time to avoid the macOS libomp
-    deadlock); the docker engine keeps the image's defaults. Pass
-    `extra_env` only to override per-call.
+    The container keeps the image's own thread/BLAS defaults, as the platform
+    does. Pass `extra_env` only to override per-call.
 
     Args:
         slug:           bundle slug.
-        env_name:       env returned by `autocodabench_prepare_run_env`
-                        (consumed only by the conda engine).
+        env_name:       accepted for compatibility; ignored (Docker-only).
         submission_dir: absolute path to the submission folder.
         label:          short identifier scoping the run logs (e.g.
                         `"sub_1.attempt_2"`); appears in `logs_dir`.
         extra_env:      optional env-var overrides applied at subprocess
                         start time.
-        engine:         "auto" (default) | "docker" | "conda".
+        engine:         "auto" (default) | "docker" (both require Docker).
 
     Returns:
         Same shape as `run_baseline_submission`.
@@ -217,20 +200,19 @@ async def autocodabench_run_starting_kit(
     notebook_path: str | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute the bundle's starting-kit notebook end-to-end.
+    """Execute the bundle's starting-kit notebook end-to-end inside Docker.
 
     Looks for `README.ipynb` at the bundle root or any `.ipynb` under
-    `starting_kit/`. Uses `jupyter execute --inplace` (no papermill
-    dep) so any cell that errors causes the run to fail with the
-    traceback in `stderr_tail`. The executed copy is saved under
+    `starting_kit/`. Runs `jupyter nbconvert --to notebook --execute --inplace`
+    inside the bundle's `docker_image` (which ships the notebook toolchain),
+    with the bundle mounted at `/app` as the working directory so relative
+    paths resolve. Any cell that errors fails the run with the traceback in
+    `stderr_tail`. The executed copy is saved under
     `<run>/run_logs/<slug>/starting_kit/executed.ipynb` for review.
-
-    Default BLAS/OMP/TF thread pools are single-threaded. Pass
-    `extra_env` only to override per-call.
 
     Args:
         slug:          bundle slug.
-        env_name:      env returned by `autocodabench_prepare_run_env`.
+        env_name:      accepted for compatibility; ignored (Docker-only).
         notebook_path: optional explicit path; otherwise auto-discovered.
         extra_env:     optional env-var overrides.
 
@@ -252,17 +234,17 @@ async def autocodabench_run_starting_kit(
 @mcp.tool()
 @logged_tool("autocodabench_remove_run_env")
 async def autocodabench_remove_run_env(env_name: str) -> dict[str, Any]:
-    """Remove a per-run conda env (best-effort cleanup at session end).
+    """No-op under Docker-only execution (kept for caller compatibility).
 
-    The orchestrator calls this at the end of a successful run to keep
-    `~/anaconda3/envs/` from growing unboundedly. Failure is logged
-    but not fatal — env hygiene is not a correctness gate.
+    There is no per-run environment to remove: containers run with `--rm` and
+    remove themselves, and base images are shared, not per-run. The
+    orchestrator may still call this at the end of a run; it returns ok.
 
     Args:
-        env_name: env to remove.
+        env_name: ignored.
 
     Returns:
-        Dict: `ok`, `env_name`, `duration_s`, `stderr_tail`.
+        Dict: `ok`, `env_name`, `note`.
     """
     log.info("remove_run_env env=%s", env_name)
     try:

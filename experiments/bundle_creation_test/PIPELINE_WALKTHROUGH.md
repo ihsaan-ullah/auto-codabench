@@ -202,8 +202,9 @@ Cap: 5 attempts. If it still fails, the implementer exits with
 
 **3.6 Run the starting-kit notebook** —
 `autocodabench_run_starting_kit(slug, env_name)` executes
-`README.ipynb` end-to-end via `jupyter execute --inplace` in the
-same env. Every code cell must run cleanly. Same retry loop, cap 4.
+`README.ipynb` end-to-end via `jupyter nbconvert --to notebook --execute
+--inplace` inside the bundle's docker_image. Every code cell must run
+cleanly. Same retry loop, cap 4.
 
 **3.7 Zip the bundle** — only reached if both 3.5 and 3.6 pass.
 `autocodabench_zip_bundle(slug)` produces
@@ -332,7 +333,7 @@ The same summary table is printed to the chat.
 | 2 | plan covers all 7 sections | `sections_covered` array, info-gap count |
 | 3 lint | bundle is schema-valid | `autocodabench_validate_bundle` returns ok |
 | 3 baseline | bundle is runtime-functional with its OWN baseline | bundle's `solutions/solution_baseline/model.py` runs through `ingestion_program/ingestion.py` → `scoring_program/score.py`, exits 0, produces parseable `scores.json` |
-| 3 notebook | the starting-kit story works | `README.ipynb` executes top-to-bottom under `jupyter execute --inplace`, every code cell exits 0 |
+| 3 notebook | the starting-kit story works | `README.ipynb` executes top-to-bottom under `jupyter nbconvert --to notebook --execute --inplace`, every code cell exits 0 |
 | 4a reformat | GT code can be adapted to bundle interface | adapter completes, ingestion+scoring exit 0, scores parseable |
 | 4b audit | bundle's score matches reality within tolerance | `\|actual − expected\| ≤ tolerance` |
 | 5 | missing-info data is captured for meta-analysis | per-stage inventories merged, totals match |

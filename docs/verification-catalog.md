@@ -84,7 +84,7 @@ Five launch criteria can be certified only by a person. The validator surfaces t
 
 ## 3. Layer 2 — dynamic verification: the bundle is executed
 
-Static checks cannot establish that a scoring program *runs*. The runner layer (`runner/execution.py`, exposed through the MCP tools and used by the `create` pipeline's self-validation) stages the Codabench worker's sandbox layout and executes the bundle's programs. When a Docker daemon is available, execution is platform-faithful: programs run inside the bundle's declared `docker_image` (Codabench's default, `codalab/codalab-legacy:py37`, when none is declared), with the active program directory mounted at `/app/program` and the data and output trees at `/app/input` and `/app/output` — the worker's layout — and with **no dependency installation**, since the platform's worker never installs `requirements.txt`. A clean run under this engine is therefore evidence the bundle will execute on Codabench; a subsequent platform failure points at the server, not the bundle. Without Docker, a per-run conda environment with the bundle's `requirements.txt` installed serves as the fallback; it verifies the programs but is more permissive than the platform, and every result records which engine ran, with an explicit fidelity note on the fallback. Three execution stages exist:
+Static checks cannot establish that a scoring program *runs*. The runner layer (`runner/execution.py`, exposed through the MCP tools and used by the `create` pipeline's self-validation) stages the Codabench worker's sandbox layout and executes the bundle's programs **inside Docker only**. Programs run inside the bundle's declared `docker_image` (the autocodabench CPU base image when none is declared), with the active program directory mounted at `/app/program` and the data and output trees at `/app/input` and `/app/output` — the worker's layout — and with **no dependency installation**, since the platform's worker never installs `requirements.txt`. The starting-kit notebook runs the same way (bundle mounted at `/app` as the working directory). A clean run is therefore evidence the bundle will execute on Codabench; a subsequent platform failure points at the server, not the bundle. A missing Docker daemon is a hard error, not a host-side fallback, so the verification never silently runs under more permissive conditions than the platform. Three execution stages exist:
 
 1. **Baseline execution** — the bundle's shipped baseline solution is run through the full ingestion-then-scoring pipeline; the run must complete and produce scores. This catches missing dependencies, API breaks, and scorer crashes that no static scan can see.
 2. **Starting-kit execution** — the starting-kit notebook is executed end to end, cell by cell, verifying that the artifact participants will run first actually runs.
@@ -176,14 +176,14 @@ The 65 tests in `tests/` verify autocodabench itself. The suite is **keyless, ne
 | Test | What it establishes |
 |---|---|
 | `test_auto_prefers_docker_when_available` | `engine="auto"` selects Docker whenever a daemon is reachable |
-| `test_auto_falls_back_to_conda_with_note` | Without Docker, the fallback is taken and announced, never silent |
+| `test_auto_errors_without_docker` | Without a Docker daemon, execution is a hard error (no host-side fallback) |
 | `test_explicit_docker_errors_without_daemon` | `engine="docker"` on a Docker-less host fails with a clear error |
-| `test_explicit_conda_carries_fidelity_note` | An explicitly requested conda run carries the fidelity caveat |
+| `test_conda_engine_removed` | Requesting the removed conda engine returns an explanatory error |
 | `test_unknown_engine_rejected` | A misspelled engine name is an error, not a silent default |
 | `test_docker_run_mirrors_worker_contract` | The constructed `docker run` matches the worker: program dir mounted at `/app/program`, `/app/input` and `/app/output` mounts, `/app/program` working directory, `$program`/`$input`/`$output` resolution, and **no** `pip install` |
-| `test_conda_translate_maps_worker_paths_to_host` | The conda fallback rewrites both `$variable` and `/app/...` spellings to real host paths, longest-token-first (so `/app/input` and `/app/input_data` do not collide) |
+| `test_resolve_command_substitutes_worker_variables` | `$program`/`$input`/`$output` resolve to the worker's `/app/...` container paths; literal `/app/...` paths are left untouched |
 | `test_bundle_docker_image_reads_declared_image` | The engine uses the image `competition.yaml` declares |
-| `test_bundle_docker_image_defaults_to_platform_default` | An undeclared image resolves to Codabench's default (`codalab/codalab-legacy:py37`) |
+| `test_bundle_docker_image_defaults_to_autocodabench_base` | An undeclared image resolves to the autocodabench CPU base image |
 | `test_run_user_submission_requires_daemon_for_explicit_docker` | The engine error propagates through the public scoring entry point |
 
 ### 4.7 The CLI contract (`test_cli.py`, 6 tests)
@@ -227,7 +227,7 @@ Live-SDK behavior (a real Claude session, a real judged check) is verified manua
 | Structural lint condition families inside the gate | 6 |
 | Dynamic execution stages | 3 (baseline, starting kit, external submission) |
 | Unit tests on the tool | 65 across 7 modules, keyless and sub-second |
-| Execution engines | 2 (docker — platform-faithful; conda — fallback with fidelity note) |
+| Execution engine | Docker only — programs run inside the bundle's `docker_image`, as the platform does (the conda fallback was removed) |
 | Seeded defect classes in the validator instrument | 12 (9 deterministic-tier, 3 judged-tier) |
 | CI matrix | Python 3.10–3.13 × Linux/macOS, plus offline demo and wheel checks |
 

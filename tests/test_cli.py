@@ -98,3 +98,75 @@ def test_version(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
     assert exc.value.code == 0
+
+
+# --- docker preflight banner ----------------------------------------------
+
+import autocodabench.runner as _runner
+from autocodabench.cli.main import _bundle_declared_image, _print_docker_preflight
+
+
+def _fake_preflight(**over):
+    base = {
+        "host_arch": "arm64", "host_os": "Darwin",
+        "docker": {"cli_installed": True, "daemon_running": True,
+                   "os": "linux", "arch": "arm64", "server_version": "27.0"},
+        "image": "codalab/codalab-legacy:py312",
+        "image_present_locally": True, "image_arch": "arm64",
+        "image_available_arches": ["arm64"], "image_multi_arch": False,
+        "image_source": "local image", "image_error": None,
+        "runs_natively": True, "emulated": False, "ready": True,
+    }
+    base.update(over)
+    return base
+
+
+def test_preflight_banner_native(monkeypatch, capsys):
+    monkeypatch.setattr(_runner, "docker_preflight", lambda image: _fake_preflight())
+    _print_docker_preflight("codalab/codalab-legacy:py312", required=False)
+    out = capsys.readouterr().out
+    assert "Docker runtime" in out
+    assert "runs natively" in out
+    assert "arm64 (Darwin)" in out
+
+
+def test_preflight_banner_emulated_warns(monkeypatch, capsys):
+    monkeypatch.setattr(_runner, "docker_preflight", lambda image: _fake_preflight(
+        image="codalab/codalab-legacy:py39", image_arch="amd64",
+        image_available_arches=["amd64"], image_present_locally=False,
+        image_source="remote manifest", runs_natively=False, emulated=True))
+    _print_docker_preflight("codalab/codalab-legacy:py39", required=True)
+    out = capsys.readouterr().out
+    assert "QEMU emulation" in out
+    assert "AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312" in out
+
+
+def test_preflight_banner_no_daemon_warns_when_required(monkeypatch, capsys):
+    monkeypatch.setattr(_runner, "docker_preflight", lambda image: _fake_preflight(
+        docker={"cli_installed": False, "daemon_running": False,
+                "os": None, "arch": None, "server_version": None},
+        ready=False, runs_natively=None, emulated=None, image_arch=None,
+        image_available_arches=[], image_error="Docker daemon not running"))
+    _print_docker_preflight("any/img:1", required=True)
+    cap = capsys.readouterr()
+    assert "Docker is not installed" in cap.out
+    assert "WARNING:" in cap.err  # loud only when the run requires Docker
+
+
+def test_bundle_declared_image_from_dir(demo_bundle):
+    # The shipped demo declares a codalab image in competition.yaml.
+    img = _bundle_declared_image(demo_bundle)
+    assert img and "codalab" in img
+
+
+def test_bundle_declared_image_from_zip(tmp_path):
+    import zipfile
+    z = tmp_path / "b.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("competition.yaml", "title: t\ndocker_image: myorg/img:9\n")
+    assert _bundle_declared_image(z) == "myorg/img:9"
+
+
+def test_bundle_declared_image_none_when_absent(tmp_path):
+    (tmp_path / "competition.yaml").write_text("title: t\n")
+    assert _bundle_declared_image(tmp_path) is None

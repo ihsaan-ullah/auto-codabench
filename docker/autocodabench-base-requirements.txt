@@ -15,11 +15,14 @@
 #     stack removes that class of error.
 #
 #  2. The notebook-execution toolchain IS pinned. The starting-kit runner
-#     invokes `jupyter execute --inplace --allow-errors=false`; nbclient 0.7.x
-#     exposes those as traitlets-style flags, whereas nbclient >= 0.10 moved to
-#     an argparse CLI that rejects `--allow-errors=false`. Pinning nbclient to
-#     the compatible line is what lets the starting-kit notebook run
-#     unattended instead of failing on flag parsing.
+#     executes the notebook with `jupyter nbconvert --to notebook --execute
+#     --inplace` (nbconvert stops on the first cell error, exits nonzero, and
+#     writes outputs back). nbconvert 7.x drives nbclient under the hood;
+#     pinning nbclient to the 0.7 line keeps that pairing on a known-good
+#     combination so the notebook runs unattended. The CPU/GPU Dockerfiles
+#     verify the toolchain at BUILD time by actually executing a tiny notebook
+#     with this exact invocation, so a broken pin fails the build rather than
+#     surfacing only at run time.
 
 # --- core scientific-Python stack (the curated autocodabench whitelist) ------
 numpy

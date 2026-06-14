@@ -21,6 +21,12 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
  && python -m pip install --no-cache-dir -r /tmp/autocodabench-base-requirements.txt \
  && rm -f /tmp/autocodabench-base-requirements.txt
 
-RUN jupyter execute --help >/dev/null 2>&1 \
- && python -c "import numpy, pandas, sklearn, scipy, matplotlib, seaborn, PIL; \
-print('autocodabench-base-gpu: stack import OK')"
+# Fail the build if the notebook toolchain cannot satisfy the runner's exact
+# invocation (see the CPU Dockerfile for the rationale): author and run a tiny
+# notebook through `jupyter nbconvert --to notebook --execute --inplace`.
+RUN python -c "import numpy, pandas, sklearn, scipy, matplotlib, seaborn, PIL; \
+print('autocodabench-base-gpu: stack import OK')" \
+ && python -c "import json; json.dump({'cells':[{'cell_type':'code','metadata':{},'source':['print(1+1)'],'outputs':[],'execution_count':None}],'metadata':{'kernelspec':{'name':'python3','display_name':'Python 3'},'language_info':{'name':'python'}},'nbformat':4,'nbformat_minor':5}, open('/tmp/smoke.ipynb','w'))" \
+ && jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=-1 /tmp/smoke.ipynb \
+ && rm -f /tmp/smoke.ipynb \
+ && echo "autocodabench-base-gpu: notebook toolchain OK"

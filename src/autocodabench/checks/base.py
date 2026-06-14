@@ -51,6 +51,11 @@ class CheckResult:
     message: str
     where: str | None = None       # locator inside the bundle, if any
     citation: str | None = None
+    # Structured evidence for checks that *did something* — e.g. an execution
+    # check records which image/data/duration/scores a run used and whether the
+    # result was executed now or reused from an earlier phase. Rendered by the
+    # report; absent (None) for ordinary static checks.
+    details: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +65,7 @@ class CheckResult:
             "message": self.message,
             "where": self.where,
             "citation": self.citation,
+            "details": self.details,
         }
 
 
@@ -70,9 +76,15 @@ class CheckContext:
     bundle_dir: Path
     comp: dict[str, Any] | None            # parsed competition.yaml (None if unreadable)
     facts: CompetitionFacts = field(default_factory=CompetitionFacts)
+    # When True, execution checks (``requires_execution``) are run: they
+    # actually execute the bundle's baseline / starting-kit inside Docker
+    # (reusing the build phase's runs when unchanged). Off by default so a
+    # plain, keyless, static validation stays fast and Docker-free.
+    execute: bool = False
 
     @classmethod
-    def from_bundle_dir(cls, bundle_dir: Path, facts: CompetitionFacts | None = None) -> "CheckContext":
+    def from_bundle_dir(cls, bundle_dir: Path, facts: CompetitionFacts | None = None,
+                        *, execute: bool = False) -> "CheckContext":
         comp: dict[str, Any] | None = None
         yaml_path = bundle_dir / "competition.yaml"
         if yaml_path.is_file():
@@ -81,7 +93,15 @@ class CheckContext:
                 comp = loaded if isinstance(loaded, dict) else None
             except yaml.YAMLError:
                 comp = None
-        return cls(bundle_dir=bundle_dir, comp=comp, facts=facts or CompetitionFacts())
+        return cls(bundle_dir=bundle_dir, comp=comp,
+                   facts=facts or CompetitionFacts(), execute=execute)
+
+    @property
+    def root_dir(self) -> str:
+        """The directory the bundle lives in — what the runner needs as
+        ``root_dir`` to resolve and execute this exact bundle (rather than one
+        under the active run dir)."""
+        return str(self.bundle_dir.parent)
 
     def phases(self) -> list[dict[str, Any]]:
         if not self.comp:
@@ -100,6 +120,17 @@ class Check:
     # Fact names that must be present in CompetitionFacts; otherwise the
     # check reports SKIPPED with an actionable message instead of guessing.
     requires_facts: tuple[str, ...] = ()
+    # When True, the check executes the bundle (Docker) and only runs when the
+    # validation was asked to execute (``CheckContext.execute``). Static checks
+    # leave this False and always run.
+    requires_execution: bool = False
+
+    def _details(self, status: Status, message: str, details: dict[str, Any],
+                 *, where: str | None = None,
+                 severity: Severity | None = None) -> "CheckResult":
+        r = self._result(status, message, where=where, severity=severity)
+        r.details = details
+        return r
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:  # pragma: no cover
         raise NotImplementedError
@@ -165,6 +196,10 @@ def run_checks(ctx: CheckContext, tiers: set[Tier] | None = None) -> list[CheckR
     results: list[CheckResult] = []
     for check in checks_for(tiers):
         if check.tier == Tier.JUDGED:
+            continue
+        if check.requires_execution and not ctx.execute:
+            # Execution checks are silent (not even SKIPPED) when execution was
+            # not requested, so a plain static report is unchanged.
             continue
         missing = check.missing_facts(ctx)
         if missing:
