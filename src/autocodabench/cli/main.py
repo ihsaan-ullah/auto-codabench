@@ -511,10 +511,8 @@ def _cmd_create_bundle(args: argparse.Namespace) -> int:
     from ..agent.pipeline import bundle_async
     from ..run_log import open_run
 
-    if not _require_live_claude_auth(args.backend):
-        return 2
-
-    # Resolve the two mutually-exclusive input modes.
+    # Resolve the two mutually-exclusive input modes first — cheap argument
+    # validation should not require a live-auth probe to reject malformed input.
     run_dir_arg = Path(args.run_dir).resolve() if args.run_dir else None
     plan_arg    = Path(args.plan).resolve()    if args.plan    else None
 
@@ -543,6 +541,11 @@ def _cmd_create_bundle(args: argparse.Namespace) -> int:
         if not plan_arg.is_file():
             print(f"error: plan file not found: {plan_arg}", file=sys.stderr)
             return 2
+
+    if not _require_live_claude_auth(args.backend):
+        return 2
+
+    if plan_arg is not None and run_dir_arg is None:
         # Pre-create a fresh run dir so the config banner can name it.
         run_dir      = open_run(slug="bundle").path
         plan_source  = str(plan_arg)
