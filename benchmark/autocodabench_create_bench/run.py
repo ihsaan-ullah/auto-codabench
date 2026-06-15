@@ -18,7 +18,7 @@ Data-leakage isolation is a code invariant here, not prompt discipline:
 each phase only ever receives the paths it is allowed to see.
 
 Usage (any OpenAI-compatible backbone works; Ollama is keyless/offline):
-  python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend claude
+  python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend claude:claude-opus-4-8
   python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend ollama:llama3.1 --runs 3
   python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend openai:gpt-4o
 
@@ -203,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--competition", default="style-trans-fair",
                     help="instrument under competitions/ (default: style-trans-fair)")
     ap.add_argument("--backend", default=None,
-                    help="claude[:model] (default), ollama:<model>, openai:<model>, URL#model")
+                    help="claude:<model> (e.g. claude:claude-opus-4-8), ollama:<model>, "
+                         "openai:<model>, URL#model. Claude requires an explicit model "
+                         "so the leaderboard records exactly which one ran.")
     ap.add_argument("--model", default=None, help="model override for the backend")
     ap.add_argument("--runs", type=int, default=1, help="repetitions (creation is stochastic)")
     ap.add_argument("--hardware-tag", default=None,
@@ -216,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     sample_data, subs = check_preconditions(comp_dir)
+    from autocodabench.bench.cli import require_explicit_model
+    require_explicit_model(args.backend, args.model)
     backend = resolve_backend(args.backend, model=args.model)
     print(f"create-bench · {args.competition} · backend={args.backend or 'claude'} "
           f"· {len(subs)} submission(s) · {args.runs} run(s)")

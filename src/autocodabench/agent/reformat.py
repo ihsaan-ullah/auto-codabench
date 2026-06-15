@@ -16,6 +16,7 @@ its run-logs live). The adapted-submission artifacts (``attempt_<K>/``,
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -57,10 +58,18 @@ async def reformat_and_run_async(
     label: str = "sub",
     model: str | None = None,
     max_budget_usd: float | None = None,
+    timeout_s: float | None = 1800.0,
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
 ) -> ReformatResult:
-    """Adapt + score one submission against a built bundle. One backend session."""
+    """Adapt + score one submission against a built bundle. One backend session.
+
+    ``timeout_s`` bounds the whole session (default 30 min). It is a safety net:
+    a misbehaving agent that strands a background process would otherwise hang
+    the run forever; on timeout this returns a failed result so the caller can
+    move on instead of blocking. The non-interactive footer forbids background
+    processes in the first place.
+    """
     bundle_dir = Path(bundle_dir).resolve()
     build_run_dir = Path(build_run_dir).resolve()
     submission_dir = Path(submission_dir).resolve()
@@ -88,7 +97,7 @@ async def reformat_and_run_async(
         "and emit the single final JSON object as your last message."
     )
 
-    run = await backend.run(AgentTask(
+    task = AgentTask(
         prompt=prompt,
         system_prompt=prompts.reformat_system_prompt(),
         allowed_tools=REFORMAT_TOOLS,
@@ -99,7 +108,17 @@ async def reformat_and_run_async(
         trace_path=out_dir / "agent_trace.jsonl",
         on_text=on_text,
         on_event=on_event,
-    ))
+    )
+    try:
+        if timeout_s:
+            run = await asyncio.wait_for(backend.run(task), timeout=timeout_s)
+        else:
+            run = await backend.run(task)
+    except (asyncio.TimeoutError, TimeoutError):
+        return ReformatResult(
+            ok=False, final=None, out_dir=out_dir, run=None,
+            error=(f"reformat-and-run timed out after {timeout_s:.0f}s "
+                   "(the agent stalled or left work running in the background)"))
 
     # Prefer the on-disk final.json the skill writes; fall back to the last
     # JSON object in the session's final text.

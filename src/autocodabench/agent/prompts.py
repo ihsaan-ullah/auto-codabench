@@ -91,6 +91,21 @@ submission into `<out_dir>/attempt_<K>/` (use the Write tool), run it via
 attempt cap, then write `<out_dir>/final.json` and emit the single final
 JSON object the skill specifies as your last message. You have NO access to
 any `expected_result.json` — never look for one.
+
+**Everything must finish inside this single turn.** There is no event loop
+watching you: you will NOT be re-invoked and you will NOT be notified when
+anything completes. Therefore:
+- Do NOT start background processes — no trailing `&`, no `run_in_background`,
+  no `nohup`/daemon, and no "monitor" command that waits for a file to appear.
+  Run every command in the foreground and wait for it to return before
+  continuing. A backgrounded job is abandoned the moment your turn ends and
+  the run will hang.
+- Score the submission ONLY through `autocodabench_run_user_submission`, which
+  runs it synchronously in the bundle's Docker image. Do not train or execute
+  the model yourself with Bash.
+- If you cannot produce a score within the attempt cap, write
+  `<out_dir>/final.json` with `"status": "fail"` and finish. Never end your
+  turn with work still running.
 """
 
 

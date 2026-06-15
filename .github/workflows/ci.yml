@@ -49,3 +49,17 @@ jobs:
               assert required in names, f"missing from wheel: {required}"
           print("wheel OK:", whl)
           PY
+
+  leaderboard:
+    # The committed benchmark leaderboard must match the committed results, so
+    # a PR that adds a result record also regenerates LEADERBOARD.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e '.[dev]'
+      - name: Leaderboard is up to date
+        run: python benchmark/scripts/aggregate.py --check

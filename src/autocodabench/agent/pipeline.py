@@ -332,22 +332,32 @@ async def create_async(
 
 
 async def plan_async(
-    idea: str,
+    idea: str | None,
     *,
     data: str | None = None,
+    pdf: str | Path | None = None,
     backend: AgentBackend | None = None,
     model: str | None = None,
     max_budget_usd: float | None = None,
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
 ) -> PlanResult:
-    """Run Phase 1 only: produce specs/implementation_plan.md from an idea.
+    """Run Phase 1 only: produce specs/implementation_plan.md.
 
-    Creates (or adopts via AUTOCODABENCH_RUN_DIR) a run directory and runs
-    the planning agent in it. Returns a PlanResult whose ``run_dir`` can be
-    passed directly to ``bundle_async`` to continue in the same run.
+    The competition source is a one-line ``idea``, a ``pdf`` proposal
+    (extracted to text here so the planner is backbone-agnostic), or both. At
+    least one must be given. Creates (or adopts via AUTOCODABENCH_RUN_DIR) a run
+    directory and runs the planning agent in it. Returns a PlanResult whose
+    ``run_dir`` can be passed directly to ``bundle_async`` to continue the run.
     """
+    if idea is None and pdf is None:
+        raise ValueError("plan_async requires an idea or a pdf (or both)")
     backend = _resolve_backend(backend, model)
+
+    proposal_text = None
+    if pdf is not None:
+        from ..core.proposal import pdf_to_text
+        proposal_text = pdf_to_text(pdf)
 
     info = open_run(slug="plan")
     run_dir = info.path
@@ -356,9 +366,19 @@ async def plan_async(
 
     plan_prompt = (
         "Open the run with autocodabench_open_run, then produce the "
-        "implementation plan for this competition idea:\n\n"
-        f"{idea}\n"
+        "implementation plan for this competition.\n"
     )
+    if idea:
+        plan_prompt += f"\nCompetition idea / framing:\n\n{idea}\n"
+    if proposal_text is not None:
+        plan_prompt += (
+            "\nThe full competition proposal (extracted from the provided PDF) "
+            "follows between the markers. Treat it as the authoritative source; "
+            "infer the design sections from it.\n"
+            "\n===== BEGIN PROPOSAL =====\n"
+            f"{proposal_text}\n"
+            "===== END PROPOSAL =====\n"
+        )
     if data:
         plan_prompt += (
             f"\nSample data for the competition is available at: {data}\n"

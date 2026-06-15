@@ -105,6 +105,16 @@ def test_create_pdf_must_exist(capsys):
     assert "not a file" in capsys.readouterr().err.lower()
 
 
+def test_plan_requires_idea_or_pdf(capsys):
+    assert main(["plan"]) == 2
+    assert "idea" in capsys.readouterr().err.lower()
+
+
+def test_plan_pdf_must_exist(capsys):
+    assert main(["plan", "--pdf", "/no/such/proposal.pdf"]) == 2
+    assert "not a file" in capsys.readouterr().err.lower()
+
+
 # --- docker preflight banner ----------------------------------------------
 
 import autocodabench.runner as _runner

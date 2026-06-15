@@ -7,6 +7,21 @@ All notable changes to autocodabench. Format follows
 ## [Unreleased]
 
 ### Added
+- **validate-bench** (`benchmark/autocodabench_validate_bench/`): the second
+  end-to-end benchmark — seeds known authoring defects into a clean bundle and
+  measures the validator's catch rate per tier (precision/recall/F1), with a
+  judged false-positive probe on the clean bundle. The **deterministic tier is
+  keyless and Docker-free** (clean bundle rebuilt from the replay fixture), so
+  anyone can run it offline and the unit suite asserts it. The reusable defect
+  library + scoring live in `autocodabench.bench.defects`.
+- **Benchmark leaderboard** (Stage 3): `autocodabench.bench.leaderboard` +
+  `benchmark/scripts/aggregate.py` fold every contributed
+  `<bench>/results/<backbone>/*.json` into a committed `benchmark/LEADERBOARD.md`
+  / `.json`, grouped by benchmark and backbone. A CI job runs `aggregate.py
+  --check` so a PR that adds a result must regenerate the leaderboard.
+- **`plan --pdf`**: the standalone `plan` command (and `plan_async`) now accept
+  a PDF proposal too — `idea` is optional when `--pdf` is given, matching
+  `create`.
 - **`create --pdf <proposal.pdf>`**: the plan phase can take a PDF proposal
   directly. The PDF is extracted to text at the orchestrator
   (`core.proposal.pdf_to_text`, via `pypdf`) so every backbone — including the
