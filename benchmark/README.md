@@ -11,8 +11,11 @@ offline GPU worker, and the **backbone is a measured variable**.
 
 | benchmark | question | status |
 |-----------|----------|--------|
-| [`autocodabench_create_bench`](autocodabench_create_bench/) | Does a PDF proposal become a working bundle that reproduces the ground-truth scores? | **live** |
-| `autocodabench_validate_bench` | Does `validate` catch known, injected bundle defects? | Stage 2 (porting `experiments/backbone_bench`) |
+| [`autocodabench_create_bench`](autocodabench_create_bench/) | Does a PDF proposal become a working bundle that reproduces the ground-truth scores? | **live** (needs a backend + Docker) |
+| [`autocodabench_validate_bench`](autocodabench_validate_bench/) | Does `validate` catch known, injected bundle defects? | **live** (deterministic tier is keyless) |
+
+Contributed runs roll up into a committed [`LEADERBOARD.md`](LEADERBOARD.md)
+(`python benchmark/scripts/aggregate.py`).
 
 ## Running create-bench
 
@@ -52,6 +55,38 @@ adapts/scores a submission never sees `expected_result.json`; the auditor that
 reads the expected score is deterministic Python (`autocodabench.bench.audit`).
 The isolation is enforced by what each phase is handed, not by prompt wording.
 
+## Running validate-bench
+
+This one needs **no backend and no Docker** for its deterministic tier — the
+clean bundle is rebuilt from the shipped replay fixture and the targeted checks
+are pure code. A backbone is only needed for the judged tier.
+
+```bash
+pip install -e .
+# Deterministic tier only (keyless, offline, ~1 s):
+python benchmark/autocodabench_validate_bench/run.py
+# Judged tier — the backbone-sensitive measurement (any OpenAI-compatible model):
+python benchmark/autocodabench_validate_bench/run.py --backend claude --runs 3
+python benchmark/autocodabench_validate_bench/run.py --backend ollama:llama3.1 --runs 5
+```
+
+### What validate-bench measures
+
+It seeds each known defect from `autocodabench.bench.defects` into an otherwise
+clean bundle, runs `validate`, and records whether the expected check fired —
+reporting **precision / recall / F1 per tier**:
+
+- **deterministic** — backbone-independent sanity baseline; ~1.0 by
+  construction (the unit suite asserts this and that the checks do *not* fire on
+  the clean bundle).
+- **judged** — the backbone-sensitive measurement: an LLM grades a rubric, so
+  the catch rate varies by model. It also runs `validate` on an unmutated bundle
+  to measure the judged tier's **false-positive rate**.
+
+Grow the defect library by adding `Defect(...)` entries to
+`src/autocodabench/bench/defects.py` (each `expect_check` must be a registered
+check; the unit suite enforces this).
+
 ## Contributing results (the leaderboard)
 
 Results are append-only and reviewed in-repo:
@@ -60,12 +95,18 @@ Results are append-only and reviewed in-repo:
    (`schema_version`, see `autocodabench.bench.results`) to
    `<bench>/results/<backbone-tag>/<run-id>.json` — endpoint **host only, never
    the API key**.
-2. Open a PR adding your `results/...json` file(s). Heavy per-run artifacts
-   (`tool_calls/`, traces, sandboxes) stay on your machine; only the summary
-   record is committed.
-3. A `scripts/aggregate.py` + CI step (Stage 3) folds every record into a
-   committed `benchmark/LEADERBOARD.md` on merge, so the "current progress"
-   across backbones stays live and git-reviewable.
+2. Regenerate the leaderboard and open a PR adding both your `results/...json`
+   file(s) and the updated `LEADERBOARD.md`:
+   ```bash
+   python benchmark/scripts/aggregate.py     # rewrites LEADERBOARD.md + LEADERBOARD.json
+   ```
+   Heavy per-run artifacts (`tool_calls/`, traces, sandboxes) stay on your
+   machine; only the summary record is committed.
+3. CI runs `python benchmark/scripts/aggregate.py --check` to ensure the
+   committed `LEADERBOARD.md` matches the committed records, so the "current
+   progress" across backbones stays live and git-reviewable. `aggregate.py`
+   folds every `<bench>/results/<backbone>/*.json` by benchmark and backbone,
+   averaging the headline metrics across runs.
 
 Because the record pins `instrument_version`, `git_sha`, and
 `autocodabench_version`, results stay comparable across machines and over time;

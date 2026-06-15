@@ -574,11 +574,12 @@ def _cmd_create(args: argparse.Namespace) -> int:
 # plan  (Phase 1 standalone)
 # ---------------------------------------------------------------------------
 
-def _print_plan_config(*, idea, backend_name, auth_label, model, run_dir,
+def _print_plan_config(*, idea, pdf, backend_name, auth_label, model, run_dir,
                         data, max_budget_usd, verbosity) -> None:
     budget = f"${max_budget_usd:.2f}" if max_budget_usd else "no cap"
     print("autocodabench plan — configuration")
-    print(f"  idea:        {textwrap.shorten(idea, width=72)}")
+    print(f"  idea:        {textwrap.shorten(idea, width=72) if idea else '(none)'}")
+    print(f"  proposal:    {pdf or '(none)'}")
     print(f"  backend:     {backend_name}  ({auth_label})")
     print(f"  model:       {model}")
     print(f"  output/run dir:  {run_dir}")
@@ -591,6 +592,15 @@ def _print_plan_config(*, idea, backend_name, auth_label, model, run_dir,
 def _cmd_plan(args: argparse.Namespace) -> int:
     from ..agent.pipeline import plan_async
     from ..run_log import open_run
+
+    # Cheap source validation before the live-auth probe (keyless-testable).
+    if not args.idea and not args.pdf:
+        print("plan needs a competition source: pass an idea argument or "
+              "--pdf <proposal.pdf> (or both).", file=sys.stderr)
+        return 2
+    if args.pdf and not Path(args.pdf).expanduser().is_file():
+        print(f"--pdf: not a file: {args.pdf}", file=sys.stderr)
+        return 2
 
     if not _require_live_claude_auth(args.backend):
         return 2
@@ -623,7 +633,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 
     print()
     _print_plan_config(
-        idea=args.idea, backend_name=backend.name, auth_label=auth_label,
+        idea=args.idea, pdf=args.pdf, backend_name=backend.name, auth_label=auth_label,
         model=model_shown, run_dir=run_dir, data=args.data,
         max_budget_usd=args.max_budget_usd, verbosity=verbosity)
 
@@ -646,6 +656,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     result = asyncio.run(plan_async(
         args.idea,
         data=args.data,
+        pdf=args.pdf,
         backend=backend,
         model=args.model,
         max_budget_usd=args.max_budget_usd,
@@ -964,7 +975,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- Pipeline phases ---------------------------------------------------
     p = sub.add_parser("plan",
                        help="Phase 1: idea/PDF → implementation_plan.md (needs an LLM backend)")
-    p.add_argument("idea", help="one-line competition idea or proposal text")
+    p.add_argument("idea", nargs="?", default=None,
+                   help="one-line competition idea or proposal text "
+                        "(optional if --pdf is given)")
+    p.add_argument("--pdf", help="path to a PDF proposal; its text is extracted "
+                                 "and handed to the planner (works on any backend)")
     p.add_argument("--data", help="path to sample data the planner may inspect")
     p.add_argument("--backend", default=None,
                    help="LLM backend: claude[:model] (default), ollama:<model>, "
