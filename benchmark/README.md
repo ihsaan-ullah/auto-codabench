@@ -22,7 +22,7 @@ Contributed runs roll up into a committed [`LEADERBOARD.md`](LEADERBOARD.md)
 ```bash
 pip install -e .                       # the library (provides the backends + bench lib)
 # Claude (subscription or ANTHROPIC_API_KEY):
-python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend claude
+python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend claude:claude-opus-4-8
 # Local, keyless, offline (Ollama serving a tool-calling model):
 python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend ollama:llama3.1 --runs 3
 # Any OpenAI-compatible endpoint:
@@ -66,7 +66,7 @@ pip install -e .
 # Deterministic tier only (keyless, offline, ~1 s):
 python benchmark/autocodabench_validate_bench/run.py
 # Judged tier — the backbone-sensitive measurement (any OpenAI-compatible model):
-python benchmark/autocodabench_validate_bench/run.py --backend claude --runs 3
+python benchmark/autocodabench_validate_bench/run.py --backend claude:claude-opus-4-8 --runs 3
 python benchmark/autocodabench_validate_bench/run.py --backend ollama:llama3.1 --runs 5
 ```
 

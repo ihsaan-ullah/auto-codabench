@@ -17,7 +17,7 @@ false-positive rate, then emits a canonical ``bench.results`` record
 
 Usage (the deterministic tier needs nothing; the judged tier takes any backbone):
   python benchmark/autocodabench_validate_bench/run.py                       # deterministic only, keyless
-  python benchmark/autocodabench_validate_bench/run.py --backend claude --runs 3
+  python benchmark/autocodabench_validate_bench/run.py --backend claude:claude-opus-4-8 --runs 3
   python benchmark/autocodabench_validate_bench/run.py --backend ollama:llama3.1 --runs 3
   python benchmark/autocodabench_validate_bench/run.py --backend openai:gpt-4o-mini --runs 5
 
@@ -155,9 +155,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", default=None,
-                    help="LLM backbone for the judged tier: claude[:model], "
-                         "ollama:<model>, openai:<model>, URL#model. "
-                         "Omit to run the (keyless) deterministic tier only.")
+                    help="LLM backbone for the judged tier: claude:<model> "
+                         "(e.g. claude:claude-opus-4-8), ollama:<model>, openai:<model>, "
+                         "URL#model. Claude requires an explicit model. "
+                         "Omit --backend entirely to run the (keyless) deterministic tier only.")
     ap.add_argument("--model", default=None, help="model override for the backend")
     ap.add_argument("--runs", type=int, default=3,
                     help="repetitions per judged condition (judged tier is "
@@ -166,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="optional free-text hardware label recorded in results")
     args = ap.parse_args(argv)
 
+    if args.backend:
+        from autocodabench.bench.cli import require_explicit_model
+        require_explicit_model(args.backend, args.model)
     backend = resolve_backend(args.backend, model=args.model) if args.backend else None
     print(f"validate-bench · backend={args.backend or 'deterministic-only'} "
           f"· {len(defects.DEFECTS)} defect(s) · {args.runs} judged run(s)")
