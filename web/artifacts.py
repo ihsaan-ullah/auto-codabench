@@ -196,7 +196,7 @@ class PublicArtifacts:
         """Locate the zip this session's Phase 2 produced.
 
         Resolution order:
-          1. <run>/bundles/*/*.zip  — canonical per-session location
+          1. <run>/bundles/*.zip  — canonical per-session location
           2. global bundles root filtered by mtime >= session start — defensive
              fallback for the case where the MCP subprocess lost AUTOCODABENCH_RUN_DIR.
         Always returns the most-recently-modified candidate (handles revert +
@@ -206,7 +206,7 @@ class PublicArtifacts:
 
         session_bundles = run_dir / "bundles"
         if session_bundles.is_dir():
-            candidates = list(session_bundles.glob("*/*.zip"))
+            candidates = list(session_bundles.glob("*.zip"))
             if candidates:
                 return max(candidates, key=lambda p: p.stat().st_mtime)
 
@@ -217,7 +217,7 @@ class PublicArtifacts:
         global_root = _acb_bundles_root()
         if not global_root.is_dir():
             return None
-        fresh = [p for p in global_root.glob("*/*.zip")
+        fresh = [p for p in global_root.glob("*.zip")
                  if p.stat().st_mtime >= session_start]
         if not fresh:
             return None
@@ -328,6 +328,17 @@ class PublicArtifacts:
                     encoding="utf-8",
                 )
 
+            # --- validation_report.md ---
+            vr_path = run_dir / "validation_report.md"
+            if vr_path.is_file() and vr_path.stat().st_size > 0:
+                md_text = vr_path.read_text(encoding="utf-8", errors="replace")
+                (out / "validation_report.html").write_text(
+                    render_md_to_html(md_text, "validation_report.md"),
+                    encoding="utf-8",
+                )
+                # Copy raw .md so it is downloadable as the canonical format.
+                (out / "validation_report.md").write_text(md_text, encoding="utf-8")
+
             # --- bundle.zip ---
             bundle_src = PublicArtifacts.find_bundle_zip(run_dir)
             bundle_pub = out / "bundle.zip"
@@ -395,12 +406,33 @@ class PublicArtifacts:
                     "ready": True,
                     "tag":   _tag(spec_html),
                 })
+            if (out / "validation_report.html").is_file():
+                tabs.append({
+                    "name":  "✅ validation_report.md",
+                    "url":   f"/public/sessions/{session_id}/validation_report.html",
+                    "kind":  "validation",
+                    "ready": True,
+                    "tag":   _tag(out / "validation_report.html"),
+                })
 
             bundle_ready = bundle_pub.is_file()
+            vr_dl        = out / "validation_report.md"
+            vr_ready     = vr_dl.is_file()
             ws_ready     = workspace_zip.is_file()
             downloads: list[dict] = [
                 {
-                    "name":     "📦 competition bundle (.zip)",
+                    "name":     "📦 workspace.zip",
+                    "desc":     "Everything in one archive: plan, transcript, bundle, report",
+                    "filename": "workspace.zip",
+                    "url":      f"/public/sessions/{session_id}/workspace.zip",
+                    "kind":     "workspace",
+                    "ready":    ws_ready,
+                    "size":     workspace_zip.stat().st_size if ws_ready else 0,
+                    "tag":      _tag(workspace_zip) if ws_ready else "missing",
+                },
+                {
+                    "name":     "📦 bundle.zip",
+                    "desc":     "Codabench-ready competition bundle — upload this to the platform",
                     "filename": "bundle.zip",
                     "url":      f"/public/sessions/{session_id}/bundle.zip",
                     "kind":     "bundle",
@@ -409,13 +441,14 @@ class PublicArtifacts:
                     "tag":      _tag(bundle_pub) if bundle_ready else "missing",
                 },
                 {
-                    "name":     "📦 workspace.zip (all artifacts)",
-                    "filename": "workspace.zip",
-                    "url":      f"/public/sessions/{session_id}/workspace.zip",
-                    "kind":     "workspace",
-                    "ready":    ws_ready,
-                    "size":     workspace_zip.stat().st_size if ws_ready else 0,
-                    "tag":      _tag(workspace_zip) if ws_ready else "missing",
+                    "name":     "✅ validation_report.md",
+                    "desc":     "Deterministic check results: gate failures, findings, attestations",
+                    "filename": "validation_report.md",
+                    "url":      f"/public/sessions/{session_id}/validation_report.md",
+                    "kind":     "validation",
+                    "ready":    vr_ready,
+                    "size":     vr_dl.stat().st_size if vr_ready else 0,
+                    "tag":      _tag(vr_dl) if vr_ready else "missing",
                 },
             ]
 

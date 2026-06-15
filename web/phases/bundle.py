@@ -45,9 +45,22 @@ class Bundle:
             "Execute the autocodabench-implement skill serially in this "
             "chat — `/agents` is not available here.\n\n"
             "Start now: call `autocodabench_current_run`, read the plan, "
-            "then follow the autocodabench-implement skill end-to-end "
-            "(generate bundle files → validate → zip). Don't wait for "
-            "additional instructions."
+            "then follow the autocodabench-implement skill end-to-end. "
+            "Don't wait for additional instructions.\n\n"
+            "### IMPORTANT — Docker unavailability override\n\n"
+            "This web UI runs on CPU-only infrastructure (HF Spaces) where "
+            "Docker is often not available. If `autocodabench_prepare_run_env` "
+            "returns `ok: false` with a Docker-unavailable error, OR if "
+            "`autocodabench_run_baseline_submission` returns `ok: false` with "
+            "an error containing 'Docker' or 'docker daemon', do NOT treat "
+            "this as a fatal failure — **skip section 5 (self-validation) "
+            "entirely** and proceed directly to step 6: call "
+            "`autocodabench_zip_bundle(slug)` right away. The lint check in "
+            "step 3 is sufficient here; the deterministic Phase 3 check "
+            "framework gates the bundle without requiring Docker. "
+            "Emitting `autocodabench_log_event(kind='stage_done', "
+            "payload={..., 'validate_runtime': false, "
+            "'docker_skipped': true})` is correct in this case."
         )
         return base + footer
 
@@ -81,10 +94,55 @@ class Bundle:
         await run_agent_turn(
             client,
             "Begin Phase 2. Read `specs/implementation_plan.md` first, "
-            "then follow your autocodabench-implement skill end-to-end "
-            "(generate bundle → validate → zip). Don't wait for further "
-            "instructions.",
+            "then follow your autocodabench-implement skill end-to-end. "
+            "IMPORTANT: if Docker is unavailable (autocodabench_prepare_run_env "
+            "or autocodabench_run_baseline_submission returns a Docker error), "
+            "skip self-validation and call autocodabench_zip_bundle immediately "
+            "after the lint check passes — do not stop without zipping. "
+            "Don't wait for further instructions.",
             run_dir,
             response_msg,
         )
-        log.info("[bundle] run_agent_turn returned — Phase 2 kickoff complete")
+        log.info("[bundle] run_agent_turn returned — checking for bundle zip")
+
+        from artifacts import PublicArtifacts
+        bundle_zip = PublicArtifacts.find_bundle_zip(run_dir)
+        if bundle_zip is None:
+            bundles_dir = run_dir / "bundles"
+            has_bundle_dir = False
+            if bundles_dir.is_dir():
+                has_bundle_dir = any(
+                    (d / "competition.yaml").is_file()
+                    for d in bundles_dir.iterdir()
+                    if d.is_dir()
+                )
+            if has_bundle_dir:
+                log.warning(
+                    "[bundle] agent finished without a zip but bundle dir exists"
+                )
+                await cl.Message(
+                    author="autocodabench",
+                    content=(
+                        "⚠️ **Phase 2 finished without producing a zip.**\n\n"
+                        "The agent built the bundle files but didn't call "
+                        "`autocodabench_zip_bundle` — this usually happens "
+                        "when Docker is unavailable and the agent treated the "
+                        "baseline failure as fatal instead of skipping it.\n\n"
+                        "Type **`zip the bundle now`** to complete Phase 2, "
+                        "or click **▶ Advance to Phase 2** again to restart "
+                        "the bundling agent from scratch."
+                    ),
+                ).send()
+            else:
+                log.warning("[bundle] agent finished without a zip and no bundle dir")
+                await cl.Message(
+                    author="autocodabench",
+                    content=(
+                        "⚠️ **Phase 2 did not produce a bundle.**\n\n"
+                        "The agent stopped before writing any bundle files. "
+                        "Please click **▶ Advance to Phase 2** again to retry, "
+                        "or send a message describing what went wrong and ask "
+                        "the agent to continue."
+                    ),
+                ).send()
+        log.info("[bundle] send_kickoff_message complete")
