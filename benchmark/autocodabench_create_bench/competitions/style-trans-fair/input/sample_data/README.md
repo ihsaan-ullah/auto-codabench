@@ -36,16 +36,16 @@ git clone --depth 1 https://github.com/fnachalearn/style-trans-fair "$TMP"
 # the upstream's sample_data/ lives at the repo root (it IS the bundle root,
 # and the bundle includes sample_data/ for participants to download)
 rsync -a --exclude='.git' "$TMP/sample_data/" \
-  experiments/bundle_creation_test/competitions/style-trans-fair/input/sample_data/
+  benchmark/autocodabench_create_bench/competitions/style-trans-fair/input/sample_data/
 rm -rf "$TMP"
 ```
 
 After populating you should see something like:
 
 ```bash
-$ du -sh experiments/bundle_creation_test/competitions/style-trans-fair/input/sample_data/
+$ du -sh benchmark/autocodabench_create_bench/competitions/style-trans-fair/input/sample_data/
 3.2M    .../sample_data/
-$ ls experiments/bundle_creation_test/competitions/style-trans-fair/input/sample_data/
+$ ls benchmark/autocodabench_create_bench/competitions/style-trans-fair/input/sample_data/
 README.md  .gitignore  info.json  content/  styles/  stylized/  tasks/
 ```
 

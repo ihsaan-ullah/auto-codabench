@@ -3,7 +3,7 @@
 This document presents a complete execution trace of the command
 
 ```bash
-autocodabench validate-bundle experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate-bundle benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
 ```
 
 from shell invocation to process exit code. It is written for a reader who
@@ -426,7 +426,7 @@ this page.
 ```bash
 # the human-built production bundle (passes the gates; 4 advisory findings,
 # incl. uncapped submissions — which --judged then catches contradicting its own pages)
-autocodabench validate-bundle experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate-bundle benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
 
 # machine-readable
 autocodabench validate-bundle <bundle> --json | python -m json.tool

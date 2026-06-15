@@ -100,6 +100,17 @@ def test_version(capsys):
     assert exc.value.code == 0
 
 
+def test_create_requires_idea_or_pdf(capsys):
+    # Neither an idea nor --pdf → guard returns 2 before any backend/auth touch.
+    assert main(["create"]) == 2
+    assert "idea" in capsys.readouterr().err.lower()
+
+
+def test_create_pdf_must_exist(capsys):
+    assert main(["create", "--pdf", "/no/such/proposal.pdf"]) == 2
+    assert "not a file" in capsys.readouterr().err.lower()
+
+
 # --- docker preflight banner ----------------------------------------------
 
 import autocodabench.runner as _runner

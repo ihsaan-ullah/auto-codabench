@@ -235,7 +235,7 @@ CI runs the entire layer-3 suite across a Python 3.10–3.13 × Linux/macOS matr
 
 ### 5.3 The blinded end-to-end harness
 
-`experiments/bundle_creation_test/` runs the full authoring pipeline against real competitions with held-out ground truth, under blinding rules (the implementer never sees the ground truth or the proposal PDF; the submission adapter never sees expected scores) and a no-retry rule at the orchestrator level. Real ground-truth submissions are scored through the generated bundle and audited against expected results within declared tolerances. The protocol and results are documented in [`scientific-validation.md`](./scientific-validation.md) and the harness [README](../experiments/bundle_creation_test/README.md).
+`benchmark/autocodabench_create_bench/` runs the full authoring pipeline against real competitions with held-out ground truth, under blinding rules enforced as a code invariant of the SDK orchestrator (the implementer never sees the ground truth or the proposal PDF; the submission adapter never sees expected scores). Real ground-truth submissions are scored through the generated bundle and audited against expected results within declared tolerances by deterministic Python. The protocol and results are documented in [`scientific-validation.md`](./scientific-validation.md) and the benchmark [README](../benchmark/README.md).
 
 ### 5.4 What is deliberately *not* unit-tested
 

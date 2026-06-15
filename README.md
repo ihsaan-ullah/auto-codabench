@@ -114,7 +114,7 @@ The following table maps reader roles to the relevant documentation.
 | Trying the Web UI (Space or local `chainlit run`) | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI, then [`web/README.md`](web/README.md) to operate it |
 | Working on the package internals | [`docs/architecture.md`](docs/architecture.md) |
 | Skill provenance (the origin of each `SKILL.md`) | [`src/autocodabench/skills/<name>/README.md`](src/autocodabench/skills/) |
-| The end-to-end test harness | [`experiments/bundle_creation_test/README.md`](experiments/bundle_creation_test/README.md) |
+| The end-to-end benchmarks (any LLM backbone) | [`benchmark/README.md`](benchmark/README.md) |
 
 ## Repository layout
 
@@ -124,7 +124,8 @@ The table below summarizes the top-level structure of the repository.
 |------|----------|
 | `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI. |
 | `web/` | Chainlit chat UI — a consumer of the library, deployed by this Space. |
-| `experiments/` | The bundle-creation test harness (ground-truth competitions and a leakage-controlled pipeline). |
+| `benchmark/` | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
+| `experiments/` | Research scripts not yet ported to `benchmark/` (e.g. `backbone_bench`, the validate-bench prototype). |
 | `tests/` | Unit suite — fast and fully keyless. |
 | `Dockerfile` | Used by HF Spaces to build the image. |
 

@@ -71,6 +71,17 @@ def _read_file(path: str, max_chars: int = 40_000) -> dict[str, Any]:
     return {"path": str(p), "truncated": len(text) > max_chars, "content": text[:max_chars]}
 
 
+def _write_file(path: str, content: str) -> dict[str, Any]:
+    """Write text to a file (creating parent dirs). The generic-backend analog
+    of the Claude Write tool — needed by the reformat-and-run phase to author
+    an adapted submission. Bundle-authoring writes go through the dedicated
+    autocodabench_* tools, not this."""
+    p = Path(path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return {"path": str(p), "bytes_written": len(content.encode("utf-8"))}
+
+
 def _list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     p = Path(path).expanduser()
     if not p.is_dir():
@@ -196,6 +207,10 @@ _TOOLS: list[LocalTool] = [
     LocalTool("read_file",
               "Read a text file (UTF-8, content truncated past 40k chars).",
               _obj({"path": _S}, ["path"]), _read_file),
+    LocalTool("write_file",
+              "Write text to a file (creates parent dirs). Use for adapting a "
+              "submission; bundle files go through the autocodabench_* writers.",
+              _obj({"path": _S, "content": _S}, ["path", "content"]), _write_file),
     LocalTool("list_dir",
               "Recursively list a directory (up to 200 entries).",
               _obj({"path": _S}, ["path"]), _list_dir),
@@ -204,7 +219,8 @@ _TOOLS: list[LocalTool] = [
 REGISTRY: dict[str, LocalTool] = {t.name: t for t in _TOOLS}
 
 # Claude-style allowlist names -> local tool names.
-_ALIAS = {"Read": "read_file", "Glob": "list_dir", "Grep": "list_dir", "LS": "list_dir"}
+_ALIAS = {"Read": "read_file", "Write": "write_file",
+          "Glob": "list_dir", "Grep": "list_dir", "LS": "list_dir"}
 
 
 def select_tools(allowed: list[str] | None) -> list[LocalTool]:

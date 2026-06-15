@@ -261,40 +261,31 @@ print(report.ok, report.counts)
 
 ---
 
-## 5. Using autocodabench from an MCP host (Claude Code or Claude Desktop)
+## 5. Choosing an LLM backend
 
-The tool surface used by the pipeline is also available as a standalone
-MCP stdio server.
+`autocodabench create` (and the benchmarks under `benchmark/`) drive the model
+**hermetically through the backend seam** (`autocodabench.backends`): the
+autocodabench MCP tool surface is registered *programmatically* for each agent
+session, so there is **no `claude mcp add` and no `.mcp.json` to maintain** —
+install the package and it works, from any directory.
 
-For Claude Code:
+Select a backend with `--backend` (and optionally `--model`):
 
-```bash
-claude mcp add autocodabench -- python -m autocodabench.mcp.server
-```
+| spec | backbone | credentials |
+|------|----------|-------------|
+| `claude[:model]` (default) | Claude Agent SDK | subscription login or `ANTHROPIC_API_KEY` |
+| `ollama:<model>` | local Ollama (offline) | none |
+| `openai:<model>` | OpenAI or a proxy (`OPENAI_BASE_URL`) | `OPENAI_API_KEY` |
+| `<http(s)://host/v1>#<model>` | any OpenAI-compatible endpoint (vLLM, LiteLLM, …) | `AUTOCODABENCH_LLM_API_KEY` / `OPENAI_API_KEY` |
 
-For Claude Desktop:
+The generic (OpenAI-compatible) backends require native tool calling and get
+the **same 20-tool surface and the same `tool_calls/` audit trail** as the SDK
+path (`autocodabench.backends.local_tools`) — that parity is what makes
+cross-backbone benchmarking commensurable.
 
-```json
-// claude_desktop_config.json
-{
-  "mcpServers": {
-    "autocodabench": {
-      "command": "python",
-      "args": ["-m", "autocodabench.mcp.server"]
-    }
-  }
-}
-```
-
-The server exposes 20 tools covering run management and logging, bundle
-authoring, validation and zipping, execution (scoring, ingestion, and the
-starting-kit notebook all run inside the bundle's declared Docker image —
-the same way Codabench's worker runs them; a Docker daemon is required),
-and upload. In Claude Code, the packaged skills may
-additionally be symlinked into `.claude/skills/`, so that
-`/autocodabench-plan` and `/autocodabench-implement` drive the same
-two-phase flow conversationally; the experiment harness's `setup.sh`
-shows the exact links.
+The same tool surface is still available as a standalone MCP stdio server
+(`python -m autocodabench.mcp.server`) for embedding in a custom MCP host, but
+it is **not** required for `create`, `validate-bundle`, or the benchmarks.
 
 ---
 

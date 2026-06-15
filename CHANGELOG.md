@@ -7,6 +7,28 @@ All notable changes to autocodabench. Format follows
 ## [Unreleased]
 
 ### Added
+- **`create --pdf <proposal.pdf>`**: the plan phase can take a PDF proposal
+  directly. The PDF is extracted to text at the orchestrator
+  (`core.proposal.pdf_to_text`, via `pypdf`) so every backbone — including the
+  OpenAI-compatible one whose file tool is UTF-8-only — receives the same
+  proposal in the plan prompt. The `idea` argument is now optional when
+  `--pdf` is given.
+- **`benchmark/` — pure-SDK end-to-end benchmarks.** `autocodabench_create_bench`
+  measures PDF-proposal → working-bundle translation fidelity (plan
+  completeness, build, execution, and *score fidelity* — each ground-truth
+  submission scored through the generated bundle and compared to
+  `expected_result.json` within tolerance). It drives every phase through the
+  backend seam (`--backend claude|ollama:…|openai:…|URL#model`), so the
+  backbone is a measured variable and runs work offline (Ollama) and on GPU
+  workers. Reusable logic ships in the package: `autocodabench.bench`
+  (`results` canonical versioned record, `audit` deterministic score auditor,
+  `missing_info` aggregation, `report`) and `autocodabench.agent.reformat`
+  (the reformat-and-run SDK phase). Contributed results are append-only JSON
+  under `benchmark/<bench>/results/<backbone>/` (endpoint host only, never
+  keys).
+- A generic `write_file` tool (`Write` alias) in `backends.local_tools`, so
+  non-Claude backbones can author an adapted submission in the
+  reformat-and-run phase — preserving tool-surface parity.
 - **Execution-based validation**: `validate-bundle` (and `create`'s phase 3)
   now *runs* the bundle, not just inspects it. Two new deterministic checks
   execute the bundle inside its declared `docker_image` — `baseline-execution`
@@ -31,6 +53,17 @@ All notable changes to autocodabench. Format follows
   so generation and validation runs never share a prefix.
 
 ### Removed
+- **The `claude -p` shell-out benchmark harness and interactive-MCP
+  scaffolding.** `experiments/bundle_creation_test/` (the skill-driven,
+  `claude --print`-based harness), the project `.mcp.json`, the `setup.sh`
+  `.claude/` skill-symlink installer, and the `claude mcp add` user
+  instructions are gone. Everything that drives an LLM now goes through the
+  hermetic SDK / OpenAI-compatible backends (which register the MCP tool
+  surface programmatically), so a benchmark run no longer depends on ambient
+  `claude` CLI state and is reproducible anywhere. The competition instruments
+  moved to `benchmark/autocodabench_create_bench/competitions/`; a
+  deterministic auditor (`bench.audit`) replaces the former
+  `submission-log-auditor` subagent.
 - **The conda execution engine.** Execution is now **Docker-only**: every run
   — scoring, ingestion, and the starting-kit notebook — executes inside the
   bundle's declared `docker_image`, exactly as the Codabench worker does. A

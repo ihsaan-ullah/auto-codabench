@@ -396,13 +396,14 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
     return p
 
 
-def _print_create_config(*, idea, backend_name, auth_label, model, run_dir,
+def _print_create_config(*, idea, pdf, backend_name, auth_label, model, run_dir,
                          data, max_budget_usd, validate, verbosity) -> None:
     """Show the full effective configuration before spending anything, so the
     run is never an opaque idle."""
     budget = f"${max_budget_usd:.2f} per phase" if max_budget_usd else "no cap"
     print("autocodabench create — configuration")
-    print(f"  idea:        {textwrap.shorten(idea, width=72)}")
+    print(f"  idea:        {textwrap.shorten(idea, width=72) if idea else '(none)'}")
+    print(f"  proposal:    {pdf or '(none)'}")
     print(f"  backend:     {backend_name}  ({auth_label})")
     print(f"  model:       {model}")
     print(f"  output dir:  {run_dir}")
@@ -419,6 +420,14 @@ def _print_create_config(*, idea, backend_name, auth_label, model, run_dir,
 def _cmd_create(args: argparse.Namespace) -> int:
     from ..agent.pipeline import create_async
     from ..run_log import open_session
+
+    if not args.idea and not args.pdf:
+        print("create needs a competition source: pass an idea argument or "
+              "--pdf <proposal.pdf> (or both).", file=sys.stderr)
+        return 2
+    if args.pdf and not Path(args.pdf).expanduser().is_file():
+        print(f"--pdf: not a file: {args.pdf}", file=sys.stderr)
+        return 2
 
     if not _require_live_claude_auth(args.backend):
         return 2
@@ -476,8 +485,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
 
     print()
     _print_create_config(
-        idea=args.idea, backend_name=backend.name, auth_label=auth_label,
-        model=model_shown, run_dir=run_dir, data=args.data,
+        idea=args.idea, pdf=args.pdf, backend_name=backend.name,
+        auth_label=auth_label, model=model_shown, run_dir=run_dir, data=args.data,
         max_budget_usd=args.max_budget_usd, validate=not args.no_validate,
         verbosity=verbosity)
 
@@ -520,6 +529,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
     result = asyncio.run(create_async(
         args.idea,
         data=args.data,
+        pdf=args.pdf,
         backend=backend,
         model=args.model,
         max_budget_usd=args.max_budget_usd,
@@ -697,7 +707,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=_cmd_demo)
 
     p = sub.add_parser("create", help="agentic plan→build pipeline (needs an LLM backend)")
-    p.add_argument("idea", help="one-line competition idea or proposal text")
+    p.add_argument("idea", nargs="?", default=None,
+                   help="one-line competition idea or proposal text "
+                        "(optional if --pdf is given)")
+    p.add_argument("--pdf", help="path to a PDF proposal; its text is extracted "
+                                 "and handed to the planner (works on any backend)")
     p.add_argument("--data", help="path to sample data the planner may inspect")
     p.add_argument("--backend", default=None,
                    help="LLM backend: claude[:model] (default), ollama:<model> "

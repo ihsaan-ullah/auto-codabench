@@ -90,9 +90,10 @@ def _find_bundle(run_dir: Path) -> tuple[Path | None, Path | None]:
 
 
 async def create_async(
-    idea: str,
+    idea: str | None,
     *,
     data: str | None = None,
+    pdf: str | Path | None = None,
     backend: AgentBackend | None = None,
     model: str | None = None,
     max_budget_usd: float | None = None,
@@ -101,7 +102,11 @@ async def create_async(
     validate: bool = True,
     session: SessionInfo | None = None,
 ) -> CreateResult:
-    """Idea (or proposal text) → validated Codabench bundle, in two phases.
+    """Idea (or proposal text/PDF) → validated Codabench bundle, in two phases.
+
+    The competition source is either a one-line ``idea``, a ``pdf`` proposal
+    (extracted to text here so the planner is backbone-agnostic), or both
+    (the idea framing the PDF). At least one must be provided.
 
     ``on_event`` (optional) receives structured progress dicts so a caller can
     show step-by-step activity. The pipeline emits phase lifecycle events
@@ -109,9 +114,19 @@ async def create_async(
     the same callback into each backend task, which adds tool-call and result
     events. Without it the run is silent, as before.
     """
+    if idea is None and pdf is None:
+        raise ValueError("create_async requires an idea or a pdf (or both)")
     if backend is None:
         from ..backends import get_claude_backend
         backend = get_claude_backend(model=model) if model else get_claude_backend()
+
+    # Extract the PDF proposal to text up front so every backbone — including
+    # the OpenAI-compatible one whose file tool is UTF-8-only — receives the
+    # same proposal in the plan prompt, not a path only the SDK could read.
+    proposal_text = None
+    if pdf is not None:
+        from ..core.proposal import pdf_to_text
+        proposal_text = pdf_to_text(pdf)
 
     def emit(event: dict) -> None:
         if on_event is not None:
@@ -136,9 +151,19 @@ async def create_async(
                     "baseline, rules, ethics, schedule)"})
     plan_prompt = (
         "Open the run with autocodabench_open_run, then produce the "
-        "implementation plan for this competition idea:\n\n"
-        f"{idea}\n"
+        "implementation plan for this competition.\n"
     )
+    if idea:
+        plan_prompt += f"\nCompetition idea / framing:\n\n{idea}\n"
+    if proposal_text is not None:
+        plan_prompt += (
+            "\nThe full competition proposal (extracted from the provided PDF) "
+            "follows between the markers. Treat it as the authoritative source; "
+            "infer the design sections from it.\n"
+            "\n===== BEGIN PROPOSAL =====\n"
+            f"{proposal_text}\n"
+            "===== END PROPOSAL =====\n"
+        )
     if data:
         plan_prompt += (
             f"\nSample data for the competition is available at: {data}\n"

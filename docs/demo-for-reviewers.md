@@ -119,7 +119,7 @@ autocodabench create "Iris species classification from tabular \
 | 3 | [`docs/architecture.md`](./architecture.md) | Layering, the backend seam, design rationale, and invariants |
 | 4 | `src/autocodabench/checks/` (start at `base.py`, then `deterministic.py`) | The check contract in code — to be compared against what §3.4 of the scientific document promises |
 | 5 | `tests/` | What is actually asserted (note `tests/conftest.py`: the test fixture is identical to the replay demo) |
-| 6 | `experiments/bundle_creation_test/README.md` | The ground-truth experiment design, including the data-leakage and blinding protocol |
+| 6 | `benchmark/README.md` | The ground-truth benchmark design, including the data-leakage and blinding protocol |
 | 7 | `src/autocodabench/skills/*/SKILL.md` and the sibling READMEs | The agents' behavioral contracts and their provenance |
 
 ### Engineering standards checklist (verify rather than trust)

@@ -76,9 +76,31 @@ read the plan with the Read tool, then execute this skill end-to-end
 """
 
 
+_REFORMAT_FOOTER = """
+
+---
+
+## Runtime note (non-interactive)
+
+You are running headless — there is no user and no web interface. Do not ask
+questions and do not tell anyone to click anything; refer to artifacts by
+their file paths. Execute this skill end-to-end against the bundle and
+submission whose paths are in the prompt: probe the image, adapt the
+submission into `<out_dir>/attempt_<K>/` (use the Write tool), run it via
+`autocodabench_run_user_submission`, iterate on runtime errors up to the
+attempt cap, then write `<out_dir>/final.json` and emit the single final
+JSON object the skill specifies as your last message. You have NO access to
+any `expected_result.json` — never look for one.
+"""
+
+
 def plan_system_prompt() -> str:
     return load_skill("plan") + _NON_INTERACTIVE_PLAN_FOOTER
 
 
 def build_system_prompt() -> str:
     return load_skill("autocodabench-implement") + _BUILD_FOOTER
+
+
+def reformat_system_prompt() -> str:
+    return load_skill("autocodabench-reformat-and-run") + _REFORMAT_FOOTER
