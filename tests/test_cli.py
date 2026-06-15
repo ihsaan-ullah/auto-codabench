@@ -73,25 +73,19 @@ def test_demo_then_validate(tmp_path, capsys):
     assert "no LLM, no keys" in out
     assert "Bundle validation — ✅ PASS" in out
 
-    assert main(["validate-bundle", str(out_dir / DEMO_SLUG), "--no-execute"]) == 0
+    assert main(["validate", str(out_dir / DEMO_SLUG), "--no-execute"]) == 0
     assert "Bundle validation" in capsys.readouterr().out
 
 
 def test_validate_json_output(demo_bundle, capsys):
-    assert main(["validate-bundle", str(demo_bundle), "--no-execute", "--json"]) == 0
+    assert main(["validate", str(demo_bundle), "--no-execute", "--json"]) == 0
     out = capsys.readouterr().out
     assert '"ok": true' in out
 
 
-def test_validate_legacy_alias_still_works(demo_bundle, capsys):
-    # `validate` is retained as a back-compatible alias for `validate-bundle`
-    assert main(["validate", str(demo_bundle), "--no-execute", "--json"]) == 0
-    assert '"ok": true' in capsys.readouterr().out
-
-
 def test_validate_exit_code_on_gate_failure(demo_bundle, capsys):
     (demo_bundle / "pages" / "terms.md").unlink()
-    assert main(["validate-bundle", str(demo_bundle), "--no-execute"]) == 1
+    assert main(["validate", str(demo_bundle), "--no-execute"]) == 1
 
 
 def test_version(capsys):
@@ -182,35 +176,35 @@ def test_bundle_declared_image_none_when_absent(tmp_path):
     (tmp_path / "competition.yaml").write_text("title: t\n")
     assert _bundle_declared_image(tmp_path) is None
 # ---------------------------------------------------------------------------
-# create-bundle argument guards (keyless: rejected before any live-auth probe
+# build argument guards (keyless: rejected before any live-auth probe
 # or backend call, so these run without credentials)
 # ---------------------------------------------------------------------------
 
-def test_create_bundle_requires_a_plan_source(capsys):
-    assert main(["create-bundle", "--yes"]) == 2
+def test_build_requires_a_plan_source(capsys):
+    assert main(["build", "--yes"]) == 2
     assert "plan file" in capsys.readouterr().err
 
 
-def test_create_bundle_rejects_both_sources(tmp_path, capsys):
+def test_build_rejects_both_sources(tmp_path, capsys):
     plan = tmp_path / "plan.md"
     plan.write_text("# plan", encoding="utf-8")
-    code = main(["create-bundle", str(plan), "--run-dir", str(tmp_path), "--yes"])
+    code = main(["build", str(plan), "--run-dir", str(tmp_path), "--yes"])
     assert code == 2
     assert "not both" in capsys.readouterr().err
 
 
-def test_create_bundle_missing_run_dir(tmp_path, capsys):
+def test_build_missing_run_dir(tmp_path, capsys):
     missing = tmp_path / "nope"
-    assert main(["create-bundle", "--run-dir", str(missing), "--yes"]) == 2
+    assert main(["build", "--run-dir", str(missing), "--yes"]) == 2
     assert "run dir not found" in capsys.readouterr().err
 
 
-def test_create_bundle_run_dir_without_plan(tmp_path, capsys):
+def test_build_run_dir_without_plan(tmp_path, capsys):
     (tmp_path / "specs").mkdir()
-    assert main(["create-bundle", "--run-dir", str(tmp_path), "--yes"]) == 2
+    assert main(["build", "--run-dir", str(tmp_path), "--yes"]) == 2
     assert "implementation_plan.md" in capsys.readouterr().err
 
 
-def test_create_bundle_missing_plan_file(tmp_path, capsys):
-    assert main(["create-bundle", str(tmp_path / "absent.md"), "--yes"]) == 2
+def test_build_missing_plan_file(tmp_path, capsys):
+    assert main(["build", str(tmp_path / "absent.md"), "--yes"]) == 2
     assert "plan file not found" in capsys.readouterr().err

@@ -2,20 +2,20 @@
 
 Entry points are tiered by their authentication demands, keyless first:
 
-  autocodabench validate-bundle BUNDLE [--facts F] [--judged]  # keyless (unless --judged)
+  autocodabench plan "IDEA" [--data PATH]                      # Phase 1 — design → implementation_plan.md
+  autocodabench build [plan.md | --run-dir DIR]                # Phase 2 — plan → bundle
+  autocodabench validate BUNDLE [--facts F] [--judged]         # Phase 3 / standalone — keyless (unless --judged)
+  autocodabench create "IDEA" [--pdf P] [--data PATH]          # all three phases end to end
   autocodabench demo [--out DIR]                               # keyless replay demo
-  autocodabench plan-competition "IDEA" [--data PATH]          # Phase 1 only
-  autocodabench create-bundle [plan.md | --run-dir DIR]        # Phase 2 only
-  autocodabench create "IDEA" [--data PATH]                    # Phase 1 + 2 + validate
   autocodabench auth status [--no-probe]   # report, pick, and verify via a live turn
   autocodabench checks list
 
-``validate-bundle`` validates any bundle — including hand-written ones that
-never touched an agent (``validate`` remains as a back-compatible alias).
+``validate`` validates any bundle — including hand-written ones that never
+touched an agent.
 
-``plan-competition`` and ``create-bundle`` let you run the two agentic phases
-independently. ``plan-competition`` prints its run directory on completion so
-you can pass it to ``create-bundle --run-dir`` to reuse the same run.
+``plan`` and ``build`` run the two agentic phases independently. ``plan``
+prints its run directory on completion so you can pass it to
+``build --run-dir`` to reuse the same run.
 
 The CLI is a thin argument-parsing layer over the library: it contributes
 ``.env`` loading and the live-auth preflight, and contains no validation
@@ -340,7 +340,7 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
     Docker is installed and running.
 
     `required=True` (the run phases — `create`) makes a missing daemon a loud
-    prerequisite warning; `required=False` (static `validate-bundle`) keeps it
+    prerequisite warning; `required=False` (static `validate`) keeps it
     informational. Returns the underlying preflight dict.
     """
     from ..runner import docker_preflight
@@ -571,13 +571,13 @@ def _cmd_create(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# plan-competition  (Phase 1 standalone)
+# plan  (Phase 1 standalone)
 # ---------------------------------------------------------------------------
 
 def _print_plan_config(*, idea, backend_name, auth_label, model, run_dir,
                         data, max_budget_usd, verbosity) -> None:
     budget = f"${max_budget_usd:.2f}" if max_budget_usd else "no cap"
-    print("autocodabench plan-competition — configuration")
+    print("autocodabench plan — configuration")
     print(f"  idea:        {textwrap.shorten(idea, width=72)}")
     print(f"  backend:     {backend_name}  ({auth_label})")
     print(f"  model:       {model}")
@@ -588,7 +588,7 @@ def _print_plan_config(*, idea, backend_name, auth_label, model, run_dir,
     print( "  output:      specs/implementation_plan.md inside the run dir above")
 
 
-def _cmd_plan_competition(args: argparse.Namespace) -> int:
+def _cmd_plan(args: argparse.Namespace) -> int:
     from ..agent.pipeline import plan_async
     from ..run_log import open_run
 
@@ -660,22 +660,22 @@ def _cmd_plan_competition(args: argparse.Namespace) -> int:
     if result.ok:
         print(
             f"\n  → To build the bundle from this plan:\n"
-            f"    autocodabench create-bundle --run-dir {result.run_dir}"
+            f"    autocodabench build --run-dir {result.run_dir}"
         )
     if not result.ok:
-        print(f"\nplan-competition failed: {result.error}", file=sys.stderr)
+        print(f"\nplan failed: {result.error}", file=sys.stderr)
         return 1
     return 0
 
 
 # ---------------------------------------------------------------------------
-# create-bundle  (Phase 2 standalone)
+# build  (Phase 2 standalone)
 # ---------------------------------------------------------------------------
 
 def _print_bundle_config(*, plan_source, backend_name, auth_label, model,
                           run_dir, max_budget_usd, validate, verbosity) -> None:
     budget = f"${max_budget_usd:.2f}" if max_budget_usd else "no cap"
-    print("autocodabench create-bundle — configuration")
+    print("autocodabench build — configuration")
     print(f"  plan:        {plan_source}")
     print(f"  backend:     {backend_name}  ({auth_label})")
     print(f"  model:       {model}")
@@ -688,7 +688,7 @@ def _print_bundle_config(*, plan_source, backend_name, auth_label, model,
     print( "               land under the output/run dir above.")
 
 
-def _cmd_create_bundle(args: argparse.Namespace) -> int:
+def _cmd_build(args: argparse.Namespace) -> int:
     from ..agent.pipeline import bundle_async
     from ..run_log import open_run
 
@@ -702,7 +702,7 @@ def _cmd_create_bundle(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     if run_dir_arg is None and plan_arg is None:
-        print("error: pass a plan file (plan-competition.md) or --run-dir <path>",
+        print("error: pass a plan file or --run-dir <path>",
               file=sys.stderr)
         return 2
 
@@ -801,7 +801,7 @@ def _cmd_create_bundle(args: argparse.Namespace) -> int:
         print()
         print(result.validation.to_markdown())
     if not result.ok:
-        print(f"\ncreate-bundle failed: {result.error}", file=sys.stderr)
+        print(f"\nbuild failed: {result.error}", file=sys.stderr)
         return 1
     return 0
 
@@ -929,28 +929,41 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autocodabench",
-        description="Agentic authoring and pre-launch validation of Codabench bundles.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Agentic authoring and pre-launch validation of Codabench "
+            "competition bundles.\n\n"
+            "Authoring runs in three phases — plan → build → validate — each "
+            "runnable\non its own, or all at once with `create`."
+        ),
+        epilog=(
+            "pipeline phases (run a phase on its own, or chain all three with `create`):\n"
+            "  plan       Phase 1 · idea/PDF → specs/implementation_plan.md   (needs an LLM backend)\n"
+            "  build      Phase 2 · a plan → competition bundle + .zip        (needs an LLM backend)\n"
+            "  validate   Phase 3 · run a bundle's pre-launch checks          (keyless; --judged adds an LLM)\n"
+            "  create     all three phases end to end                         (needs an LLM backend)\n"
+            "\n"
+            "utilities:\n"
+            "  demo       rebuild + validate the shipped demo bundle, no keys  (keyless)\n"
+            "  checks     list the registered checks by tier                   (keyless)\n"
+            "  auth       report / choose / verify the Claude auth path\n"
+            "\n"
+            "backends: every agentic command accepts --backend — claude[:model] (default),\n"
+            "          ollama:<model>, openai:<model>, or an OpenAI-compatible URL with '#<model>'.\n"
+            "\n"
+            "getting started:\n"
+            "  autocodabench create \"<idea>\" [--pdf proposal.pdf] [--data DIR]   # the whole pipeline\n"
+            "  autocodabench plan \"<idea>\"  →  autocodabench build --run-dir <dir>  →  autocodabench validate <bundle>\n"
+            "\n"
+            "docs: docs/INSTRUCTION_FOR_USER.md   ·   per-phase walkthrough: docs/post-create-pipeline.md"
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
-    p = sub.add_parser("validate-bundle", aliases=["validate"],
-                       help="validate a bundle directory or zip (keyless)")
-    _add_validate_args(p)
-    p.set_defaults(func=_cmd_validate)
-
-    p = sub.add_parser("demo", help="rebuild + validate the demo bundle from a "
-                                    "recorded run (keyless)")
-    p.add_argument("--out", default="autocodabench-demo",
-                   help="output directory (default ./autocodabench-demo)")
-    p.add_argument("--fixture", help="replay a different fixture (.jsonl or run dir)")
-    p.add_argument("--replay", action="store_true",
-                   help="(default behavior; flag kept for clarity)")
-    p.set_defaults(func=_cmd_demo)
-
-    p = sub.add_parser("plan-competition",
-                       help="Phase 1 only: plan a competition and save "
-                            "implementation_plan.md (needs an LLM backend)")
+    # ---- Pipeline phases ---------------------------------------------------
+    p = sub.add_parser("plan",
+                       help="Phase 1: idea/PDF → implementation_plan.md (needs an LLM backend)")
     p.add_argument("idea", help="one-line competition idea or proposal text")
     p.add_argument("--data", help="path to sample data the planner may inspect")
     p.add_argument("--backend", default=None,
@@ -965,16 +978,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="print the full developer trace")
     p.add_argument("--quiet", action="store_true",
                    help="suppress progress; print only the final summary")
-    p.set_defaults(func=_cmd_plan_competition)
+    p.set_defaults(func=_cmd_plan)
 
-    p = sub.add_parser("create-bundle",
-                       help="Phase 2 only: build a Codabench bundle from a plan "
-                            "(needs an LLM backend)")
+    p = sub.add_parser("build",
+                       help="Phase 2: build a bundle from a plan (needs an LLM backend)")
     p.add_argument("plan", nargs="?", default=None,
                    help="path to implementation_plan.md — a fresh run dir is "
                         "auto-created (mutually exclusive with --run-dir)")
     p.add_argument("--run-dir", default=None,
-                   help="existing run dir produced by plan-competition; the plan "
+                   help="existing run dir produced by `plan`; the plan "
                         "is read from <run-dir>/specs/implementation_plan.md "
                         "(mutually exclusive with the positional plan argument)")
     p.add_argument("--no-validate", action="store_true",
@@ -991,9 +1003,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="print the full developer trace")
     p.add_argument("--quiet", action="store_true",
                    help="suppress progress; print only the final summary")
-    p.set_defaults(func=_cmd_create_bundle)
+    p.set_defaults(func=_cmd_build)
 
-    p = sub.add_parser("create", help="agentic plan→build pipeline (needs an LLM backend)")
+    p = sub.add_parser("validate",
+                       help="Phase 3 / standalone: run a bundle's checks, dir or zip (keyless)")
+    _add_validate_args(p)
+    p.set_defaults(func=_cmd_validate)
+
+    p = sub.add_parser("create",
+                       help="all 3 phases: plan → build → validate (needs an LLM backend)")
     p.add_argument("idea", nargs="?", default=None,
                    help="one-line competition idea or proposal text "
                         "(optional if --pdf is given)")
@@ -1023,6 +1041,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verbose", action="store_true",
                    help=argparse.SUPPRESS)  # deprecated alias for --debug
     p.set_defaults(func=_cmd_create)
+
+    # ---- Utilities ---------------------------------------------------------
+    p = sub.add_parser("demo", help="rebuild + validate the demo bundle from a "
+                                    "recorded run (keyless)")
+    p.add_argument("--out", default="autocodabench-demo",
+                   help="output directory (default ./autocodabench-demo)")
+    p.add_argument("--fixture", help="replay a different fixture (.jsonl or run dir)")
+    p.add_argument("--replay", action="store_true",
+                   help="(default behavior; flag kept for clarity)")
+    p.set_defaults(func=_cmd_demo)
 
     p = sub.add_parser("auth", help="report, choose, and verify which Claude auth path is used")
     p.add_argument("action", choices=["status", "use"], nargs="?", default="status",

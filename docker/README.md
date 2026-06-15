@@ -77,7 +77,7 @@ that ships the dependencies (for example `codalab/codalab-legacy:py312`).
 
 ## Architecture and Apple silicon
 
-`create` and `validate-bundle` open with a Docker preflight that reports the
+`create` and `validate` open with a Docker preflight that reports the
 image's CPU architecture against the host. An image whose architecture does not
 match the host still runs, but under QEMU emulation — correct yet slow.
 

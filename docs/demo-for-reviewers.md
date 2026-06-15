@@ -76,7 +76,7 @@ python -m pytest tests/
 autocodabench demo --out /tmp/demo
 
 # 3. The validator on the result (also works on any hand-written bundle).
-autocodabench validate-bundle /tmp/demo/demo-ai-text-detection.zip
+autocodabench validate /tmp/demo/demo-ai-text-detection.zip
 
 # 4. The executable checklist: every check, its tier, its citation.
 autocodabench checks list
@@ -94,7 +94,7 @@ If Claude authentication is available (a Claude Pro/Max login via Claude
 Code, or `ANTHROPIC_API_KEY`), two further probes are worthwhile:
 
 ```bash
-autocodabench validate-bundle /tmp/demo/demo-ai-text-detection --judged
+autocodabench validate /tmp/demo/demo-ai-text-detection --judged
 # → the LLM-judged tier. Then plant a contradiction and re-run:
 #   edit pages/overview.md to claim "max 20 submissions/day"
 #   (the config enforces 5) — the judge should flag exactly that line.
@@ -127,7 +127,7 @@ autocodabench create "Iris species classification from tabular \
 | Standard | Where to verify |
 |---|---|
 | OSI license | `LICENSE` / `pyproject.toml` (MIT) |
-| Installable package | `pip install -e .`; console script `autocodabench` (subcommands `validate-bundle`, `demo`, `create`, …) |
+| Installable package | `pip install -e .`; console script `autocodabench` (subcommands `validate`, `demo`, `create`, …) |
 | Test suite, keyless, fast | `python -m pytest tests/` |
 | CI on every push (3.10–3.13, Linux and macOS, including the offline end-to-end run and a wheel-content check) | `.github/workflows/ci.yml` |
 | Versioning and changelog | `CHANGELOG.md`, `autocodabench --version` |

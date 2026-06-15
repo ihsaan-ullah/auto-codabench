@@ -64,7 +64,7 @@ src/autocodabench/
 │   ├── codabench_api.py     # canonical 4-step flow (token→placeholder→PUT→poll)
 │   └── service.py           # upload_zip() used by MCP tool + web route
 │
-├── cli/main.py              # autocodabench {validate-bundle,demo,create,
+├── cli/main.py              # autocodabench {validate,demo,create,
 │                            #   auth,checks}  (validate = back-compat alias)
 └── skills/                  # versioned behavioral contracts per phase
     └── <name>/SKILL.md      #   (+ README.md documenting provenance)
@@ -109,7 +109,7 @@ The following table summarizes the principal design decisions, the principle eac
   `ReplayBackend.load_fixture()` reads either a `.jsonl` fixture or a run
   directory directly. This duality must be preserved.
 - **The unit suite remains keyless.** Live-SDK behavior is verified manually
-  (`autocodabench validate-bundle --judged`, `autocodabench auth status --probe`);
+  (`autocodabench validate --judged`, `autocodabench auth status --probe`);
   nothing in `tests/` may require authentication or network access.
 - **The docker engine installs nothing.** The Codabench worker executes
   programs inside the competition's `docker_image` and never installs
@@ -131,7 +131,7 @@ The following table summarizes the principal design decisions, the principle eac
 ```mermaid
 flowchart TB
   subgraph surfaces["Surfaces"]
-    cli["CLI<br/>autocodabench validate-bundle / create"]
+    cli["CLI<br/>autocodabench validate / create"]
     web["Web UI<br/>web/app.py (Chainlit)"]
     lib["Library<br/>import autocodabench"]
   end

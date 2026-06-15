@@ -1,9 +1,9 @@
-# An execution trace of `autocodabench validate-bundle`
+# An execution trace of `autocodabench validate`
 
 This document presents a complete execution trace of the command
 
 ```bash
-autocodabench validate-bundle benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
 ```
 
 from shell invocation to process exit code. It is written for a reader who
@@ -22,7 +22,7 @@ position).
 ## Overview: the call graph
 
 ```
-shell: autocodabench validate-bundle <bundle>
+shell: autocodabench validate <bundle>
   └─ cli/main.py: main()                     ← console-script entry point
        ├─ auth.load_dotenv()                 ← read <cwd>/.env (never overrides real env)
        ├─ argparse: _build_parser()          ← parse subcommand + flags
@@ -69,7 +69,7 @@ launcher onto the `PATH` that imports `autocodabench.cli.main` and calls
 `main()`. The first line of project code that executes is therefore
 `main` in `src/autocodabench/cli/main.py`.
 
-(`validate-bundle` is a subcommand of the single `autocodabench` entry
+(`validate` is a subcommand of the single `autocodabench` entry
 point, so the validator behaves as a standalone tool that can be pointed
 at any bundle, whether hand-written or generated. `validate` is retained
 as a back-compatible alias for the same subcommand.)
@@ -83,13 +83,13 @@ def main(argv=None) -> int:
     from ..auth import load_dotenv
     load_dotenv()                     # <cwd>/.env, if present
     args = _build_parser().parse_args(argv)
-    return args.func(args)            # → _cmd_validate for the validate-bundle subcommand
+    return args.func(args)            # → _cmd_validate for the validate subcommand
 ```
 
 `_build_parser()` registers the subcommand and its flag surface:
 
 ```python
-p = sub.add_parser("validate-bundle", aliases=["validate"], ...)
+p = sub.add_parser("validate", aliases=["validate"], ...)
 _add_validate_args(p)                 # bundle, --facts, --judged, --backend, --model, --json
 p.set_defaults(func=_cmd_validate)
 ```
@@ -426,13 +426,13 @@ this page.
 ```bash
 # the human-built production bundle (passes the gates; 4 advisory findings,
 # incl. uncapped submissions — which --judged then catches contradicting its own pages)
-autocodabench validate-bundle benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
+autocodabench validate benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle
 
 # machine-readable
-autocodabench validate-bundle <bundle> --json | python -m json.tool
+autocodabench validate <bundle> --json | python -m json.tool
 
 # add the LLM-judged advisory tier (prompts for auth if you have none)
-autocodabench validate-bundle <bundle> --judged
+autocodabench validate <bundle> --judged
 
 # the full check inventory, by tier, with citations
 autocodabench checks list

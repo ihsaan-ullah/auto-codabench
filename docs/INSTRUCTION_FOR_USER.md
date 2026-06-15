@@ -31,9 +31,9 @@ autocodabench executes every bundle program — scoring, ingestion, and the
 starting-kit notebook — inside the competition's Docker image, exactly as the
 Codabench compute worker does. **Docker must be installed and running** for the
 run phases: `create`'s build self-validation, and any direct call to the
-runner. Static `validate-bundle` and `demo` do not need it.
+runner. Static `validate` and `demo` do not need it.
 
-Both `create` and `validate-bundle` open with a **Docker preflight banner** that
+Both `create` and `validate` open with a **Docker preflight banner** that
 reports the image that will run, its CPU architecture versus your host (native
 vs. slow QEMU emulation), and whether the daemon is up — so the runtime is never
 a surprise. On Apple silicon, prefer the multi-arch `codalab/codalab-legacy:py312`
@@ -116,7 +116,7 @@ You do not have to edit that file by hand: `autocodabench auth use api_key`
 (and the `auth status` picker) prompt for a key with hidden input and offer
 to save it to `./.env` (file mode 600) for you.
 
-The commands `autocodabench create` and `autocodabench validate-bundle --judged`
+The commands `autocodabench create` and `autocodabench validate --judged`
 perform an authentication preflight before starting a session. When no
 credentials are found and the command is running on an interactive
 terminal, the preflight offers the same two options — signing in to the
@@ -125,7 +125,7 @@ place; you may decline and run `claude auth login` yourself), or entering an
 API key. In non-interactive contexts, these commands exit with status 2 and
 print guidance instead.
 
-Keyless commands (`validate-bundle`, `demo`, `checks list`) do not consult
+Keyless commands (`validate`, `demo`, `checks list`) do not consult
 authentication state at all.
 
 ---
@@ -137,8 +137,8 @@ autocodabench or written by hand, supplied as a directory or a zip
 archive:
 
 ```bash
-autocodabench validate-bundle path/to/bundle/          # or bundle.zip
-autocodabench validate-bundle bundle.zip --json        # machine-readable report
+autocodabench validate path/to/bundle/          # or bundle.zip
+autocodabench validate bundle.zip --json        # machine-readable report
 autocodabench checks list                   # every check, by tier, with citations
 ```
 
@@ -176,7 +176,7 @@ task_type: binary_classification_imbalanced
 ### LLM-judged checks (authentication required)
 
 ```bash
-autocodabench validate-bundle path/to/bundle --judged
+autocodabench validate path/to/bundle --judged
 ```
 
 This option adds advisory checks graded by an LLM — for example, whether
@@ -285,7 +285,7 @@ cross-backbone benchmarking commensurable.
 
 The same tool surface is still available as a standalone MCP stdio server
 (`python -m autocodabench.mcp.server`) for embedding in a custom MCP host, but
-it is **not** required for `create`, `validate-bundle`, or the benchmarks.
+it is **not** required for `create`, `validate`, or the benchmarks.
 
 ---
 

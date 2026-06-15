@@ -218,7 +218,7 @@ def resolve_execution_engine(engine: str = "auto") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Docker preflight: report which image will run, its CPU architecture, and
 # whether it matches the host (native) or will run under QEMU emulation (slow).
-# Surfaced at the start of `create` / `validate-bundle` so the user knows the
+# Surfaced at the start of `create` / `validate` so the user knows the
 # runtime up front and that Docker is a prerequisite.
 # ---------------------------------------------------------------------------
 
@@ -573,7 +573,7 @@ def _run_logs_dir(slug: str, root_dir: str | None = None) -> Path:
 # The cache lives *next to* the bundle directory (``<bundle>/../`` — the
 # ``bundles/`` dir for a generated run, the bundle's parent for a hand-written
 # one), keyed by the kind of run. Crucially it is keyed to the bundle's own
-# location rather than to any run dir, so a separate ``validate-bundle``
+# location rather than to any run dir, so a separate ``validate``
 # invocation pointed at the same bundle finds the build phase's entry. Each
 # entry records the hash of the bundle's executable inputs; a reused result is
 # only honoured when that hash still matches, so editing the scoring program /

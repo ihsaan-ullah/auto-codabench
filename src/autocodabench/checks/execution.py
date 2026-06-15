@@ -9,7 +9,7 @@ score on real data, in this image, in this long" is qualitatively stronger
 evidence than "the YAML references a file that exists".
 
 They run only when the validation was asked to *execute*
-(``CheckContext.execute``) — a plain ``validate-bundle`` without Docker, and
+(``CheckContext.execute``) — a plain ``validate`` without Docker, and
 the keyless unit suite, never trigger them. When execution *is* requested but
 no Docker daemon is reachable, each returns SKIPPED with the reason rather
 than a misleading pass or a spurious gate.

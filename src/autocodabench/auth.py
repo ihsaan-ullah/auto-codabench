@@ -110,7 +110,7 @@ class AuthStatus:
                 "Auth: none detected. Run `autocodabench auth use subscription` to "
                 "sign in with your Pro/Max plan (it opens Claude Code's sign-in for "
                 "you), or `autocodabench auth use api_key` to paste an API key. "
-                "Keyless commands (validate-bundle, demo) still work.")
+                "Keyless commands (validate, demo) still work.")
         cli = self.cli_path or ("(not found — the Agent SDK ships its own "
                                 "runtime, so this is informational)")
         pref_note = {

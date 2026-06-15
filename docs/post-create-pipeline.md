@@ -110,13 +110,13 @@ immediately rather than after an idle period:
    architecture relative to the host (native execution versus QEMU emulation),
    and whether the Docker daemon is installed and running. Input: the daemon
    status and the image's manifest; Output: the `docker_preflight()` dict. The
-   same banner precedes `validate-bundle`.
+   same banner precedes `validate`.
 
 Each check can be exercised independently without credentials:
 
 ```bash
 autocodabench auth status --no-probe          # static auth detection (no live turn)
-autocodabench validate-bundle <bundle>        # prints the Docker preflight banner
+autocodabench validate <bundle>        # prints the Docker preflight banner
 python - <<'PY'                               # the preflight result directly
 from autocodabench.runner import docker_preflight
 import json; print(json.dumps(docker_preflight("codalab/codalab-legacy:py312"), indent=2))
@@ -282,7 +282,7 @@ scorer so that each declared leaderboard key is actually written.
 - The model reads `issues` and fixes the bundle, then re-lints.
 
 ```bash
-autocodabench validate-bundle bundles/<slug>/ --no-execute
+autocodabench validate bundles/<slug>/ --no-execute
 ```
 
 **2c. Run the baseline through scoring — `run_baseline_submission(slug)`**
@@ -365,7 +365,7 @@ snapshotted to `phase2_build/tool_calls/`.
 
 **Kind: deterministic code. No LLM by default.** Phase 3 is *not* an agent
 session — `create` calls `validate_bundle_path_async(bundle_dir, execute=True)`
-directly. The same function backs the standalone `validate-bundle` command,
+directly. The same function backs the standalone `validate` command,
 which is the entry point for a user validating a bundle they wrote or obtained
 rather than generated. The only place a model can enter Phase 3 is the optional
 *judged* tier, which `create` never enables and which the CLI enables only with
@@ -391,8 +391,8 @@ Inspect `competition.yaml` and the bundle's files; no Docker, no model, no keys.
   check (`status`, `severity`, `message`, `where`, `citation`).
 
 ```bash
-autocodabench validate-bundle bundles/<slug>/ --no-execute          # static only
-autocodabench validate-bundle bundles/<slug>/ --no-execute --json   # machine-readable
+autocodabench validate bundles/<slug>/ --no-execute          # static only
+autocodabench validate bundles/<slug>/ --no-execute --json   # machine-readable
 autocodabench checks list                                           # the live inventory by tier
 ```
 
@@ -420,9 +420,9 @@ execute=False)`) so programmatic and keyless use stays static and fast; the CLI
 turns it on:
 
 ```bash
-autocodabench validate-bundle bundles/<slug>/            # static + execution (default)
-autocodabench validate-bundle bundles/<slug>/ --execute  # explicit
-autocodabench validate-bundle bundles/<slug>/ --no-execute  # disable execution
+autocodabench validate bundles/<slug>/            # static + execution (default)
+autocodabench validate bundles/<slug>/ --execute  # explicit
+autocodabench validate bundles/<slug>/ --no-execute  # disable execution
 ```
 
 ### 3.3 Reusing the build phase's runs — the execution cache (deterministic)
@@ -436,7 +436,7 @@ unchanged, they reuse the recorded result and label it as reused from the build
 phase rather than re-executing. **Any edit to a bundle file changes the hash and
 forces a fresh run**, so the cache can never mask a change. This is what makes
 the common workflow safe — run plan+build, hand-edit the generated scoring
-program or data, then run `validate-bundle` separately: the validator detects
+program or data, then run `validate` separately: the validator detects
 the edit (hash mismatch) and re-executes rather than trusting a stale pass.
 
 - Input to a reuse decision: the bundle's current content hash. Output: either a
@@ -452,7 +452,7 @@ gates, and an unparseable response degrades to SKIPPED. `create` does not enable
 it, so a `create` Phase 3 is 100% deterministic.
 
 ```bash
-autocodabench validate-bundle bundles/<slug>/ --judged      # adds the LLM tier (needs a backend)
+autocodabench validate bundles/<slug>/ --judged      # adds the LLM tier (needs a backend)
 ```
 
 ---
@@ -486,7 +486,7 @@ artifact" unambiguous:
     run_logs/<slug>/                    # only if phase 3 had to re-execute anything
 ```
 
-A standalone `autocodabench validate-bundle` instead creates its own session
+A standalone `autocodabench validate` instead creates its own session
 directory (a different prefix) containing only a `phase3_validate/` folder, so a
 validation run and a generation run never share a prefix and cannot be confused.
 With `--no-execute` the command performs static checks only and writes no session
@@ -545,8 +545,8 @@ result on the same inputs every time.
 python -m pytest tests/                      # unit suite (fast, fully keyless)
 python -m autocodabench.core.bundle_io       # core authoring smoke (demo bundle in a tempdir)
 autocodabench demo --out /tmp/demo           # replay authoring + validate (no LLM, no keys)
-autocodabench validate-bundle <bundle> --no-execute   # static schema validation, keyless
-autocodabench validate-bundle <bundle>       # static + execution (runs the bundle; needs Docker)
+autocodabench validate <bundle> --no-execute   # static schema validation, keyless
+autocodabench validate <bundle>       # static + execution (runs the bundle; needs Docker)
 autocodabench checks list                    # registered checks by tier
 python -m autocodabench.mcp.server           # MCP stdio server (blocks on stdin — expected)
 python -c "from autocodabench.runner import docker_preflight; print(docker_preflight())"

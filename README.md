@@ -41,7 +41,7 @@ pip install -e .            # (PyPI release pending — install from a checkout)
 autocodabench demo --out ./demo
 
 # Validate any bundle — including one written by hand.
-autocodabench validate-bundle ./demo/demo-ai-text-detection.zip
+autocodabench validate ./demo/demo-ai-text-detection.zip
 
 # List what is checked, by tier, with citations.
 autocodabench checks list
@@ -69,7 +69,7 @@ autocodabench create "Plankton image classification, balanced accuracy, \
 # The model is a slot, not a hard binding — same tools, same audit trail:
 autocodabench create "..." --backend ollama:llama3.1      # local, keyless
 autocodabench create "..." --backend openai:gpt-4o
-autocodabench validate-bundle bundle.zip --judged --backend ollama:llama3.1
+autocodabench validate bundle.zip --judged --backend ollama:llama3.1
 ```
 
 `create` runs two isolated agent sessions — plan, then build — joined only
