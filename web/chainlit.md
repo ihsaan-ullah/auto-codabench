@@ -35,12 +35,24 @@ workspace panel for download. A one-click **⬆️ Upload to Codabench**
 button also shows up in chat — clicking it publishes the competition
 and surfaces the Codabench URL.
 
-### 3. ✅ Validation *(coming soon)*
+### 3. ✅ Validation
 
-A *fresh* agent runs the full autocodabench check framework against the
-bundle produced in Phase 2 and writes a `validation_report.md` summarising
-all pass/fail/advisory findings. You can download and inspect the bundle
-manually in the workspace panel while this phase is being wired up.
+The autocodabench check framework runs automatically against the bundle
+produced in Phase 2 — no agent, no waiting, just a few seconds of pure
+Python. It produces a `validation_report.md` covering three tiers:
+
+- **Gate failures** — deterministic checks that must pass before upload
+  (e.g. `competition.yaml` required keys, missing referenced files,
+  leaderboard key/score mismatch).
+- **Findings** — advisory observations that do not block upload but flag
+  known design risks (with citations).
+- **Attestations** — criteria only a human can certify; surfaced as an
+  explicit checklist.
+
+After the checks finish you will see a **✅ PASS / ❌ FAIL** verdict in
+chat with any gate failures listed inline. The full report opens in the
+**✅ `validation_report.md`** tab in the workspace panel and is also
+available as a download.
 
 ### Revise your plan: Back-navigation
 
@@ -66,5 +78,6 @@ This is a **private alpha** for invited collaborators:
 - HF Spaces is CPU-only, ≤16 GB RAM. Curated package whitelist:
   `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`,
   `pillow`.
-- Phase 3 (Validation) agent is not yet wired — placeholder pill and
-  intro message are shown; full functionality coming in a follow-up.
+- Phase 3 runs deterministic checks only (no Docker execution, no
+  LLM-judged checks). Pass `--judged` via the CLI for the full advisory
+  tier outside the web UI.
