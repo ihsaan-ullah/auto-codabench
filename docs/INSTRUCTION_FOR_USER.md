@@ -25,6 +25,27 @@ To verify the installation:
 2. Run `autocodabench demo --out /tmp/acb-demo` to execute a fully offline
    end-to-end test.
 
+### Docker (required to *run* bundles)
+
+autocodabench executes every bundle program — scoring, ingestion, and the
+starting-kit notebook — inside the competition's Docker image, exactly as the
+Codabench compute worker does. **Docker must be installed and running** for the
+run phases: `create`'s build self-validation, and any direct call to the
+runner. Static `validate-bundle` and `demo` do not need it.
+
+Both `create` and `validate-bundle` open with a **Docker preflight banner** that
+reports the image that will run, its CPU architecture versus your host (native
+vs. slow QEMU emulation), and whether the daemon is up — so the runtime is never
+a surprise. On Apple silicon, prefer the multi-arch `codalab/codalab-legacy:py312`
+(Docker resolves it to arm64) for fast local testing:
+
+```bash
+export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312
+```
+
+See `docs/post-create-pipeline.md` for exactly what runs after `create` and how
+to test each step, and `docker/README.md` for the autocodabench base images.
+
 ---
 
 ## 2. Authentication (agentic features only)
@@ -240,40 +261,31 @@ print(report.ok, report.counts)
 
 ---
 
-## 5. Using autocodabench from an MCP host (Claude Code or Claude Desktop)
+## 5. Choosing an LLM backend
 
-The tool surface used by the pipeline is also available as a standalone
-MCP stdio server.
+`autocodabench create` (and the benchmarks under `benchmark/`) drive the model
+**hermetically through the backend seam** (`autocodabench.backends`): the
+autocodabench MCP tool surface is registered *programmatically* for each agent
+session, so there is **no `claude mcp add` and no `.mcp.json` to maintain** —
+install the package and it works, from any directory.
 
-For Claude Code:
+Select a backend with `--backend` (and optionally `--model`):
 
-```bash
-claude mcp add autocodabench -- python -m autocodabench.mcp.server
-```
+| spec | backbone | credentials |
+|------|----------|-------------|
+| `claude[:model]` (default) | Claude Agent SDK | subscription login or `ANTHROPIC_API_KEY` |
+| `ollama:<model>` | local Ollama (offline) | none |
+| `openai:<model>` | OpenAI or a proxy (`OPENAI_BASE_URL`) | `OPENAI_API_KEY` |
+| `<http(s)://host/v1>#<model>` | any OpenAI-compatible endpoint (vLLM, LiteLLM, …) | `AUTOCODABENCH_LLM_API_KEY` / `OPENAI_API_KEY` |
 
-For Claude Desktop:
+The generic (OpenAI-compatible) backends require native tool calling and get
+the **same 20-tool surface and the same `tool_calls/` audit trail** as the SDK
+path (`autocodabench.backends.local_tools`) — that parity is what makes
+cross-backbone benchmarking commensurable.
 
-```json
-// claude_desktop_config.json
-{
-  "mcpServers": {
-    "autocodabench": {
-      "command": "python",
-      "args": ["-m", "autocodabench.mcp.server"]
-    }
-  }
-}
-```
-
-The server exposes 20 tools covering run management and logging, bundle
-authoring, validation and zipping, execution (scoring runs execute inside
-the bundle's declared Docker image when Docker is available — the same way
-Codabench's worker runs them — with a per-run conda environment as the
-fallback), and upload. In Claude Code, the packaged skills may
-additionally be symlinked into `.claude/skills/`, so that
-`/autocodabench-plan` and `/autocodabench-implement` drive the same
-two-phase flow conversationally; the experiment harness's `setup.sh`
-shows the exact links.
+The same tool surface is still available as a standalone MCP stdio server
+(`python -m autocodabench.mcp.server`) for embedding in a custom MCP host, but
+it is **not** required for `create`, `validate-bundle`, or the benchmarks.
 
 ---
 

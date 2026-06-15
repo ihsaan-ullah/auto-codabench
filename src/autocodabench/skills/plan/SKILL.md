@@ -44,15 +44,23 @@ which is exactly the kind of cost-burn we're trying to avoid.
    data (~200 rows) and sklearn-class baselines so Phase 2's bundle
    actually runs.
 6. **Curated whitelist** (pre-installed): numpy, pandas, scikit-learn,
-   matplotlib, seaborn, scipy, pillow. If your plan needs anything
-   else, ASK first.
-7. **Citations are clickable markdown links** —
+   matplotlib, seaborn, scipy, pillow. These are exactly what the
+   default runtime image ships, so a plan that stays within them needs
+   no special image. If your plan needs anything else, ASK first.
+7. **Default runtime image.** State the bundle's Docker image in the
+   plan; default to `autocodabench/autocodabench-base-cpu:latest` (the
+   curated CPU stack above), or `autocodabench/autocodabench-base-gpu:latest`
+   only if the task genuinely needs a GPU. Bundles run inside this image
+   exactly as on Codabench, and Phase 2 may change it if the build
+   requires a different one — but name a sensible default here so Phase 2
+   starts from the fast, pre-built base.
+8. **Citations are clickable markdown links** —
    `[Author YYYY](https://openalex.org/Wxxxxx)` or
    `[Pavão et al., Ch. X §Y](https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf)`.
    Bare `[oa:Wxxxxx]` without a URL is forbidden.
-8. **Stay tight.** Target 3-6 user turns total: roadmap, 1-2 gap
+9. **Stay tight.** Target 3-6 user turns total: roadmap, 1-2 gap
    questions, draft, hand-off. Don't perfect the plan here.
-9. **Hand-off, not advance.** When the plan is saved, hand off to
+10. **Hand-off, not advance.** When the plan is saved, hand off to
    Phase 2 — Competition Creation following the surface-specific
    instruction in your runtime note at the end of this prompt. You do
    not start Phase 2 yourself.

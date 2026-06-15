@@ -32,7 +32,7 @@ Every registered check carries a citation, either to the Codabench bundle schema
 
 ### 2.1 The structural gate: `bundle-schema`
 
-One check gates: `bundle-schema` (severity BLOCKER, cited to the Codabench schema). It wraps the schema lint in `core/bundle_io.py::validate_bundle` and converts each error-severity lint issue into a FAIL. The lint examines six condition families:
+One *static* check gates: `bundle-schema` (severity BLOCKER, cited to the Codabench schema). (When validation executes the bundle — §3 — a second deterministic check, `baseline-execution`, can also gate.) It wraps the schema lint in `core/bundle_io.py::validate_bundle` and converts each error-severity lint issue into a FAIL. The lint examines six condition families:
 
 | # | Condition | Failure it prevents on the platform |
 |---|---|---|
@@ -60,6 +60,11 @@ The remaining ten deterministic checks examine competition *design quality* rath
 | `test-set-size` | Test-set size satisfies the 100/E rule for the anticipated error rate | An undersized test set cannot statistically separate the leaders (Ch. 4) — *facts-gated, see §2.3* |
 | `external-data-rule` | The external-data rule is declared and documented in the pages | An unstated rule is unenforceable and contested after the fact (Ch. 5) — *facts-gated, see §2.3* |
 
+Two further deterministic checks — `baseline-execution` and
+`starting-kit-execution` — *run* the bundle rather than read it. Because they
+require Docker and produce execution evidence, they are documented with the
+dynamic layer in §3.2.
+
 ### 2.3 Facts-gated checks: declare-then-verify
 
 Some checks require context the bundle cannot carry (the anticipated error rate of a top system; whether external data is permitted). These checks declare `requires_facts`, consume a `competition_facts.yaml` supplied with `--facts`, and report **SKIPPED with instructions for declaring the missing fact** whenever it is absent. Unknown fact keys are rejected rather than ignored, so a typo cannot silently disable a check. The recognized facts are `anticipated_error_rate`, `test_set_size`, `unit_of_generalization`, `external_data_allowed`, `prizes`, and `task_type`.
@@ -84,13 +89,32 @@ Five launch criteria can be certified only by a person. The validator surfaces t
 
 ## 3. Layer 2 — dynamic verification: the bundle is executed
 
-Static checks cannot establish that a scoring program *runs*. The runner layer (`runner/execution.py`, exposed through the MCP tools and used by the `create` pipeline's self-validation) stages the Codabench worker's sandbox layout and executes the bundle's programs. When a Docker daemon is available, execution is platform-faithful: programs run inside the bundle's declared `docker_image` (Codabench's default, `codalab/codalab-legacy:py37`, when none is declared), with the active program directory mounted at `/app/program` and the data and output trees at `/app/input` and `/app/output` — the worker's layout — and with **no dependency installation**, since the platform's worker never installs `requirements.txt`. A clean run under this engine is therefore evidence the bundle will execute on Codabench; a subsequent platform failure points at the server, not the bundle. Without Docker, a per-run conda environment with the bundle's `requirements.txt` installed serves as the fallback; it verifies the programs but is more permissive than the platform, and every result records which engine ran, with an explicit fidelity note on the fallback. Three execution stages exist:
+### 3.1 The runner
+
+Static checks cannot establish that a scoring program *runs*. The runner layer (`runner/execution.py`, exposed through the MCP tools and used by the `create` pipeline's self-validation) stages the Codabench worker's sandbox layout and executes the bundle's programs **inside Docker only**. Programs run inside the bundle's declared `docker_image` (the autocodabench CPU base image when none is declared), with the active program directory mounted at `/app/program` and the data and output trees at `/app/input` and `/app/output` — the worker's layout — and with **no dependency installation**, since the platform's worker never installs `requirements.txt`. The starting-kit notebook runs the same way (bundle mounted at `/app` as the working directory). A clean run is therefore evidence the bundle will execute on Codabench; a subsequent platform failure points at the server, not the bundle. A missing Docker daemon is a hard error, not a host-side fallback, so the verification never silently runs under more permissive conditions than the platform. Three execution stages exist:
 
 1. **Baseline execution** — the bundle's shipped baseline solution is run through the full ingestion-then-scoring pipeline; the run must complete and produce scores. This catches missing dependencies, API breaks, and scorer crashes that no static scan can see.
 2. **Starting-kit execution** — the starting-kit notebook is executed end to end, cell by cell, verifying that the artifact participants will run first actually runs.
 3. **External-submission scoring** — an arbitrary submission directory can be run through the same pipeline (`run_user_submission`), which is how the experiment harness scores real ground-truth submissions against a generated bundle (§5.3).
 
-In the agentic `create` pipeline these steps are mandatory self-validation: a bundle whose baseline or starting kit fails after the attempt budget is not zipped. For an imported bundle, the same functions are available through the library and the MCP tools.
+In the agentic `create` pipeline these steps are mandatory self-validation: a bundle whose baseline or starting kit fails after the attempt budget is not zipped.
+
+### 3.2 Execution as registered checks (the default `validate-bundle` experience)
+
+Stages 1 and 2 are also exposed as two registered **deterministic** checks, so that a user who *imports* a bundle — rather than generating it — gets the same execution evidence from a single `validate-bundle` command, not only as a side effect of `create`. Both run by default in the CLI (`--no-execute` opts out; the `validate_bundle_path(..., execute=False)` library call stays static by default so programmatic and keyless use is unaffected):
+
+| Check id | What is executed | Verdict semantics |
+|---|---|---|
+| `baseline-execution` | The baseline through ingestion+scoring, in the declared image | **Gates** (FAIL) if a baseline exists and the run produces no score — a defect in the scoring path is reproducible and contestable. SKIPPED (never a gate) when no Docker daemon is reachable; FINDING when no baseline is present. |
+| `starting-kit-execution` | The starting-kit notebook, cell by cell, in the declared image | Advisory (FINDING) on failure — onboarding, not the scoring path — so it never gates. |
+
+Each result carries structured evidence rendered under the report's **Execution** section: the image that ran and its architecture fit against the host (native versus QEMU emulation), the wall-clock duration, the scores produced, and the data the run consumed. This is the literal, per-run answer to "which run succeeded, on what data, in which image, for how long."
+
+**Reusing the build phase's runs.** Re-executing a bundle that `create` just self-validated would waste minutes, so each successful baseline/notebook run records a small cache next to the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash over the bundle's files. The execution checks reuse a cached result only when the hash still matches, and label it as reused from the build phase rather than re-running. Editing any bundle file changes the hash and forces a fresh run — so the common workflow of running plan+build, hand-editing the scoring program, then running `validate-bundle` separately re-executes rather than trusting a stale pass.
+
+### 3.3 External-submission scoring
+
+For an imported bundle, the runner functions remain available through the library and the MCP tools; `run_user_submission` runs an arbitrary submission through the same pipeline.
 
 ---
 
@@ -176,14 +200,14 @@ The 65 tests in `tests/` verify autocodabench itself. The suite is **keyless, ne
 | Test | What it establishes |
 |---|---|
 | `test_auto_prefers_docker_when_available` | `engine="auto"` selects Docker whenever a daemon is reachable |
-| `test_auto_falls_back_to_conda_with_note` | Without Docker, the fallback is taken and announced, never silent |
+| `test_auto_errors_without_docker` | Without a Docker daemon, execution is a hard error (no host-side fallback) |
 | `test_explicit_docker_errors_without_daemon` | `engine="docker"` on a Docker-less host fails with a clear error |
-| `test_explicit_conda_carries_fidelity_note` | An explicitly requested conda run carries the fidelity caveat |
+| `test_conda_engine_removed` | Requesting the removed conda engine returns an explanatory error |
 | `test_unknown_engine_rejected` | A misspelled engine name is an error, not a silent default |
 | `test_docker_run_mirrors_worker_contract` | The constructed `docker run` matches the worker: program dir mounted at `/app/program`, `/app/input` and `/app/output` mounts, `/app/program` working directory, `$program`/`$input`/`$output` resolution, and **no** `pip install` |
-| `test_conda_translate_maps_worker_paths_to_host` | The conda fallback rewrites both `$variable` and `/app/...` spellings to real host paths, longest-token-first (so `/app/input` and `/app/input_data` do not collide) |
+| `test_resolve_command_substitutes_worker_variables` | `$program`/`$input`/`$output` resolve to the worker's `/app/...` container paths; literal `/app/...` paths are left untouched |
 | `test_bundle_docker_image_reads_declared_image` | The engine uses the image `competition.yaml` declares |
-| `test_bundle_docker_image_defaults_to_platform_default` | An undeclared image resolves to Codabench's default (`codalab/codalab-legacy:py37`) |
+| `test_bundle_docker_image_defaults_to_autocodabench_base` | An undeclared image resolves to the autocodabench CPU base image |
 | `test_run_user_submission_requires_daemon_for_explicit_docker` | The engine error propagates through the public scoring entry point |
 
 ### 4.7 The CLI contract (`test_cli.py`, 6 tests)
@@ -211,7 +235,7 @@ CI runs the entire layer-3 suite across a Python 3.10–3.13 × Linux/macOS matr
 
 ### 5.3 The blinded end-to-end harness
 
-`experiments/bundle_creation_test/` runs the full authoring pipeline against real competitions with held-out ground truth, under blinding rules (the implementer never sees the ground truth or the proposal PDF; the submission adapter never sees expected scores) and a no-retry rule at the orchestrator level. Real ground-truth submissions are scored through the generated bundle and audited against expected results within declared tolerances. The protocol and results are documented in [`scientific-validation.md`](./scientific-validation.md) and the harness [README](../experiments/bundle_creation_test/README.md).
+`benchmark/autocodabench_create_bench/` runs the full authoring pipeline against real competitions with held-out ground truth, under blinding rules enforced as a code invariant of the SDK orchestrator (the implementer never sees the ground truth or the proposal PDF; the submission adapter never sees expected scores). Real ground-truth submissions are scored through the generated bundle and audited against expected results within declared tolerances by deterministic Python. The protocol and results are documented in [`scientific-validation.md`](./scientific-validation.md) and the benchmark [README](../benchmark/README.md).
 
 ### 5.4 What is deliberately *not* unit-tested
 
@@ -227,7 +251,7 @@ Live-SDK behavior (a real Claude session, a real judged check) is verified manua
 | Structural lint condition families inside the gate | 6 |
 | Dynamic execution stages | 3 (baseline, starting kit, external submission) |
 | Unit tests on the tool | 65 across 7 modules, keyless and sub-second |
-| Execution engines | 2 (docker — platform-faithful; conda — fallback with fidelity note) |
+| Execution engine | Docker only — programs run inside the bundle's `docker_image`, as the platform does (the conda fallback was removed) |
 | Seeded defect classes in the validator instrument | 12 (9 deterministic-tier, 3 judged-tier) |
 | CI matrix | Python 3.10–3.13 × Linux/macOS, plus offline demo and wheel checks |
 

@@ -29,6 +29,9 @@ dependencies = [
     "fastmcp==2.14.7",
     "PyYAML>=6.0",
     "python-dotenv>=1.0.0",
+    # Proposal ingestion (`create --pdf`). Pure-Python, light; imported
+    # lazily so keyless validator/replay paths never load it.
+    "pypdf>=4",
     # The agentic layer. Imported lazily — the deterministic validator and
     # replay demo work even where the bundled Claude Code runtime can't run.
     "claude-agent-sdk>=0.2.80",

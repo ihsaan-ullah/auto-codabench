@@ -27,10 +27,10 @@ src/autocodabench/
 │   └── bundle_io.py         # init/write/attach/validate/zip on dicts + files
 │
 ├── runner/                  # runtime counterpart of core
-│   └── execution.py         # ingestion/scoring execution; two engines:
-│                            #   docker (bundle's docker_image, as the
-│                            #   platform runs it) + conda fallback;
-│                            #   notebook execution; live-tee'd logs
+│   └── execution.py         # ingestion/scoring/notebook execution,
+│                            #   Docker-only: inside the bundle's
+│                            #   docker_image, as the platform runs it;
+│                            #   live-tee'd logs
 │
 ├── checks/                  # the validation framework
 │   ├── base.py              # Check / CheckResult / CheckContext / registry
@@ -116,9 +116,10 @@ The following table summarizes the principal design decisions, the principle eac
   `requirements.txt`; the local docker engine preserves that parity —
   the active program directory mounted at `/app/program`, data and output
   at `/app/input` and `/app/output` — which is the basis of its
-  platform-fidelity claim. The conda fallback installs requirements and
-  therefore only verifies the programs, never the image; it honors the same
-  worker path tokens by rewriting them to host paths.
+  platform-fidelity claim. Execution is Docker-only — there is no host-side
+  fallback, so a run never verifies under more permissive conditions than the
+  platform; a missing Docker daemon is a hard error. The starting-kit notebook
+  runs the same way, inside the image with the bundle mounted at `/app`.
 - **`fastmcp` is pinned to exactly 2.14.7.** Looser constraints allow pip's
   solver to select a release that breaks on HF Spaces (see the pyproject and
   Dockerfile comments).
@@ -148,7 +149,7 @@ flowchart TB
   subgraph offline["Offline layers (no LLM, no keys)"]
     checks["checks/ registry<br/>deterministic + attestations"]
     core["core/ bundle_io<br/>init/write/validate/zip"]
-    runner["runner/ execution<br/>scoring runs: docker (bundle image)<br/>or conda fallback"]
+    runner["runner/ execution<br/>scoring + notebook: docker only<br/>(bundle docker_image)"]
   end
 
   mcp["mcp/ stdio server (20 tools)<br/>every call → tool_calls/ + events.jsonl"]

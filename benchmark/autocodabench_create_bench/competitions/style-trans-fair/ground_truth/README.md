@@ -54,15 +54,15 @@ TMP=$(mktemp -d)
 git clone --depth 1 https://github.com/fnachalearn/style-trans-fair "$TMP"
 # the upstream repo root IS the bundle root — copy everything except .git
 rsync -a --exclude='.git' "$TMP/" \
-  experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle/
+  benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle/
 rm -rf "$TMP"
 ```
 
 After populating you should see ~7 MB across ~850 files. Verify with:
 
 ```bash
-du -sh experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle/
-ls experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle/
+du -sh benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle/
+ls benchmark/autocodabench_create_bench/competitions/style-trans-fair/ground_truth/bundle/
 # expect: competition.yaml, scoring_program/, ingestion_program/,
 #         reference_data/, sample_data/, images/, etc.
 ```

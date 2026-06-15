@@ -24,11 +24,13 @@ base image rather than discovering them per run:
    scikit-learn 0.19.1, which predates symbols a modern bundle uses (for
    example `balanced_accuracy_score`). Building on a current interpreter
    (Python 3.12 / 3.10) with the current stack removes this class of error.
-2. **Notebook-toolchain incompatibility.** The starting-kit runner invokes
-   `jupyter execute --inplace --allow-errors=false`. nbclient 0.7.x exposes
-   those as traitlets-style flags; nbclient ≥ 0.10 moved to an argparse CLI
-   that rejects `--allow-errors=false`. The requirements file pins the
-   compatible line so the notebook runs unattended.
+2. **Notebook-toolchain incompatibility.** The starting-kit runner executes
+   the notebook with `jupyter nbconvert --to notebook --execute --inplace`
+   (nbconvert stops nonzero on the first cell error and writes outputs back).
+   nbconvert 7.x drives nbclient under the hood; the requirements file pins
+   nbclient to the 0.7 line to keep that pairing on a known-good combination,
+   and each image's build runs a tiny notebook through this exact command so a
+   broken toolchain fails the build rather than surfacing at run time.
 
 Pre-installing this stack also means most bundles execute with **no per-run
 installation at all**, which conserves the operator's model budget — the build
@@ -72,6 +74,32 @@ The build agent writes the chosen image into each bundle's
 passing run — records the *final, working* image there. Until you have built
 and pushed these images, point `AUTOCODABENCH_DOCKER_IMAGE` at a stock image
 that ships the dependencies (for example `codalab/codalab-legacy:py312`).
+
+## Architecture and Apple silicon
+
+`create` and `validate-bundle` open with a Docker preflight that reports the
+image's CPU architecture against the host. An image whose architecture does not
+match the host still runs, but under QEMU emulation — correct yet slow.
+
+- The Codabench CPU base, `codalab/codalab-legacy:py312`, is **multi-arch**
+  (amd64 **and** arm64). Built locally on an Apple-silicon Mac, the
+  autocodabench CPU image is therefore native arm64 and runs without emulation.
+- The GPU base, `codalab/codalab-legacy:gpu310`, is **amd64-only** (and targets
+  CUDA), so on a Mac it builds and runs under emulation and cannot use a GPU.
+  Build it on a Linux/GPU host; for local CPU development, build only the CPU
+  image:
+
+  ```bash
+  docker build -f docker/autocodabench-cpu.Dockerfile \
+    -t autocodabench/autocodabench-base-cpu:latest docker/
+  ```
+
+For quick local testing without building anything, point the runner at the
+stock multi-arch CPU base (Docker resolves the host architecture for you):
+
+```bash
+export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312
+```
 
 ## Adjusting the stack
 

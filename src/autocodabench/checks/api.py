@@ -24,6 +24,7 @@ from .report import ValidationReport
 # Importing registers the checks.
 from . import attestations as _attestations  # noqa: F401
 from . import deterministic as _deterministic  # noqa: F401
+from . import execution as _execution  # noqa: F401
 from . import judged as _judged  # noqa: F401
 
 
@@ -43,6 +44,7 @@ async def validate_bundle_path_async(
     *,
     facts_path: str | Path | None = None,
     judged: bool = False,
+    execute: bool = False,
     backend=None,
 ) -> ValidationReport:
     path = Path(bundle).expanduser().resolve()
@@ -62,7 +64,7 @@ async def validate_bundle_path_async(
 
     try:
         facts = CompetitionFacts.discover(bundle_dir, facts_path)
-        ctx = CheckContext.from_bundle_dir(bundle_dir, facts=facts)
+        ctx = CheckContext.from_bundle_dir(bundle_dir, facts=facts, execute=execute)
         results = run_checks(ctx)
         if judged:
             if backend is None:
@@ -82,8 +84,10 @@ def validate_bundle_path(
     *,
     facts_path: str | Path | None = None,
     judged: bool = False,
+    execute: bool = False,
     backend=None,
 ) -> ValidationReport:
     """Sync wrapper. Inside a running event loop, call the async variant."""
     return asyncio.run(validate_bundle_path_async(
-        bundle, facts_path=facts_path, judged=judged, backend=backend))
+        bundle, facts_path=facts_path, judged=judged, execute=execute,
+        backend=backend))

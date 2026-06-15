@@ -188,42 +188,42 @@ class RunInfo:
         }
 
 
-def open_run(slug: str | None = None, *, branch_id: str | None = None, runtime_id: str | None = None) -> RunInfo:
-    """Create a new run directory and make it the active run.
+@dataclass
+class SessionInfo:
+    """A *session* groups the per-phase run directories of one
+    ``autocodabench create`` invocation under a single shared-prefix folder.
+    The phases (plan / build / validate) live in subdirectories so the output
+    reads as one labelled tree instead of three sibling runs."""
+    path: Path
+    session_id: str
+    branch_id: str
+    runtime_id: str
+    git_sha: str | None
 
-    If AUTOCODABENCH_RUN_DIR already points at an existing directory,
-    we adopt it instead of creating a new one (so child processes
-    inherit the parent's run).
-    """
-    global _current_run, _call_counter
 
-    inherited = os.environ.get("AUTOCODABENCH_RUN_DIR")
-    if inherited and Path(inherited).is_dir() and (Path(inherited) / "meta.json").exists():
-        with _state_lock:
-            _current_run = Path(inherited).resolve()
-        meta = json.loads((_current_run / "meta.json").read_text(encoding="utf-8"))
-        return RunInfo(
-            path=_current_run,
-            branch_id=meta.get("branch_id", ""),
-            runtime_id=meta.get("runtime_id", ""),
-            git_sha=meta.get("git_sha"),
-            slug=meta.get("slug"),
-        )
+def _session_readme(meta: dict) -> str:
+    return f"""\
+# Session `{meta.get('session_id', '?')}`
 
-    bid = _safe_slug(branch_id) if branch_id else _branch_id()
-    rid = _safe_slug(runtime_id) if runtime_id else _runtime_id()
-    name = f"{bid}_{rid}"
-    root = runs_root()
-    run_path = (root / name).resolve()
+One `autocodabench create` invocation. Each pipeline phase has its own
+subdirectory; together they share this session's prefix.
 
-    # If the same name collides (extremely unlikely with second precision),
-    # append a numeric suffix.
-    if run_path.exists():
-        i = 1
-        while (root / f"{name}-{i}").exists():
-            i += 1
-        run_path = (root / f"{name}-{i}").resolve()
+| phase | directory | holds |
+|-------|-----------|-------|
+| 1 · plan     | `phase1_plan/`     | `specs/implementation_plan.md` + agent trace |
+| 2 · build    | `phase2_build/`    | `bundles/<slug>/`, the zip, baseline/notebook run logs, execution cache |
+| 3 · validate | `phase3_validate/` | `validation_report.md` / `.json`, any re-run logs |
 
+`manifest.json` records each phase's status and key artifact paths.
+A standalone `autocodabench validate-bundle` run instead creates its own
+session containing only `phase3_validate/` (a different prefix), so the two
+provenances never collide.
+"""
+
+
+def _materialize_run(run_path: Path, *, bid: str, rid: str, slug: str | None,
+                     phase: str | None = None) -> dict:
+    """Create one run directory's standard internals and return its meta."""
     (run_path / "tool_calls").mkdir(parents=True, exist_ok=True)
     (run_path / "specs").mkdir(parents=True, exist_ok=True)
     (run_path / "specs_history").mkdir(parents=True, exist_ok=True)
@@ -240,31 +240,142 @@ def open_run(slug: str | None = None, *, branch_id: str | None = None, runtime_i
         "cwd": str(Path.cwd()),
         "pid": os.getpid(),
     }
+    if phase is not None:
+        meta["phase"] = phase
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     (run_path / "events.jsonl").touch()
     (run_path / "README.md").write_text(_run_readme(meta), encoding="utf-8")
+    return meta
 
-    # Maintain a LATEST symlink for easy postmortem access.
+
+def _update_latest_symlink(root: Path, points_to: str) -> None:
     latest = root / "LATEST"
     try:
         if latest.is_symlink() or latest.exists():
             latest.unlink()
-        os.symlink(run_path.name, latest, target_is_directory=True)
+        os.symlink(points_to, latest, target_is_directory=True)
     except OSError as e:
         # Filesystems that don't support symlinks just lose this nicety.
         logging.getLogger("autocodabench.runlog").warning("LATEST symlink not created: %s", e)
+
+
+def open_session(*, branch_id: str | None = None,
+                 runtime_id: str | None = None,
+                 kind: str = "create") -> SessionInfo:
+    """Create the shared-prefix directory that per-phase runs nest under.
+
+    Does NOT become the active run (it holds no tool calls of its own); call
+    ``open_run(phase=..., session_dir=session.path)`` for each phase. ``kind``
+    distinguishes a full ``create`` sequence from a standalone ``validate``.
+    """
+    bid = _safe_slug(branch_id) if branch_id else _branch_id()
+    rid = _safe_slug(runtime_id) if runtime_id else _runtime_id()
+    sid = f"{bid}_{rid}"
+    root = runs_root()
+    path = (root / sid).resolve()
+    if path.exists():
+        i = 1
+        while (root / f"{sid}-{i}").exists():
+            i += 1
+        sid = f"{sid}-{i}"
+        path = (root / sid).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "session_id": sid, "branch_id": bid, "runtime_id": rid,
+        "git_sha": _git_sha(), "started_at": _utc_now_iso(),
+        "kind": kind, "phases": {},
+    }
+    (path / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (path / "README.md").write_text(_session_readme(manifest), encoding="utf-8")
+    _update_latest_symlink(root, sid)
+    return SessionInfo(path=path, session_id=sid, branch_id=bid,
+                       runtime_id=rid, git_sha=manifest["git_sha"])
+
+
+def record_session_phase(session_dir: str | Path, phase: str, info: dict) -> None:
+    """Upsert one phase's outcome into a session's manifest.json. Best-effort."""
+    p = Path(session_dir) / "manifest.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {"phases": {}}
+    data.setdefault("phases", {})[phase] = info
+    try:
+        p.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def open_run(slug: str | None = None, *, branch_id: str | None = None,
+             runtime_id: str | None = None, phase: str | None = None,
+             session_dir: str | Path | None = None) -> RunInfo:
+    """Create a run directory and make it the active run.
+
+    Default (``phase=None``): the flat, single run dir under the runs root —
+    and if AUTOCODABENCH_RUN_DIR already points at a valid run, adopt it so a
+    child process joins its parent's session (the MCP-subprocess contract).
+
+    Phase mode (``phase`` given): create ``<session_dir>/<phase>/`` instead, a
+    fresh run dir nested under the shared session prefix. Adoption is bypassed
+    so each phase gets its own dir; the per-phase AUTOCODABENCH_RUN_DIR is what
+    the phase's MCP subprocess then adopts.
+    """
+    global _current_run, _call_counter
+
+    if phase is None:
+        inherited = os.environ.get("AUTOCODABENCH_RUN_DIR")
+        if inherited and Path(inherited).is_dir() and (Path(inherited) / "meta.json").exists():
+            with _state_lock:
+                _current_run = Path(inherited).resolve()
+            meta = json.loads((_current_run / "meta.json").read_text(encoding="utf-8"))
+            return RunInfo(
+                path=_current_run,
+                branch_id=meta.get("branch_id", ""),
+                runtime_id=meta.get("runtime_id", ""),
+                git_sha=meta.get("git_sha"),
+                slug=meta.get("slug"),
+            )
+
+    bid = _safe_slug(branch_id) if branch_id else _branch_id()
+    rid = _safe_slug(runtime_id) if runtime_id else _runtime_id()
+
+    if phase is not None:
+        base = (Path(session_dir).resolve() if session_dir
+                else (runs_root() / f"{bid}_{rid}").resolve())
+        base.mkdir(parents=True, exist_ok=True)
+        pname = _safe_slug(phase)
+        run_path = (base / pname).resolve()
+        if run_path.exists() and not (run_path / "meta.json").exists():
+            i = 1
+            while (base / f"{pname}-{i}").exists():
+                i += 1
+            run_path = (base / f"{pname}-{i}").resolve()
+        # LATEST points at the shared session dir (the intuitive landing spot).
+        latest_root, latest_target = base.parent, base.name
+    else:
+        name = f"{bid}_{rid}"
+        root = runs_root()
+        run_path = (root / name).resolve()
+        if run_path.exists():
+            i = 1
+            while (root / f"{name}-{i}").exists():
+                i += 1
+            run_path = (root / f"{name}-{i}").resolve()
+        latest_root, latest_target = root, run_path.name
+
+    meta = _materialize_run(run_path, bid=bid, rid=rid, slug=slug, phase=phase)
+    _update_latest_symlink(latest_root, latest_target)
 
     with _state_lock:
         _current_run = run_path
         _call_counter = 0
 
     os.environ["AUTOCODABENCH_RUN_DIR"] = str(run_path)
-
     _attach_stderr_handler(run_path / "mcp_stderr" / "autocodabench.log")
-
     log_event("run_opened", **meta)
 
-    return RunInfo(path=run_path, branch_id=bid, runtime_id=rid, git_sha=meta["git_sha"], slug=slug)
+    return RunInfo(path=run_path, branch_id=bid, runtime_id=rid,
+                   git_sha=meta["git_sha"], slug=slug)
 
 
 def current_run() -> Path | None:

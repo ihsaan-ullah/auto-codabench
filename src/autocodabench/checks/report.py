@@ -46,6 +46,11 @@ class ValidationReport:
             "results": [r.to_dict() for r in self.results],
         }
 
+    @property
+    def execution_results(self) -> list[CheckResult]:
+        """Results carrying execution evidence (a run was performed or reused)."""
+        return [r for r in self.results if r.details is not None]
+
     def to_markdown(self) -> str:
         lines: list[str] = []
         verdict = "✅ PASS" if self.ok else "❌ FAIL"
@@ -55,6 +60,23 @@ class ValidationReport:
         counts = self.counts
         lines.append("Results: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
         lines.append("")
+
+        # Execution summary — "what ran, on what data, from which phase, for how
+        # long, under which condition" — rendered up front when runs happened.
+        ex_rows = self.execution_results
+        if ex_rows:
+            lines.append("## Execution")
+            lines.append("_The bundle was run, not just inspected. Each row is a "
+                         "real ingestion+scoring or notebook run in the declared "
+                         "Docker image._")
+            lines.append("")
+            for r in ex_rows:
+                mark = {"pass": "✓", "fail": "✗", "finding": "⚠",
+                        "skipped": "•"}.get(r.status.value, "·")
+                lines.append(f"- {mark} **[{r.check_id}]** {r.message}")
+                for sub in _detail_lines(r.details):
+                    lines.append(f"    - {sub}")
+            lines.append("")
 
         def section(title: str, rows: list[CheckResult], note: str | None = None) -> None:
             if not rows:
@@ -80,6 +102,65 @@ class ValidationReport:
                 "Checks that need declared facts or were inapplicable.")
         section("Passed", self.by_status(Status.PASS))
         return "\n".join(lines)
+
+
+def _detail_lines(details: dict[str, Any] | None) -> list[str]:
+    """Render an execution check's structured evidence as a few bullet lines:
+    provenance (executed now vs reused), the image and arch fit, duration,
+    scores, and the data consumed."""
+    if not details:
+        return []
+    out: list[str] = []
+
+    src = details.get("source")
+    phase = details.get("phase")
+    if src == "reused":
+        when = f" (run at {details['ran_at']})" if details.get("ran_at") else ""
+        out.append(f"source: reused from the **{phase}** phase{when} — not re-run "
+                   "(bundle unchanged since)")
+    elif src == "executed":
+        out.append(f"source: executed now (in the **{phase or 'validate'}** phase)")
+
+    img = details.get("docker_image")
+    if img:
+        fit = ""
+        emulated = details.get("emulated")
+        host, iarch = details.get("host_arch"), details.get("image_arch")
+        if emulated is True:
+            fit = f" — ⚠ {iarch or '?'} under QEMU emulation on {host or '?'} (slow)"
+        elif emulated is False:
+            fit = f" — runs natively on {host or '?'}"
+        out.append(f"condition: image `{img}`{fit}")
+
+    dur = details.get("duration_s")
+    if isinstance(dur, (int, float)):
+        out.append(f"duration: {dur:.1f}s")
+
+    scores = details.get("scores")
+    if isinstance(scores, dict) and scores:
+        rendered = ", ".join(f"{k}={v}" for k, v in list(scores.items())[:6])
+        out.append(f"scores: {rendered}")
+    cells = details.get("cells_executed")
+    if isinstance(cells, int):
+        out.append(f"cells executed: {cells}")
+
+    data = details.get("data")
+    if isinstance(data, dict):
+        bits = []
+        ref = data.get("reference_data")
+        if ref:
+            bits.append(f"reference_data: {len(ref)} file(s)")
+        if data.get("input_data_present"):
+            bits.append("input_data ✓")
+        if data.get("public_data_present"):
+            bits.append("public_data ✓")
+        if bits:
+            out.append("data: " + ", ".join(bits))
+
+    logs = details.get("logs_dir")
+    if logs:
+        out.append(f"logs: `{logs}`")
+    return out
 
 
 def checklist_coverage() -> list[dict[str, str]]:

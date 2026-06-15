@@ -38,8 +38,8 @@ dates). The library is extended by appending entries to `DEFECTS`.
 
 Axis B measures how reliably a backbone authors a working competition.
 
-The instrument is the existing ground-truth harness
-(`experiments/bundle_creation_test/`), executed once per backbone per
+The instrument is the create-bench harness
+(`benchmark/autocodabench_create_bench/`), executed once per backbone per
 competition with its blinding rules unchanged. For each (backbone,
 competition, run) triple, the harness manifest already records every outcome
 column; the measures and their sources are summarized in the following
@@ -57,7 +57,7 @@ For each backbone, we report the success rate per stage over at least 3 runs
 across N competitions, the distributions of attempts to convergence, score
 deltas, and cost. The competition `style-trans-fair` is the first
 ground-truth competition; the protocol scales by adding further competitions
-under `experiments/bundle_creation_test/competitions/`.
+under `benchmark/autocodabench_create_bench/competitions/`.
 
 Two caveats apply to non-Claude backbones on axis B. First, the generic
 backend's plan phase cannot read PDF proposals and accepts text or markdown

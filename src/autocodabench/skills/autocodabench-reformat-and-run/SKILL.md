@@ -1,6 +1,6 @@
 ---
 name: autocodabench-reformat-and-run
-description: Adapt one external submission's code to match a previously-built bundle's interface AND the per-run conda env's installed libraries, then run it through the bundle's scoring pipeline. Iterates on runtime errors (missing packages, API breaks, wrapper-shape mismatches) and returns parsed scores + full logs. Used by the bundle-creation-test experiment harness AFTER `autocodabench-implement` has finished and the bundle is runtime-validated. Strictly blind to any expected_result.json or other ground-truth metadata — only sees the submission code and the bundle's public surface.
+description: Adapt one external submission's code to match a previously-built bundle's interface AND the libraries its Docker image ships, then run it through the bundle's scoring pipeline. Iterates on runtime errors (missing packages, API breaks, wrapper-shape mismatches) and returns parsed scores + full logs. Used by the bundle-creation-test experiment harness AFTER `autocodabench-implement` has finished and the bundle is runtime-validated. Strictly blind to any expected_result.json or other ground-truth metadata — only sees the submission code and the bundle's public surface.
 ---
 
 # AutoCodabench — Reformat & Run
@@ -12,7 +12,7 @@ You are given:
   its notebook executes cleanly),
 - a `submission_dir` containing one external submission's code (a
   ground-truth `sub_N/submission/` directory),
-- an `env_name` (the per-run conda env the implementer prepared),
+- an `env_name` (accepted for compatibility; ignored — execution is Docker-only),
 - an `out_dir` where you must write the adapted submission, logs, and
   parsed score JSON.
 
@@ -30,8 +30,9 @@ that's the orchestrator's job after you finish.
    - swap `from keras.preprocessing import X` → `from tensorflow.keras.preprocessing import X`,
    - wrap an old `predict(X)` shape into the bundle's expected
      `predict(X) → labels` shape,
-   - add a `requirements.txt` line and call
-     `autocodabench_install_env_extras` for a genuinely missing dep.
+   - adapt the submission to the libraries the bundle's `docker_image`
+     ships (execution is Docker-only; you cannot install packages at run
+     time, and the platform installs nothing).
 
    You MUST NOT:
    - swap the model class to a smaller one because GPU isn't available,
@@ -45,53 +46,37 @@ that's the orchestrator's job after you finish.
    Your inputs are the four arguments above. Any other file under
    the experiment run dir is off-limits.
 
-   **The harness exports safe single-thread defaults** for
-   BLAS/OMP/TF into every subprocess env (`OMP_NUM_THREADS=1`,
-   `TF_NUM_INTEROP_THREADS=1`, `TF_NUM_INTRAOP_THREADS=1`, +
-   sibling vars). Do NOT add `os.environ.setdefault("OMP_NUM_THREADS", "1")`
-   to the adapted submission code — by the time that line runs,
-   numpy has already pulled libomp in with the wrong thread count
-   and the deadlock is locked in. If you genuinely need a different
-   value (e.g. perf testing), pass `extra_env=` to
-   `autocodabench_run_user_submission`; that gets applied at process
-   start time, which is the only place it can work.
+   Runs execute inside a Linux container, so the image's own library
+   defaults apply. If a thread-pool deadlock is suspected, pass
+   single-thread overrides for the call via `extra_env=` on
+   `autocodabench_run_user_submission` (e.g.
+   `{"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}`); they are
+   applied as `-e` flags before the container's python starts. Do NOT
+   add `os.environ.setdefault(...)` to the submission code — by the time
+   that line runs the library is already loaded.
 
 3. **Bounded attempts.** `MAX_ATTEMPTS = 4`. Initial reformat counts
    as attempt 1; up to 3 retries on runtime errors. Per attempt:
    write to `<out_dir>/attempt_<K>/`. Each retry reads the prior
    attempt's stderr_tail + adapted code so you can refine the patch.
 
-4. **Probe the env, don't guess.** Use Bash patterns in your
-   `allowedTools`:
-   - `conda run --no-capture-output -n <env_name> pip list --format=freeze`
-     to learn what's installed,
-   - `conda run --no-capture-output -n <env_name> python -c "import X; print(X.__version__)"`
+4. **Probe the image, don't guess.** Scoring runs execute inside the
+   bundle's declared `docker_image` (Docker-only execution), so probe the
+   image — not any host environment. Read the image from the bundle's
+   `competition.yaml`, then use Bash patterns in your `allowedTools`:
+   - `docker run --rm <docker_image> pip list --format=freeze`
+     to learn what is installed,
+   - `docker run --rm <docker_image> python3 -c "import X; print(X.__version__)"`
      to confirm a specific package's version,
-   - `conda run --no-capture-output -n <env_name> python -c "from X import Y"`
+   - `docker run --rm <docker_image> python3 -c "from X import Y"`
      to test an import in isolation.
 
-   You do NOT have permission to `pip install` directly. Use the MCP
-   tool `autocodabench_install_env_extras` for that.
-
-   **Engine awareness.** The runner prefers the docker engine when
-   Docker is available: scoring runs execute inside the bundle's
-   declared `docker_image`, not the conda env — the run result's
-   `engine` field says which ran. When `engine` is `"docker"`, probe
-   the image instead of the env:
-   - `docker run --rm <docker_image> pip list --format=freeze`
-   - `docker run --rm <docker_image> python3 -c "import X; print(X.__version__)"`
-   and adapt the submission to what the image ships —
-   `autocodabench_install_env_extras` affects only the conda fallback
-   and cannot add packages to the image.
-
-   **Always pass the per-run env name** (the one the orchestrator handed
-   you, e.g. `acb-run-<run_id>`) — NEVER pass `env_name="base"`.
-   Installing into `base` pollutes the user's host environment and
-   doesn't help: the bundle's ingestion runs inside the per-run env,
-   not base. (One past run wasted an attempt on this — the inner agent
-   misdiagnosed a `CONDA_PREFIX`-clobbering bug as a missing-package
-   issue and installed TF into base. The runner-side fix `bash -lc →
-   bash -c` removed the clobbering; install into the cloned env now.)
+   Adapt the submission to what the image ships. You cannot install
+   packages at run time — the platform installs nothing, so a run-time
+   install would pass here and fail on Codabench. If a dependency is
+   genuinely missing and the submission cannot be adapted without it,
+   that is a bundle-level image-choice limitation to record, not
+   something to patch around.
 
 ---
 
@@ -100,7 +85,7 @@ that's the orchestrator's job after you finish.
 ```
 bundle_dir:       <abs path to runtime-validated bundle>
 submission_dir:   <abs path to ground-truth submission code>
-env_name:         <conda env name, e.g. "acb-run-...">
+env_name:         <accepted for compatibility; ignored — Docker-only>
 out_dir:          <abs path; write attempt_<K>/ + final.json under here>
 ```
 
@@ -120,13 +105,13 @@ each entry has shape:
 
 ## 2. Process
 
-### 2.1 Probe the env (once, on attempt 1 only)
+### 2.1 Probe the image (once, on attempt 1 only)
 
-Run a small set of `pip list` / `python -c "import X; print(X.__version__)"`
-commands to confirm what's installed. Save the summary to
-`<out_dir>/env_probe.txt` for forensics. Do NOT cache across runs —
-the env can grow between attempts because `install_env_extras` is
-additive.
+Read the bundle's `docker_image` from `competition.yaml`, then run a small
+set of `docker run --rm <docker_image> pip list` /
+`docker run --rm <docker_image> python3 -c "import X; print(X.__version__)"`
+commands to confirm what the image ships. Save the summary to
+`<out_dir>/env_probe.txt` for forensics.
 
 ### 2.2 Learn the bundle's interface
 
@@ -155,22 +140,18 @@ Create `<out_dir>/attempt_<K>/` and write:
 - the adapted code files (mirroring the bundle's baseline file
   layout — usually `model.py` + helpers),
 - a short `adapter_notes.md` listing every old→new API substitution
-  you made and why (one line each),
-- (optional) a per-submission `requirements.txt` if the submission
-  genuinely needs deps the env doesn't carry.
+  you made and why (one line each).
 
-If you needed extras, call:
-```
-autocodabench_install_env_extras(env_name=<env_name>, packages=[<pypi specs>])
-```
-and record the response in `adapter_notes.md`.
+Adapt to what the image already ships (§2.1). You cannot install
+packages at run time; if the submission genuinely cannot run against the
+image's libraries, record that limitation in `adapter_notes.md` and let
+the run fail honestly rather than patching around it.
 
 ### 2.5 Run via the bundle's pipeline
 
 ```
 res = autocodabench_run_user_submission(
     slug=<bundle slug>,
-    env_name=<env_name>,
     submission_dir="<out_dir>/attempt_<K>/",
     label="<sub_label>.attempt_<K>",
 )

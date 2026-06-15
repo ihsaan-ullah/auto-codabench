@@ -141,9 +141,9 @@ schema-perfect and still fail on its first real submission.
    occurs, and a parseable `scores.json` is produced whose keys cover
    the leaderboard columns.
 3. **Starting-kit oracle** (`run_starting_kit`): the participant-facing
-   notebook is executed top-to-bottom (`jupyter execute`,
-   `--allow-errors=false`); the run passes if and only if the exit code
-   is 0 and all code cells executed.
+   notebook is executed top-to-bottom (`jupyter nbconvert --to notebook
+   --execute --inplace`, which stops nonzero on the first cell error); the
+   run passes if and only if the exit code is 0 and all code cells executed.
 4. The generating agent receives the stderr and may retry, bounded at
    5 baseline attempts and 4 notebook attempts. Exhausting the budget
    is recorded as failure, and the agent is forbidden from weakening
@@ -253,7 +253,7 @@ its output format itself.
 
 ### 3.5 Ground-truth harness: score fidelity on real competitions **[piloted]**
 
-`experiments/bundle_creation_test/` is the instrument behind claim C4
+`benchmark/autocodabench_create_bench/` is the instrument behind claim C4
 and the E1 campaign.
 
 **Design.** For a competition with known ground truth (a proposal
@@ -451,7 +451,7 @@ authentication requirement.
 | Judged tier | `autocodabench validate-bundle <bundle> --judged [--backend ollama:<model>]` | Claude auth, or none with a local Ollama model |
 | Judge bench per backbone | `python experiments/backbone_bench/run_judge_bench.py --backend <spec> --runs 3` | per backbone |
 | Full live pipeline | `autocodabench create "<idea>" [--backend <spec>] --verbose` | per backbone |
-| Ground-truth harness | see `experiments/bundle_creation_test/README.md` | yes |
+| Ground-truth harness | see `benchmark/README.md` | yes |
 
 Authentication means a Claude subscription login or an
 `ANTHROPIC_API_KEY` (`autocodabench auth status` reports which is

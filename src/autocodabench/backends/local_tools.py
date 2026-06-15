@@ -71,6 +71,17 @@ def _read_file(path: str, max_chars: int = 40_000) -> dict[str, Any]:
     return {"path": str(p), "truncated": len(text) > max_chars, "content": text[:max_chars]}
 
 
+def _write_file(path: str, content: str) -> dict[str, Any]:
+    """Write text to a file (creating parent dirs). The generic-backend analog
+    of the Claude Write tool — needed by the reformat-and-run phase to author
+    an adapted submission. Bundle-authoring writes go through the dedicated
+    autocodabench_* tools, not this."""
+    p = Path(path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return {"path": str(p), "bytes_written": len(content.encode("utf-8"))}
+
+
 def _list_dir(path: str, max_entries: int = 200) -> dict[str, Any]:
     p = Path(path).expanduser()
     if not p.is_dir():
@@ -164,37 +175,42 @@ _TOOLS: list[LocalTool] = [
               "Produce <slug>.zip with competition.yaml at the zip root.",
               _obj({"slug": _S}, ["slug"]), bundle_io.zip_bundle),
     LocalTool("autocodabench_prepare_run_env",
-              "Clone the base conda env and install the bundle's requirements.txt files.",
+              "Ensure the bundle's docker_image is available locally (pull if needed) "
+              "before runs. Docker-only; returns the image as env_name.",
               _obj({"slug": _S, "force_recreate": _B}, ["slug"]), runner.prepare_run_env),
     LocalTool("autocodabench_install_env_extras",
-              "Install extra pip packages into the per-run env (after a ModuleNotFoundError).",
+              "Unavailable under Docker-only execution: add dependencies by setting the "
+              "bundle's docker_image to one that ships them, not by installing at run time.",
               _obj({"env_name": _S, "packages": {"type": "array", "items": _S}},
                    ["env_name", "packages"]), runner.install_env_extras),
     LocalTool("autocodabench_run_baseline_submission",
-              "Run the bundle's own baseline through its scoring pipeline in a sandbox "
-              "(engine: auto|docker|conda — docker runs inside the bundle's declared "
-              "docker_image, as Codabench does).",
+              "Run the bundle's own baseline through its scoring pipeline inside the "
+              "bundle's declared docker_image, exactly as Codabench does.",
               _obj({"slug": _S, "env_name": _S, "subdir": _S, "engine": _S},
-                   ["slug", "env_name"]),
+                   ["slug"]),
               runner.run_baseline_submission),
     LocalTool("autocodabench_run_user_submission",
               "Run an arbitrary submission directory through the bundle's scoring pipeline "
-              "(engine: auto|docker|conda — docker runs inside the bundle's declared "
-              "docker_image, as Codabench does).",
+              "inside the bundle's declared docker_image, exactly as Codabench does.",
               _obj({"slug": _S, "env_name": _S, "submission_dir": _S, "label": _S,
                     "engine": _S},
-                   ["slug", "env_name", "submission_dir", "label"]),
+                   ["slug", "submission_dir", "label"]),
               runner.run_user_submission),
     LocalTool("autocodabench_run_starting_kit",
-              "Execute the bundle's starting-kit notebook end-to-end in the per-run env.",
-              _obj({"slug": _S, "env_name": _S, "notebook_path": _S}, ["slug", "env_name"]),
+              "Execute the bundle's starting-kit notebook end-to-end inside the bundle's "
+              "docker_image (which ships the notebook toolchain).",
+              _obj({"slug": _S, "env_name": _S, "notebook_path": _S}, ["slug"]),
               runner.run_starting_kit),
     LocalTool("autocodabench_remove_run_env",
-              "Remove a per-run conda env (cleanup).",
+              "No-op under Docker-only execution (containers run --rm; images are shared).",
               _obj({"env_name": _S}, ["env_name"]), runner.remove_run_env),
     LocalTool("read_file",
               "Read a text file (UTF-8, content truncated past 40k chars).",
               _obj({"path": _S}, ["path"]), _read_file),
+    LocalTool("write_file",
+              "Write text to a file (creates parent dirs). Use for adapting a "
+              "submission; bundle files go through the autocodabench_* writers.",
+              _obj({"path": _S, "content": _S}, ["path", "content"]), _write_file),
     LocalTool("list_dir",
               "Recursively list a directory (up to 200 entries).",
               _obj({"path": _S}, ["path"]), _list_dir),
@@ -203,7 +219,8 @@ _TOOLS: list[LocalTool] = [
 REGISTRY: dict[str, LocalTool] = {t.name: t for t in _TOOLS}
 
 # Claude-style allowlist names -> local tool names.
-_ALIAS = {"Read": "read_file", "Glob": "list_dir", "Grep": "list_dir", "LS": "list_dir"}
+_ALIAS = {"Read": "read_file", "Write": "write_file",
+          "Glob": "list_dir", "Grep": "list_dir", "LS": "list_dir"}
 
 
 def select_tools(allowed: list[str] | None) -> list[LocalTool]:

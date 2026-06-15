@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-**autocodabench**: a pip-installable library for agentic authoring + pre-launch validation of Codabench competition bundles, built on the Claude Agent SDK. Target venue: JMLR MLOSS (see `docs/` and the design discussion on branch `jmlr-oss-direction`). The package lives in `src/autocodabench/`; a Chainlit web UI (`web/`, deployed as an HF Space via `Dockerfile`) consumes the library; `experiments/bundle_creation_test/` is the end-to-end test harness.
+**autocodabench**: a pip-installable library for agentic authoring + pre-launch validation of Codabench competition bundles, built on the Claude Agent SDK. Target venue: JMLR MLOSS (see `docs/` and the design discussion on branch `jmlr-oss-direction`). The package lives in `src/autocodabench/`; a Chainlit web UI (`web/`, deployed as an HF Space via `Dockerfile`) consumes the library; `benchmark/` holds the pure-SDK end-to-end benchmarks (create-bench is live; validate-bench is being ported from `experiments/backbone_bench/`).
 
 The root `README.md` doubles as the HF Spaces metadata file — its YAML header configures the Space; don't remove it.
 
@@ -23,14 +23,20 @@ autocodabench checks list                 # registered checks by tier, with cita
 autocodabench auth status [--no-probe]    # active path + masked creds; verifies the SDK can sign in (live turn) unless --no-probe
 autocodabench auth use <auto|subscription|api_key>   # choose; subscription hides any key from the SDK
 autocodabench validate-bundle <bundle> --judged      # adds LLM-judged advisory checks
-autocodabench create "<idea>" [--data D]  # agentic plan→build pipeline
+autocodabench create "<idea>" [--data D] [--pdf P]   # agentic plan→build pipeline (idea and/or a PDF proposal)
+autocodabench plan-competition "<idea>" [--data D]   # Phase 1 only → specs/implementation_plan.md
+autocodabench create-bundle <plan.md | --run-dir D>  # Phase 2 only → build a bundle from a plan
+
+# Any agentic command above accepts --backend: claude[:model] (default), ollama:<m>, openai:<m>, or URL#<m>.
 
 python -m autocodabench.core.bundle_io    # core smoke test (demo bundle in a tempdir)
 python -m autocodabench.mcp.server        # MCP stdio server (hangs on stdin — correct)
 python scripts/make_demo_fixture.py       # regenerate the shipped replay fixture
 
 cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h   # web UI (needs .env)
-./experiments/bundle_creation_test/setup.sh                      # symlink skills into .claude/
+
+# Benchmarks (pure-SDK; any backbone via --backend; needs Docker + a populated instrument):
+python benchmark/autocodabench_create_bench/run.py --competition style-trans-fair --backend claude
 ```
 
 ## Architecture
@@ -38,10 +44,10 @@ cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h   # web UI (needs 
 ### Package layers (`src/autocodabench/`)
 
 - `core/` — pure file I/O: bundle authoring (`bundle_io.py`), schema lint (`validate_bundle`), zip. No LLM, no network, no MCP. Unit-tested conventionally.
-- `runner/` — runtime counterpart: stages the Codabench sandbox and executes scoring/ingestion through two engines. **docker** (the platform-faithful path, default whenever a daemon is reachable): runs programs inside the bundle's declared `docker_image` exactly as the Codabench worker does — sandbox at `/app`, workdir `/app/program`, **no** requirements installation (the platform installs nothing). Default image is the autocodabench base image (`{AUTOCODABENCH_DOCKER_NAMESPACE}/autocodabench-base-cpu:latest`; GPU variant via `_DEFAULT_DOCKER_IMAGE_GPU`), overridable via `AUTOCODABENCH_DOCKER_IMAGE[_GPU]`; build/push from `docker/`. **conda** — **DEPRECATED, scheduled for removal** (`resolve_execution_engine` emits a `DeprecationWarning` whenever it is used): kept only as the Docker-less fallback (CI, HF Spaces) and the current notebook host; clones `acb-run-<short>`, installs per-program `requirements.txt` via uv/pip — more permissive than the platform, so results carry a fidelity note. One-shot functions; iteration is the agent's job. BLAS/OMP thread vars must be set in the subprocess env *before* Python starts (conda engine).
+- `runner/` — runtime counterpart: stages the Codabench sandbox and executes scoring/ingestion/notebook **exclusively through Docker** (the conda engine has been removed). Programs run inside the bundle's declared `docker_image` exactly as the Codabench worker does — sandbox at `/app`, workdir `/app/program`, **no** requirements installation (the platform installs nothing); the starting-kit notebook runs the same way (bundle mounted at `/app`, executed with the image's pinned `jupyter`/`nbconvert` toolchain). A missing Docker daemon is a hard error (`resolve_execution_engine`). Default image is the autocodabench base image (`{AUTOCODABENCH_DOCKER_NAMESPACE}/autocodabench-base-cpu:latest`; GPU variant `_DEFAULT_DOCKER_IMAGE_GPU`), overridable via `AUTOCODABENCH_DOCKER_IMAGE[_GPU]`; build from `docker/`. `prepare_run_env` only ensures the image is present locally (pull if needed); `install_env_extras` returns a "change docker_image instead" error; `remove_run_env` is a no-op (containers run `--rm`). A `docker_preflight` (image arch fit native-vs-QEMU + daemon status) is surfaced by `create`/`validate-bundle`. One-shot functions; iteration is the agent's job.
 - `checks/` — the validation framework. `Check` components registered in three tiers with different epistemic standing: **deterministic** (code computes PASS/FAIL — the only tier that gates), **judged** (LLM grades a rubric → advisory FINDINGs, never gates), **attestation** (human-only criteria, surfaced as unchecked boxes). Checks that need undeclarable context consume `competition_facts.yaml` (declare-then-verify); missing facts → SKIPPED with instructions, never a silent pass. Every check carries a citation (Pavão et al. chapter or Codabench schema).
-- `backends/` — the AgentBackend seam. `claude.py` (live, Claude Agent SDK; lazy import) and `replay.py` (re-executes a recorded run's `tool_calls/` against the real core — keyless, deterministic; powers `demo` and CI). Everything above the seam talks only to `backends.base.AgentTask/AgentRunResult`.
-- `agent/` — the plan→build pipeline: two isolated SDK sessions joined only by the locked `specs/implementation_plan.md`. Prompts come from the packaged skills (`skills/*/SKILL.md`, frontmatter stripped + per-surface runtime footer). Per-phase tool allowlists are the capability contract.
+- `backends/` — the AgentBackend seam. `claude.py` (live, Claude Agent SDK; lazy import), `openai_compat.py` (a stdlib tool-calling loop over `/chat/completions` for any OpenAI-compatible endpoint — Ollama/OpenAI/vLLM — given the same 20-tool surface + `tool_calls/` audit trail via `local_tools.py`), and `replay.py` (re-executes a recorded run's `tool_calls/` against the real core — keyless, deterministic; powers `demo` and CI). `resolve_backend(spec, model)` parses `claude[:model]` / `ollama:<m>` / `openai:<m>` / `URL#<m>`. Everything above the seam talks only to `backends.base.AgentTask/AgentRunResult`.
+- `agent/` — the plan→build pipeline: two isolated SDK sessions joined only by the locked `specs/implementation_plan.md`. Prompts come from the packaged skills (`skills/*/SKILL.md`, frontmatter stripped + per-surface runtime footer). Per-phase tool allowlists are the capability contract. `create_async` runs the full plan→build→validate pipeline (one session, per-phase subdirs); `plan_async`/`bundle_async` (CLI `plan-competition`/`create-bundle`) run either phase standalone; `reformat.py` is the reformat-and-run phase used by the benchmark.
 - `mcp/` — FastMCP stdio server exposing 20 tools over core+runner (`instance.py` holds the shared FastMCP object; `tools/` are thin logged wrappers). It is *one interface*, spawned as a subprocess by both the agent pipeline and the web UI.
 - `auth.py` — subscription-vs-API-key status, plus a persisted **auth preference** (`auto|subscription|api_key`, in `~/.config/autocodabench/auth.json`, env override `AUTOCODABENCH_AUTH`). The SDK gives `ANTHROPIC_API_KEY` precedence over a subscription login; rather than make users unset the key, `apply_auth_preference()` hides it from the process when the preference is `subscription`. Every live command prints an `INFO:` auth banner. Invariant: multi-user deployments MUST use an API key (Anthropic ToS); local dev should prefer subscription.
 - `run_log.py` — every MCP tool call is snapshotted to `<run>/tool_calls/NNNN_*.json` + `events.jsonl` via the `logged_tool` decorator. This audit trail is also the replay-fixture format — don't break that duality.
@@ -50,9 +56,9 @@ cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h   # web UI (needs 
 
 Nothing may assume a repo checkout. Artifact roots resolve: explicit arg → env var (`AUTOCODABENCH_HOME` / `AUTOCODABENCH_BUNDLES_ROOT` / `AUTOCODABENCH_RUNS_ROOT`) → `<cwd>/.autocodabench/`. The *active session* is `AUTOCODABENCH_RUN_DIR`, set by `open_run()` and inherited by child processes so fresh MCP subprocesses adopt their parent's run (`current_run()` adoption). `resolve_bundle_dir()` scopes bundles into the active run dir, which is what isolates concurrent web sessions.
 
-### Experiment harness (`experiments/bundle_creation_test/`)
+### Benchmarks (`benchmark/`)
 
-Seven-phase pipeline (plan → implement+self-validate → per-submission reformat+run → log-audit → aggregate → finalize → report); phases 2/3/4a are `claude -p` shell-outs against the packaged skills. **Data-leakage rules are load-bearing** (table in its README): the implementer never sees `ground_truth/**` or the proposal PDF; reformat-and-run never sees `expected_result.json`; `ground_truth/bundle/` is human-only. The harness predates the `src/` re-layout — `setup.sh` paths are updated, but expect references to old runs' layouts inside recorded artifacts.
+Pure-SDK orchestrators — no `claude -p` shell-outs, no ambient `.mcp.json`/`.claude` dependency — so the backbone is a measured variable and runs are reproducible on any machine (incl. offline GPU via `ollama:`/`openai:`/`URL#model`). `autocodabench_create_bench/run.py` drives plan→build→self-validate via `create_async(pdf=...)`, then runs the reformat-and-run phase per ground-truth submission and audits the produced score against `expected_result.json` deterministically (`bench/audit.py`). Reusable logic lives in the package (`autocodabench.bench`, `autocodabench.agent.reformat`); the runnable harness + instruments + contributed `results/` live under `benchmark/`. **Data-leakage isolation is a code invariant**, not prompt discipline: the build session only ever receives `input/**`; reformat-and-run only receives the bundle + a submission dir (never `expected_result.json`); the auditor reads the expected score but is plain Python. `experiments/backbone_bench/` is the not-yet-ported validate-bench.
 
 ## Conventions
 

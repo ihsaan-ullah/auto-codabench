@@ -14,27 +14,18 @@ Each phase is one ``AgentBackend.run()``; the agent acts only through the
 autocodabench MCP server (spawned as a stdio subprocess scoped to the run
 directory), so every authoring action lands in the run's ``tool_calls/``
 audit trail — which is also what makes finished runs replayable.
-
-Public API
-----------
-plan_async(idea, ...)          → PlanResult      # Phase 1 only
-bundle_async(run_dir|plan_path, ...) → BundleResult  # Phase 2 only
-create_async(idea, ...)        → CreateResult    # Phase 1 + 2 + validate
-
-Sync wrappers: plan_competition(), create_bundle(), create().
 """
 from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from ..backends.base import AgentBackend, AgentRunResult, AgentTask
-from ..run_log import open_run
+from ..run_log import SessionInfo, open_run, open_session, record_session_phase
 from . import prompts
 
 # Tool allowlists per phase — the narrow capability surface is the contract.
@@ -50,10 +41,6 @@ BUILD_TOOLS = [
     "Read", "Grep", "Glob",
 ]
 
-
-# ---------------------------------------------------------------------------
-# Result dataclasses
-# ---------------------------------------------------------------------------
 
 @dataclass
 class PlanResult:
@@ -87,13 +74,15 @@ class BundleResult:
 
 @dataclass
 class CreateResult:
-    """Result of the full plan→build pipeline (create command)."""
     ok: bool
-    run_dir: Path
+    run_dir: Path                       # the session dir (shared phase prefix)
     plan_path: Path | None = None
     bundle_dir: Path | None = None
     zip_path: Path | None = None
     validation: Any = None              # checks.ValidationReport | None
+    plan_dir: Path | None = None
+    build_dir: Path | None = None
+    validate_dir: Path | None = None
     plan: AgentRunResult | None = None
     build: AgentRunResult | None = None
     error: str | None = None
@@ -107,10 +96,6 @@ class CreateResult:
         )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _mcp_servers(run_dir: Path) -> dict[str, Any]:
     """The autocodabench MCP server as a stdio subprocess scoped to this run."""
     return {
@@ -121,6 +106,17 @@ def _mcp_servers(run_dir: Path) -> dict[str, Any]:
             "env": {**os.environ, "AUTOCODABENCH_RUN_DIR": str(run_dir)},
         },
     }
+
+
+def _find_bundle(run_dir: Path) -> tuple[Path | None, Path | None]:
+    bundles = run_dir / "bundles"
+    if not bundles.is_dir():
+        return None, None
+    for d in sorted(bundles.iterdir()):
+        if d.is_dir() and (d / "competition.yaml").is_file():
+            zip_path = bundles / f"{d.name}.zip"
+            return d, zip_path if zip_path.is_file() else None
+    return None, None
 
 
 def _update_run_slug(run_dir: Path, slug: str) -> None:
@@ -143,17 +139,6 @@ def _update_run_slug(run_dir: Path, slug: str) -> None:
         pass  # non-fatal — worst case the agent picks its own slug
 
 
-def _find_bundle(run_dir: Path) -> tuple[Path | None, Path | None]:
-    bundles = run_dir / "bundles"
-    if not bundles.is_dir():
-        return None, None
-    for d in sorted(bundles.iterdir()):
-        if d.is_dir() and (d / "competition.yaml").is_file():
-            zip_path = bundles / f"{d.name}.zip"
-            return d, zip_path if zip_path.is_file() else None
-    return None, None
-
-
 def _resolve_backend(backend: AgentBackend | None, model: str | None) -> AgentBackend:
     if backend is not None:
         return backend
@@ -161,9 +146,190 @@ def _resolve_backend(backend: AgentBackend | None, model: str | None) -> AgentBa
     return get_claude_backend(model=model) if model else get_claude_backend()
 
 
-# ---------------------------------------------------------------------------
-# Phase 1 — plan
-# ---------------------------------------------------------------------------
+async def create_async(
+    idea: str | None,
+    *,
+    data: str | None = None,
+    pdf: str | Path | None = None,
+    backend: AgentBackend | None = None,
+    model: str | None = None,
+    max_budget_usd: float | None = None,
+    on_text: Callable[[str], None] | None = None,
+    on_event: Callable[[dict], None] | None = None,
+    validate: bool = True,
+    session: SessionInfo | None = None,
+) -> CreateResult:
+    """Idea (or proposal text/PDF) → validated Codabench bundle, in two phases.
+
+    The competition source is either a one-line ``idea``, a ``pdf`` proposal
+    (extracted to text here so the planner is backbone-agnostic), or both
+    (the idea framing the PDF). At least one must be provided.
+
+    ``on_event`` (optional) receives structured progress dicts so a caller can
+    show step-by-step activity. The pipeline emits phase lifecycle events
+    (``{"kind": "phase", ...}`` / ``{"kind": "phase_done", ...}``) and threads
+    the same callback into each backend task, which adds tool-call and result
+    events. Without it the run is silent, as before.
+    """
+    if idea is None and pdf is None:
+        raise ValueError("create_async requires an idea or a pdf (or both)")
+    if backend is None:
+        from ..backends import get_claude_backend
+        backend = get_claude_backend(model=model) if model else get_claude_backend()
+
+    # Extract the PDF proposal to text up front so every backbone — including
+    # the OpenAI-compatible one whose file tool is UTF-8-only — receives the
+    # same proposal in the plan prompt, not a path only the SDK could read.
+    proposal_text = None
+    if pdf is not None:
+        from ..core.proposal import pdf_to_text
+        proposal_text = pdf_to_text(pdf)
+
+    def emit(event: dict) -> None:
+        if on_event is not None:
+            on_event(event)
+
+    session = session or open_session()
+    run_dir = session.path                      # the shared-prefix session dir
+    sid_kw = {"session_dir": run_dir, "branch_id": session.branch_id,
+              "runtime_id": session.runtime_id}
+    emit({"kind": "run_opened", "run_dir": str(run_dir)})
+
+    def _phase_env(phase_dir: Path):
+        return ({**os.environ, "AUTOCODABENCH_RUN_DIR": str(phase_dir)},
+                _mcp_servers(phase_dir))
+
+    # ---- Phase 1: plan -----------------------------------------------------
+    p1 = open_run(slug="create", phase="phase1_plan", **sid_kw)
+    env, mcp_servers = _phase_env(p1.path)
+    emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
+          "title": "Planning the competition design",
+          "detail": "drafting specs/implementation_plan.md (task, data, metric, "
+                    "baseline, rules, ethics, schedule)"})
+    plan_prompt = (
+        "Open the run with autocodabench_open_run, then produce the "
+        "implementation plan for this competition.\n"
+    )
+    if idea:
+        plan_prompt += f"\nCompetition idea / framing:\n\n{idea}\n"
+    if proposal_text is not None:
+        plan_prompt += (
+            "\nThe full competition proposal (extracted from the provided PDF) "
+            "follows between the markers. Treat it as the authoritative source; "
+            "infer the design sections from it.\n"
+            "\n===== BEGIN PROPOSAL =====\n"
+            f"{proposal_text}\n"
+            "===== END PROPOSAL =====\n"
+        )
+    if data:
+        plan_prompt += (
+            f"\nSample data for the competition is available at: {data}\n"
+            "Inspect it with the Read/Glob tools before fixing the data design."
+        )
+    plan_result = await backend.run(AgentTask(
+        prompt=plan_prompt,
+        system_prompt=prompts.plan_system_prompt(),
+        allowed_tools=PLAN_TOOLS,
+        mcp_servers=mcp_servers,
+        env=env,
+        model=model,
+        max_budget_usd=max_budget_usd,
+        trace_path=p1.path / "agent_trace" / "plan.jsonl",
+        on_text=on_text,
+        on_event=on_event,
+    ))
+    emit({"kind": "phase_done", "phase": "plan", "ok": plan_result.ok,
+          "num_turns": plan_result.num_turns,
+          "cost_usd": plan_result.total_cost_usd})
+    plan_path = p1.path / "specs" / "implementation_plan.md"
+    record_session_phase(run_dir, "phase1_plan", {
+        "dir": str(p1.path), "ok": bool(plan_result.ok and plan_path.is_file()),
+        "cost_usd": plan_result.total_cost_usd, "num_turns": plan_result.num_turns})
+    if not plan_result.ok or not plan_path.is_file():
+        return CreateResult(
+            ok=False, run_dir=run_dir, plan_dir=p1.path,
+            plan=plan_result,
+            error=plan_result.error or (
+                "plan phase finished without saving specs/implementation_plan.md"),
+        )
+
+    # ---- Phase 2: build (fresh session; only the plan carries over) --------
+    p2 = open_run(slug="create", phase="phase2_build", **sid_kw)
+    env, mcp_servers = _phase_env(p2.path)
+    emit({"kind": "phase", "phase": "build", "index": 2, "total": 3,
+          "title": "Building the bundle",
+          "detail": "writing competition.yaml, pages, scoring program, baseline "
+                    "solution, and data; then linting and zipping"})
+    build_result = await backend.run(AgentTask(
+        prompt=("The locked implementation plan is at "
+                f"{plan_path}. Read it and build the bundle now."),
+        system_prompt=prompts.build_system_prompt(),
+        allowed_tools=BUILD_TOOLS,
+        mcp_servers=mcp_servers,
+        env=env,
+        model=model,
+        max_budget_usd=max_budget_usd,
+        trace_path=p2.path / "agent_trace" / "build.jsonl",
+        on_text=on_text,
+        on_event=on_event,
+    ))
+    emit({"kind": "phase_done", "phase": "build", "ok": build_result.ok,
+          "num_turns": build_result.num_turns,
+          "cost_usd": build_result.total_cost_usd})
+    bundle_dir, zip_path = _find_bundle(p2.path)
+    record_session_phase(run_dir, "phase2_build", {
+        "dir": str(p2.path), "ok": bool(build_result.ok and bundle_dir is not None),
+        "bundle_dir": str(bundle_dir) if bundle_dir else None,
+        "zip_path": str(zip_path) if zip_path else None,
+        "cost_usd": build_result.total_cost_usd, "num_turns": build_result.num_turns})
+    if not build_result.ok or bundle_dir is None:
+        return CreateResult(
+            ok=False, run_dir=run_dir, plan_path=plan_path,
+            plan_dir=p1.path, build_dir=p2.path,
+            plan=plan_result, build=build_result,
+            error=build_result.error or "build phase produced no bundle",
+        )
+
+    # ---- Phase 3: validate through the check framework ---------------------
+    report = None
+    validate_dir = None
+    if validate:
+        p3 = open_run(slug="create", phase="phase3_validate", **sid_kw)
+        validate_dir = p3.path
+        emit({"kind": "phase", "phase": "validate", "index": 3, "total": 3,
+              "title": "Validating the bundle",
+              "detail": "running the registered pre-launch checks, including "
+                        "executing the bundle (reusing the build phase's runs)"})
+        from ..checks import validate_bundle_path_async
+        report = await validate_bundle_path_async(bundle_dir, execute=True)
+        try:
+            (p3.path / "validation_report.md").write_text(
+                report.to_markdown(), encoding="utf-8")
+            import json as _json
+            (p3.path / "validation_report.json").write_text(
+                _json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")
+        except OSError:
+            pass
+        record_session_phase(run_dir, "phase3_validate", {
+            "dir": str(p3.path), "ok": report.ok,
+            "counts": report.counts})
+        emit({"kind": "phase_done", "phase": "validate",
+              "ok": report.ok if report is not None else True})
+
+    return CreateResult(
+        ok=report.ok if report is not None else True,
+        run_dir=run_dir,
+        plan_path=plan_path,
+        bundle_dir=bundle_dir,
+        zip_path=zip_path,
+        validation=report,
+        plan_dir=p1.path,
+        build_dir=p2.path,
+        validate_dir=validate_dir,
+        plan=plan_result,
+        build=build_result,
+    )
+
 
 async def plan_async(
     idea: str,
@@ -321,112 +487,6 @@ async def bundle_async(
         build=build_result,
     )
 
-
-# ---------------------------------------------------------------------------
-# Full pipeline — plan + bundle + validate
-# ---------------------------------------------------------------------------
-
-async def create_async(
-    idea: str,
-    *,
-    data: str | None = None,
-    backend: AgentBackend | None = None,
-    model: str | None = None,
-    max_budget_usd: float | None = None,
-    on_text: Callable[[str], None] | None = None,
-    on_event: Callable[[dict], None] | None = None,
-    validate: bool = True,
-) -> CreateResult:
-    """Idea (or proposal text) → validated Codabench bundle, in two phases.
-
-    ``on_event`` (optional) receives structured progress dicts so a caller can
-    show step-by-step activity. The pipeline emits phase lifecycle events
-    (``{"kind": "phase", ...}`` / ``{"kind": "phase_done", ...}``) and threads
-    the same callback into each backend task, which adds tool-call and result
-    events. Without it the run is silent, as before.
-    """
-    backend = _resolve_backend(backend, model)
-
-    def emit(event: dict) -> None:
-        if on_event is not None:
-            on_event(event)
-
-    # ---- Phase 1: plan -----------------------------------------------------
-    emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
-          "title": "Planning the competition design",
-          "detail": "drafting specs/implementation_plan.md (task, data, metric, "
-                    "baseline, rules, ethics, schedule)"})
-    plan_r = await plan_async(
-        idea,
-        data=data,
-        backend=backend,
-        model=model,
-        max_budget_usd=max_budget_usd,
-        on_text=on_text,
-        on_event=on_event,
-    )
-    emit({"kind": "phase_done", "phase": "plan", "ok": plan_r.ok,
-          "num_turns": plan_r.plan.num_turns if plan_r.plan else 0,
-          "cost_usd": plan_r.total_cost_usd})
-
-    if not plan_r.ok:
-        return CreateResult(
-            ok=False, run_dir=plan_r.run_dir,
-            plan=plan_r.plan,
-            error=plan_r.error,
-        )
-
-    # ---- Phase 2: build (fresh session; only the plan carries over) --------
-    emit({"kind": "phase", "phase": "build", "index": 2, "total": 3,
-          "title": "Building the bundle",
-          "detail": "writing competition.yaml, pages, scoring program, baseline "
-                    "solution, and data; then linting and zipping"})
-    bundle_r = await bundle_async(
-        run_dir=plan_r.run_dir,
-        backend=backend,
-        model=model,
-        max_budget_usd=max_budget_usd,
-        validate=False,  # validation handled below so we can emit its phase event
-        on_text=on_text,
-        on_event=on_event,
-    )
-    emit({"kind": "phase_done", "phase": "build", "ok": bundle_r.ok,
-          "num_turns": bundle_r.build.num_turns if bundle_r.build else 0,
-          "cost_usd": bundle_r.total_cost_usd})
-
-    if not bundle_r.ok:
-        return CreateResult(
-            ok=False, run_dir=plan_r.run_dir, plan_path=plan_r.plan_path,
-            plan=plan_r.plan, build=bundle_r.build,
-            error=bundle_r.error,
-        )
-
-    # ---- Phase 3: validate -------------------------------------------------
-    report = None
-    if validate:
-        emit({"kind": "phase", "phase": "validate", "index": 3, "total": 3,
-              "title": "Validating the bundle",
-              "detail": "running the registered pre-launch checks"})
-        from ..checks import validate_bundle_path_async
-        report = await validate_bundle_path_async(bundle_r.bundle_dir)
-        emit({"kind": "phase_done", "phase": "validate",
-              "ok": report.ok if report is not None else True})
-
-    return CreateResult(
-        ok=report.ok if report is not None else True,
-        run_dir=plan_r.run_dir,
-        plan_path=plan_r.plan_path,
-        bundle_dir=bundle_r.bundle_dir,
-        zip_path=bundle_r.zip_path,
-        validation=report,
-        plan=plan_r.plan,
-        build=bundle_r.build,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Sync wrappers
-# ---------------------------------------------------------------------------
 
 def plan_competition(idea: str, **kwargs: Any) -> PlanResult:
     """Sync wrapper around :func:`plan_async`."""

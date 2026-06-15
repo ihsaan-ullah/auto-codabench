@@ -6,16 +6,77 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
-### Deprecated
-- **The conda execution engine.** Docker is the only platform-faithful path
-  (the Codabench worker runs programs inside the bundle's `docker_image` and
-  installs nothing), so the project is consolidating on it. The conda engine
-  still runs — it remains the fallback for hosts without a Docker daemon (CI,
-  HF Spaces) and the current starting-kit notebook host — but
-  `resolve_execution_engine` now emits a `DeprecationWarning` and an
-  explanatory note whenever conda is selected. Removal is planned once the base
-  images are validated in production and Docker-less environments have a
-  migration path (notebook execution moving into the container).
+### Added
+- **`create --pdf <proposal.pdf>`**: the plan phase can take a PDF proposal
+  directly. The PDF is extracted to text at the orchestrator
+  (`core.proposal.pdf_to_text`, via `pypdf`) so every backbone — including the
+  OpenAI-compatible one whose file tool is UTF-8-only — receives the same
+  proposal in the plan prompt. The `idea` argument is now optional when
+  `--pdf` is given.
+- **`benchmark/` — pure-SDK end-to-end benchmarks.** `autocodabench_create_bench`
+  measures PDF-proposal → working-bundle translation fidelity (plan
+  completeness, build, execution, and *score fidelity* — each ground-truth
+  submission scored through the generated bundle and compared to
+  `expected_result.json` within tolerance). It drives every phase through the
+  backend seam (`--backend claude|ollama:…|openai:…|URL#model`), so the
+  backbone is a measured variable and runs work offline (Ollama) and on GPU
+  workers. Reusable logic ships in the package: `autocodabench.bench`
+  (`results` canonical versioned record, `audit` deterministic score auditor,
+  `missing_info` aggregation, `report`) and `autocodabench.agent.reformat`
+  (the reformat-and-run SDK phase). Contributed results are append-only JSON
+  under `benchmark/<bench>/results/<backbone>/` (endpoint host only, never
+  keys).
+- A generic `write_file` tool (`Write` alias) in `backends.local_tools`, so
+  non-Claude backbones can author an adapted submission in the
+  reformat-and-run phase — preserving tool-surface parity.
+- **Execution-based validation**: `validate-bundle` (and `create`'s phase 3)
+  now *runs* the bundle, not just inspects it. Two new deterministic checks
+  execute the bundle inside its declared `docker_image` — `baseline-execution`
+  (runs the baseline through ingestion+scoring; gates on a missing score) and
+  `starting-kit-execution` (executes the notebook; advisory). The report gains
+  an **Execution** section recording which image ran, its host/arch fit
+  (native vs QEMU), wall-clock duration, the scores produced, and which data
+  was consumed. On by default in the CLI (`--no-execute` for static-only);
+  off by default in the `validate_bundle_path(..., execute=False)` library call
+  so programmatic/keyless use stays static and fast.
+- **Execution cache**: successful baseline/notebook runs are recorded next to
+  the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash of
+  the bundle. Phase 3 reuses the build phase's runs when the bundle is
+  unchanged and re-executes when any file changed (e.g. a hand-edit between a
+  separately-run build and a later `validate-bundle`), so a stale result can
+  never be trusted.
+- **Per-phase output folders**: a `create` run is now one session directory
+  (`<branch>_<timestamp>/`) with `phase1_plan/`, `phase2_build/`, and
+  `phase3_validate/` subdirectories and a session `manifest.json`; phase 3
+  writes `validation_report.md`/`.json`. A standalone `validate-bundle --execute`
+  gets its own session (different prefix) containing only `phase3_validate/`,
+  so generation and validation runs never share a prefix.
+
+### Removed
+- **The `claude -p` shell-out benchmark harness and interactive-MCP
+  scaffolding.** `experiments/bundle_creation_test/` (the skill-driven,
+  `claude --print`-based harness), the project `.mcp.json`, the `setup.sh`
+  `.claude/` skill-symlink installer, and the `claude mcp add` user
+  instructions are gone. Everything that drives an LLM now goes through the
+  hermetic SDK / OpenAI-compatible backends (which register the MCP tool
+  surface programmatically), so a benchmark run no longer depends on ambient
+  `claude` CLI state and is reproducible anywhere. The competition instruments
+  moved to `benchmark/autocodabench_create_bench/competitions/`; a
+  deterministic auditor (`bench.audit`) replaces the former
+  `submission-log-auditor` subagent.
+- **The conda execution engine.** Execution is now **Docker-only**: every run
+  — scoring, ingestion, and the starting-kit notebook — executes inside the
+  bundle's declared `docker_image`, exactly as the Codabench worker does. A
+  missing Docker daemon is a hard error rather than a host-side fallback. The
+  notebook, previously the last conda-hosted step, now runs in the image too
+  (bundle mounted at `/app` as the working directory, which also fixes a
+  relative-path/CWD failure mode), using the pinned `jupyter`/`nbclient`
+  toolchain baked into the autocodabench base images. `prepare_run_env` now
+  ensures the image is available locally (pulling if needed); `install_env_extras`
+  returns a "set docker_image to one that ships the dependency" error (run-time
+  installation would diverge from the platform, which installs nothing); and
+  `remove_run_env` is a no-op (containers run `--rm`). The `engine` argument
+  accepts `auto`/`docker`; `conda` returns an explanatory error.
 
 ### Changed
 - **`auth status` and `auth use` now verify by default.** Both realize the
@@ -34,6 +95,16 @@ All notable changes to autocodabench. Format follows
   bundle directory or zip, hand-written or generated.
 
 ### Fixed
+- **Starting-kit notebook execution used an invalid command.** The runner
+  invoked `jupyter execute --inplace --allow-errors=false`, but the pinned
+  `nbclient` 0.7.4 exposes an argparse `jupyter execute` CLI with no
+  `--inplace` and a bare `--allow-errors` flag (it rejects `=false`), so the
+  step failed before running a single cell. Switched to
+  `jupyter nbconvert --to notebook --execute --inplace
+  --ExecutePreprocessor.timeout=-1`, which executes every cell, stops nonzero
+  on the first error, and writes outputs back. Found by running the real Docker
+  path on Apple silicon; regression-covered by an in-image build-time smoke
+  test in both base Dockerfiles.
 - CLI `create` runs no longer tell the user to click a "workspace panel",
   "phase bar", or "Advance to Phase 2" button — UI elements that do not exist
   on the command line. The plan skill body was made surface-neutral and the
@@ -55,9 +126,10 @@ All notable changes to autocodabench. Format follows
   (from `codalab/codalab-legacy:py312`) and `autocodabench-base-gpu` (from
   `codalab/codalab-legacy:gpu310`), each pre-loaded with the essential
   scientific-Python stack and a pinned starting-kit notebook toolchain
-  (`nbclient` compatible with the runner's `jupyter execute --inplace
-  --allow-errors=false`, the source of a long version-resolution loop in
-  practice). `docker/build_and_push.sh` builds and publishes both under a
+  (`nbclient`/`nbconvert` compatible with the runner's notebook invocation, the
+  source of a long version-resolution loop in practice; each image's build now
+  *executes* a tiny notebook so a broken toolchain fails the build rather than
+  surfacing at run time). `docker/build_and_push.sh` builds and publishes both under a
   chosen namespace. These become the runner's default `docker_image`, resolved
   from `AUTOCODABENCH_DOCKER_IMAGE` / `AUTOCODABENCH_DOCKER_IMAGE_GPU` (or
   `AUTOCODABENCH_DOCKER_NAMESPACE`), replacing the legacy
@@ -70,6 +142,18 @@ All notable changes to autocodabench. Format follows
   it in the summary ("what Codabench will run"), and the build skill reports it
   in its closing block and as a `deviation` message — so the value uploaded to
   Codabench is the one already shown to work locally.
+- **Docker runtime preflight banner.** `create` and `validate-bundle` now open
+  with a Docker preflight: the `docker_image` that will run, its CPU
+  architecture versus the host (native vs. slow QEMU emulation), and whether the
+  Docker daemon is installed and running — surfacing Docker as the prerequisite
+  it is, and warning before an emulated run silently crawls. On Apple silicon it
+  recommends the multi-arch `codalab/codalab-legacy:py312` (resolves to arm64)
+  for local testing, and tells the user to build the base image locally when the
+  default is not yet available. Public helpers `docker_preflight`,
+  `docker_daemon_status`, and `image_arch_status` in `autocodabench.runner`
+  (best-effort; never raise). New doc `docs/post-create-pipeline.md` documents
+  every post-`create` step and how to exercise each in isolation (keyless where
+  possible).
 - **`create` is no longer an opaque idle.** It now prints its full effective
   configuration before spending anything (backend, auth path, model, the exact
   output directory, sample data, cost cap, output mode, and the three pipeline
@@ -132,20 +216,13 @@ All notable changes to autocodabench. Format follows
   the auth in use (API key / subscription / none).
 - **Docker execution engine** (platform-faithful runs):
   `run_baseline_submission` / `run_user_submission` (library + MCP tools)
-  accept `engine: auto|docker|conda`. The docker engine — selected by
-  default whenever a daemon is reachable — executes programs inside the
-  bundle's declared `docker_image` exactly as the Codabench worker does
-  (sandbox mounted at `/app`, working dir `/app/program`, legacy
-  `$input`/`$output`/`$program` substitution, **no** requirements
-  installation, platform default `codalab/codalab-legacy:py37`), so a
-  clean local run is evidence the bundle will execute on Codabench. The
-  conda engine remains the fallback (and the starting-kit notebook host),
-  and honors the same worker path tokens by rewriting `$program`/`$input`/
-  `$output` (and the `/app/...` spellings) to host sandbox paths; every
-  result records `engine` / `docker_image` / `engine_note`. Verified
-  end-to-end: the demo bundle's baseline scores identically (accuracy
-  0.825) under both engines, the docker run executing inside the real
-  `codalab/codalab-legacy:py39` image.
+  execute programs inside the bundle's declared `docker_image` exactly as the
+  Codabench worker does (sandbox mounted at `/app`, working dir `/app/program`,
+  legacy `$input`/`$output`/`$program` substitution, **no** requirements
+  installation), so a clean local run is evidence the bundle will execute on
+  Codabench; every result records `engine` / `docker_image`. (Superseded later
+  in this release: the conda fallback was removed — see *Removed* above — and
+  the default image is now the autocodabench base image.)
 - **Interactive auth preflight**: `create` and `validate-bundle --judged` now
   check for a usable Claude auth path *before* starting a live session. On an
   interactive terminal with no auth, the CLI walks you through it —
