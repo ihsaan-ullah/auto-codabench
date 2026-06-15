@@ -29,7 +29,7 @@ All notable changes to autocodabench. Format follows
 - A generic `write_file` tool (`Write` alias) in `backends.local_tools`, so
   non-Claude backbones can author an adapted submission in the
   reformat-and-run phase — preserving tool-surface parity.
-- **Execution-based validation**: `validate-bundle` (and `create`'s phase 3)
+- **Execution-based validation**: `validate` (and `create`'s phase 3)
   now *runs* the bundle, not just inspects it. Two new deterministic checks
   execute the bundle inside its declared `docker_image` — `baseline-execution`
   (runs the baseline through ingestion+scoring; gates on a missing score) and
@@ -43,12 +43,12 @@ All notable changes to autocodabench. Format follows
   the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash of
   the bundle. Phase 3 reuses the build phase's runs when the bundle is
   unchanged and re-executes when any file changed (e.g. a hand-edit between a
-  separately-run build and a later `validate-bundle`), so a stale result can
+  separately-run build and a later `validate`), so a stale result can
   never be trusted.
 - **Per-phase output folders**: a `create` run is now one session directory
   (`<branch>_<timestamp>/`) with `phase1_plan/`, `phase2_build/`, and
   `phase3_validate/` subdirectories and a session `manifest.json`; phase 3
-  writes `validation_report.md`/`.json`. A standalone `validate-bundle --execute`
+  writes `validation_report.md`/`.json`. A standalone `validate --execute`
   gets its own session (different prefix) containing only `phase3_validate/`,
   so generation and validation runs never share a prefix.
 
@@ -79,6 +79,14 @@ All notable changes to autocodabench. Format follows
   accepts `auto`/`docker`; `conda` returns an explanatory error.
 
 ### Changed
+- **CLI commands renamed for a clear three-phase pipeline.** The agentic
+  surface is now `plan` (Phase 1), `build` (Phase 2), `validate` (Phase 3),
+  and `create` (all three end to end), replacing the previous
+  `plan-competition` / `create-bundle` / `validate-bundle` names. This is a
+  **breaking change** — the old command names (and the `validate` alias for
+  `validate-bundle`) are removed, not kept as aliases. `autocodabench -h` now
+  groups the phases and explains how to run each one on its own or chain them
+  with `create`.
 - **`auth status` and `auth use` now verify by default.** Both realize the
   resolved auth preference and authenticate the agent SDK with it — one
   minimal live turn — rather than reporting only on-disk credential
@@ -89,8 +97,7 @@ All notable changes to autocodabench. Format follows
   are the codabench.org account login used only for publishing — never Claude
   or agent-SDK auth (Claude auth has no username/password concept).
 - The standalone `codabench-validate` console script is removed; bundle
-  validation is now the `autocodabench validate-bundle` subcommand (with
-  `validate` kept as a back-compatible alias). One console script,
+  validation is now the `autocodabench validate` subcommand. One console script,
   `autocodabench`, with subcommands; the validator still accepts any
   bundle directory or zip, hand-written or generated.
 
@@ -142,7 +149,7 @@ All notable changes to autocodabench. Format follows
   it in the summary ("what Codabench will run"), and the build skill reports it
   in its closing block and as a `deviation` message — so the value uploaded to
   Codabench is the one already shown to work locally.
-- **Docker runtime preflight banner.** `create` and `validate-bundle` now open
+- **Docker runtime preflight banner.** `create` and `validate` now open
   with a Docker preflight: the `docker_image` that will run, its CPU
   architecture versus the host (native vs. slow QEMU emulation), and whether the
   Docker daemon is installed and running — surfacing Docker as the prerequisite
@@ -223,7 +230,7 @@ All notable changes to autocodabench. Format follows
   Codabench; every result records `engine` / `docker_image`. (Superseded later
   in this release: the conda fallback was removed — see *Removed* above — and
   the default image is now the autocodabench base image.)
-- **Interactive auth preflight**: `create` and `validate-bundle --judged` now
+- **Interactive auth preflight**: `create` and `validate --judged` now
   check for a usable Claude auth path *before* starting a live session. On an
   interactive terminal with no auth, the CLI walks you through it —
   subscription login re-check, or paste an API key (input hidden, optional
@@ -232,7 +239,7 @@ All notable changes to autocodabench. Format follows
 - The CLI loads `<cwd>/.env` at startup (stdlib parser; never overrides
   real environment variables) — same convention as the web UI.
 - `docs/validate-bundle-walkthrough.md`: a line-by-line execution trace
-  of `autocodabench validate-bundle` for newcomers, with debugger
+  of `autocodabench validate` for newcomers, with debugger
   breakpoints per stage.
 - `docs/verification-catalog.md`: a complete inventory of all verification,
   in four layers — the 17 registered bundle checks (with the six lint
@@ -251,7 +258,7 @@ All notable changes to autocodabench. Format follows
   an in-process tool registry exposing the same `autocodabench_*`
   tool surface and writing the same `tool_calls/` audit trail as the
   MCP layer. `--backend claude[:model] | ollama:<model> |
-  openai:<model> | <url>#<model>` on `create` and `validate-bundle --judged`;
+  openai:<model> | <url>#<model>` on `create` and `validate --judged`;
   `resolve_backend()` in the library.
 - **Backbone benchmark** (`experiments/backbone_bench/`): axis A
   (validator/judge quality — the E3 seeded-defect instrument,

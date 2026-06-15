@@ -12,7 +12,7 @@ offline GPU worker, and the **backbone is a measured variable**.
 | benchmark | question | status |
 |-----------|----------|--------|
 | [`autocodabench_create_bench`](autocodabench_create_bench/) | Does a PDF proposal become a working bundle that reproduces the ground-truth scores? | **live** |
-| `autocodabench_validate_bench` | Does `validate-bundle` catch known, injected bundle defects? | Stage 2 (porting `experiments/backbone_bench`) |
+| `autocodabench_validate_bench` | Does `validate` catch known, injected bundle defects? | Stage 2 (porting `experiments/backbone_bench`) |
 
 ## Running create-bench
 

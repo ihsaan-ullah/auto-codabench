@@ -6,7 +6,7 @@ The catalog is organized into four layers, distinguished by *what is under test*
 
 | Layer | Object under test | Mechanism | Section |
 |---|---|---|---|
-| 1 | The organizer's bundle (static) | 17 registered checks (`autocodabench validate-bundle`) | §2 |
+| 1 | The organizer's bundle (static) | 17 registered checks (`autocodabench validate`) | §2 |
 | 2 | The organizer's bundle (dynamic) | Actual execution of the bundle's programs | §3 |
 | 3 | autocodabench itself | 65-test keyless unit suite (`tests/`) | §4 |
 | 4 | The system end to end | CI matrix, seeded-defect instrument, blinded experiment harness | §5 |
@@ -28,7 +28,7 @@ Every registered check carries a citation, either to the Codabench bundle schema
 
 ---
 
-## 2. Layer 1 — static checks on the bundle (`autocodabench validate-bundle`)
+## 2. Layer 1 — static checks on the bundle (`autocodabench validate`)
 
 ### 2.1 The structural gate: `bundle-schema`
 
@@ -99,9 +99,9 @@ Static checks cannot establish that a scoring program *runs*. The runner layer (
 
 In the agentic `create` pipeline these steps are mandatory self-validation: a bundle whose baseline or starting kit fails after the attempt budget is not zipped.
 
-### 3.2 Execution as registered checks (the default `validate-bundle` experience)
+### 3.2 Execution as registered checks (the default `validate` experience)
 
-Stages 1 and 2 are also exposed as two registered **deterministic** checks, so that a user who *imports* a bundle — rather than generating it — gets the same execution evidence from a single `validate-bundle` command, not only as a side effect of `create`. Both run by default in the CLI (`--no-execute` opts out; the `validate_bundle_path(..., execute=False)` library call stays static by default so programmatic and keyless use is unaffected):
+Stages 1 and 2 are also exposed as two registered **deterministic** checks, so that a user who *imports* a bundle — rather than generating it — gets the same execution evidence from a single `validate` command, not only as a side effect of `create`. Both run by default in the CLI (`--no-execute` opts out; the `validate_bundle_path(..., execute=False)` library call stays static by default so programmatic and keyless use is unaffected):
 
 | Check id | What is executed | Verdict semantics |
 |---|---|---|
@@ -110,7 +110,7 @@ Stages 1 and 2 are also exposed as two registered **deterministic** checks, so t
 
 Each result carries structured evidence rendered under the report's **Execution** section: the image that ran and its architecture fit against the host (native versus QEMU emulation), the wall-clock duration, the scores produced, and the data the run consumed. This is the literal, per-run answer to "which run succeeded, on what data, in which image, for how long."
 
-**Reusing the build phase's runs.** Re-executing a bundle that `create` just self-validated would waste minutes, so each successful baseline/notebook run records a small cache next to the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash over the bundle's files. The execution checks reuse a cached result only when the hash still matches, and label it as reused from the build phase rather than re-running. Editing any bundle file changes the hash and forces a fresh run — so the common workflow of running plan+build, hand-editing the scoring program, then running `validate-bundle` separately re-executes rather than trusting a stale pass.
+**Reusing the build phase's runs.** Re-executing a bundle that `create` just self-validated would waste minutes, so each successful baseline/notebook run records a small cache next to the bundle (`bundles/.acb_execution_cache.json`), keyed by a content hash over the bundle's files. The execution checks reuse a cached result only when the hash still matches, and label it as reused from the build phase rather than re-running. Editing any bundle file changes the hash and forces a fresh run — so the common workflow of running plan+build, hand-editing the scoring program, then running `validate` separately re-executes rather than trusting a stale pass.
 
 ### 3.3 External-submission scoring
 
@@ -216,8 +216,8 @@ The 65 tests in `tests/` verify autocodabench itself. The suite is **keyless, ne
 |---|---|
 | `test_checks_list` | The registry listing renders with all tiers |
 | `test_demo_then_validate` | The full keyless path — replay a recorded run, then validate the result — works end to end |
-| `test_validate_json_output` | `validate-bundle --json` emits a machine-readable report |
-| `test_validate_legacy_alias_still_works` | `validate` remains a back-compatible alias for `validate-bundle` |
+| `test_validate_json_output` | `validate --json` emits a machine-readable report |
+| `test_validate_legacy_alias_still_works` | `validate` remains a back-compatible alias for `validate` |
 | `test_validate_exit_code_on_gate_failure` | A gated failure exits non-zero (the contract scripts and CI depend on) |
 | `test_version` | `--version` reports the package version |
 
@@ -239,7 +239,7 @@ CI runs the entire layer-3 suite across a Python 3.10–3.13 × Linux/macOS matr
 
 ### 5.4 What is deliberately *not* unit-tested
 
-Live-SDK behavior (a real Claude session, a real judged check) is verified manually before releases (`autocodabench validate-bundle --judged`, `autocodabench auth status --probe`) and measured by the experiments, never placed in `tests/`. Live model calls are slow, billed, and non-deterministic; admitting them into the unit suite would trade a fast, trustworthy oracle for a flaky one. The same boundary applies to actual container execution: the docker engine's selection logic and command construction are unit-tested (§4.6), while pulling and running a real image is verified manually and by experiment runs on Docker-equipped hosts. The boundary is stated as an invariant in [`architecture.md`](./architecture.md).
+Live-SDK behavior (a real Claude session, a real judged check) is verified manually before releases (`autocodabench validate --judged`, `autocodabench auth status --probe`) and measured by the experiments, never placed in `tests/`. Live model calls are slow, billed, and non-deterministic; admitting them into the unit suite would trade a fast, trustworthy oracle for a flaky one. The same boundary applies to actual container execution: the docker engine's selection logic and command construction are unit-tested (§4.6), while pulling and running a real image is verified manually and by experiment runs on Docker-equipped hosts. The boundary is stated as an invariant in [`architecture.md`](./architecture.md).
 
 ---
 

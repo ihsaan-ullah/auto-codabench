@@ -146,7 +146,7 @@ def main() -> None:
     )
 
     facts_yaml = textwrap.dedent("""\
-        # Declared competition facts — consumed by `autocodabench validate-bundle`.
+        # Declared competition facts — consumed by `autocodabench validate`.
         # See autocodabench.checks.facts for the schema.
         anticipated_error_rate: 0.2   # toy demo — the 100/E check will flag the tiny test set
         unit_of_generalization: document

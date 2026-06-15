@@ -215,7 +215,7 @@ subdirectory; together they share this session's prefix.
 | 3 · validate | `phase3_validate/` | `validation_report.md` / `.json`, any re-run logs |
 
 `manifest.json` records each phase's status and key artifact paths.
-A standalone `autocodabench validate-bundle` run instead creates its own
+A standalone `autocodabench validate` run instead creates its own
 session containing only `phase3_validate/` (a different prefix), so the two
 provenances never collide.
 """

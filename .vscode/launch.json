@@ -7,7 +7,7 @@
       "request": "launch",
       "module": "autocodabench.cli.main",
       "args": [
-        "validate-bundle",
+        "validate",
         "${workspaceFolder}/experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle"
       ],
       "python": "/Users/ktgiahieu/miniconda3/bin/python",
@@ -20,7 +20,7 @@
       "request": "launch",
       "module": "autocodabench.cli.main",
       "args": [
-        "validate-bundle",
+        "validate",
         "${workspaceFolder}/experiments/bundle_creation_test/runs/style-trans-fair/102b9a8b_20260612_002233/bundles/style-trans-fair"
       ],
       "python": "/Users/ktgiahieu/miniconda3/bin/python",
@@ -33,7 +33,7 @@
       "request": "launch",
       "module": "autocodabench.cli.main",
       "args": [
-        "validate-bundle",
+        "validate",
         "${workspaceFolder}/experiments/bundle_creation_test/competitions/style-trans-fair/ground_truth/bundle",
         "--judged"
       ],
