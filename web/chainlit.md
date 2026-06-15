@@ -4,14 +4,14 @@ A scientific-friend chat assistant for designing **Codabench** competitions.
 
 ---
 
-## How this app works — 2 phases
+## How this app works — 3 phases
 
 The phase bar at the top of the page (next to **Readme**) is your navigation surface. Each phase has its own
 fresh agent and the chat history is dropped between phases.
 
 ### 1. 📝 Plan *(you start here)*
 
-You interact with the agent until converges on a one-page
+You interact with the agent until it converges on a one-page
 `implementation_plan.md` covering all 7 design sections of a Codabench
 competition (task, data, metric, baseline, rules, ethics, schedule).
 
@@ -35,10 +35,18 @@ workspace panel for download. A one-click **⬆️ Upload to Codabench**
 button also shows up in chat — clicking it publishes the competition
 and surfaces the Codabench URL.
 
-### Revise you plan: Back-navigation
+### 3. ✅ Validation *(coming soon)*
 
-Once you're in Phase 2, Phase 1 turns into a 🔒 lock. In order to revise the plan, click
-it to **revise the plan** and **discards the current bundle**.---
+A *fresh* agent runs the full autocodabench check framework against the
+bundle produced in Phase 2 and writes a `validation_report.md` summarising
+all pass/fail/advisory findings. You can download and inspect the bundle
+manually in the workspace panel while this phase is being wired up.
+
+### Revise your plan: Back-navigation
+
+Once you're in Phase 2, Phase 1 turns into a 🔒 lock. Click the 🔒 pill to **go back to Phase 1** and **discard the current bundle**.
+
+---
 
 ## Internal note — operator checklist
 
@@ -58,3 +66,5 @@ This is a **private alpha** for invited collaborators:
 - HF Spaces is CPU-only, ≤16 GB RAM. Curated package whitelist:
   `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`,
   `pillow`.
+- Phase 3 (Validation) agent is not yet wired — placeholder pill and
+  intro message are shown; full functionality coming in a follow-up.

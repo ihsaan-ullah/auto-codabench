@@ -181,3 +181,36 @@ def test_bundle_declared_image_from_zip(tmp_path):
 def test_bundle_declared_image_none_when_absent(tmp_path):
     (tmp_path / "competition.yaml").write_text("title: t\n")
     assert _bundle_declared_image(tmp_path) is None
+# ---------------------------------------------------------------------------
+# create-bundle argument guards (keyless: rejected before any live-auth probe
+# or backend call, so these run without credentials)
+# ---------------------------------------------------------------------------
+
+def test_create_bundle_requires_a_plan_source(capsys):
+    assert main(["create-bundle", "--yes"]) == 2
+    assert "plan file" in capsys.readouterr().err
+
+
+def test_create_bundle_rejects_both_sources(tmp_path, capsys):
+    plan = tmp_path / "plan.md"
+    plan.write_text("# plan", encoding="utf-8")
+    code = main(["create-bundle", str(plan), "--run-dir", str(tmp_path), "--yes"])
+    assert code == 2
+    assert "not both" in capsys.readouterr().err
+
+
+def test_create_bundle_missing_run_dir(tmp_path, capsys):
+    missing = tmp_path / "nope"
+    assert main(["create-bundle", "--run-dir", str(missing), "--yes"]) == 2
+    assert "run dir not found" in capsys.readouterr().err
+
+
+def test_create_bundle_run_dir_without_plan(tmp_path, capsys):
+    (tmp_path / "specs").mkdir()
+    assert main(["create-bundle", "--run-dir", str(tmp_path), "--yes"]) == 2
+    assert "implementation_plan.md" in capsys.readouterr().err
+
+
+def test_create_bundle_missing_plan_file(tmp_path, capsys):
+    assert main(["create-bundle", str(tmp_path / "absent.md"), "--yes"]) == 2
+    assert "plan file not found" in capsys.readouterr().err

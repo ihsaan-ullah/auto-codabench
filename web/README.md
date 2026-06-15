@@ -1,278 +1,196 @@
-# AutoCodabench Web Interface: Local Development and Hugging Face Spaces Deployment
+# AutoCodabench Web UI
 
-This document describes the Chainlit-based chat interface that exposes the
-two-phase AutoCodabench workflow (Plan, then Competition Creation), and the
-procedure for deploying it as a Hugging Face Space. It is intended for
-maintainers; end-user documentation is provided in
-[`../docs/INSTRUCTION_FOR_USER.md`](../docs/INSTRUCTION_FOR_USER.md), Section 6.
-
-```
-┌────────────────────────────────────────────────────────────────────┐
-│ Browser  ─►  Chainlit app  ─►  ClaudeSDKClient ─► api.anthropic.com │
-│                          │                                          │
-│                          ├─► spawns: autocodabench MCP server       │
-│                          │           alex-mcp MCP server            │
-│                          │                                          │
-│                          ├─► writes: .autocodabench/runs/web_…/     │
-│                          │           transcript.md / events.jsonl   │
-│                          │           specs/implementation_plan.md   │
-│                          │           bundles/<slug>/<slug>.zip      │
-│                          │                                          │
-│                          └─► serves: /public/sessions/<sid>/...     │
-│                                      (manifest.json + plan/         │
-│                                       transcript/cost HTML +        │
-│                                       bundle.zip + workspace.zip)   │
-│                                                                     │
-│ Browser  ─►  POST /ac/upload-codabench (workspace publish form)     │
-│              direct HTTP — no LLM involved                          │
-└────────────────────────────────────────────────────────────────────┘
-```
+A Chainlit chat interface for agentic authoring of Codabench competition bundles.
+Users describe a competition idea; the system plans, builds, validates, and
+optionally publishes a complete Codabench bundle — all through a conversational UI.
 
 ---
 
-## 0. Prerequisites
+## How it works
 
-- An **Anthropic API key**, which is distinct from a Claude Max or Claude Pro
-  subscription (see https://console.anthropic.com, under API Keys). A balance
-  of approximately $20 is sufficient to cover trial usage. The web interface
-  is restricted to API-key authentication: a hosted multi-user surface must
-  not route requests through an individual subscription, as required by the
-  Anthropic terms of service (see `docs/INSTRUCTION_FOR_USER.md`, Section 2).
-  For local single-user smoke tests, an individual subscription login is also
-  acceptable.
-- A **Hugging Face account** (free tier is sufficient).
-- A Python environment, version 3.10 or later, with the package and web
-  dependencies installed. From the repository root:
-  ```bash
-  pip install -e .
-  pip install "git+https://github.com/drAbreu/alex-mcp.git@v4.8.2"
-  pip install -r web/requirements.txt
-  ```
+The UI runs a **3-phase pipeline** backed by the Claude Agent SDK. Each phase
+is an isolated agent session; the only thing that carries forward between phases
+is the locked artifact on disk.
+
+```
+Phase 1 — Plan               Phase 2 — Competition Creation     Phase 3 — Validation
+─────────────────            ──────────────────────────────      ──────────────────────
+User + agent design          Fresh agent reads the plan and      Agent runs the full
+the competition in           writes a complete Codabench         check framework and
+conversation.                bundle (competition.yaml,           produces a
+                             scoring_program/, solution/,        validation_report.md.
+Artifact produced:           pages/), then validates             (Placeholder in v1)
+specs/implementation_        and zips it.
+plan.md
+                             Artifact produced: bundle.zip
+```
+
+Phase transitions are driven by the **phase pills** in the header bar. The user
+clicks a pill to advance or revert; the UI disconnects the old SDK client and
+builds a fresh one with the new phase's system prompt and tool allowlist.
 
 ---
 
-## 1. Running locally (smoke test)
-
-Create a `.env` file at the **repository root**; Chainlit loads it
-automatically:
+## Running locally
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-…
-SHARED_PASSWORD=…                  # any 16-character random string
-CHAINLIT_AUTH_SECRET=…             # run `chainlit create-secret` once
-OPENALEX_MAILTO=you@example.com
-AUTOCODABENCH_DEFAULT_MODEL=claude-sonnet-4-6
-MAX_USD_PER_SESSION=5.0
+# From the repo root:
+pip install -e .
+pip install -r web/requirements.txt
+pip install 'git+https://github.com/drAbreu/alex-mcp.git@v4.8.2'   # not on PyPI
 
-# Optional — fallback for CLI uploads via autocodabench_upload_bundle.
-# The web UI's workspace form takes credentials from the user directly
-# and does NOT need these to be set.
-CODABENCH_USERNAME=ihsanchalearn
-CODABENCH_PASSWORD=…
-```
+cp .env.example .env
+# Edit .env — at minimum set SHARED_PASSWORD and ANTHROPIC_API_KEY (or log in
+# with `claude /login` to use your Claude subscription instead of an API key).
 
-Launch from inside `web/`, so that Chainlit finds `chainlit.md` and
-`.chainlit/config.toml`; the repository-root `.env` is still loaded
-automatically:
-
-```bash
 cd web
 chainlit run app.py --host 127.0.0.1 --port 8500 -h
 ```
 
-Open http://localhost:8500 and sign in with any username together with the
-`SHARED_PASSWORD`.
-
-### Smoke-test checklist
-
-1. Confirm that the greeting appears with the session ID, the model name, and
-   `budget $5.00`.
-2. Confirm that the phase pill bar at the top shows the Plan pill (item 1,
-   active, rendered white) and the Competition Creation pill (item 2, grayed
-   out and marked locked).
-3. Send the message "design a competition on detecting AI-generated text".
-   Claude opens a run directory (visible under
-   `.autocodabench/runs/web_*_<sid>/`) and begins asking one to two scoping
-   questions.
-4. After the agent saves `specs/implementation_plan.md`, confirm that the
-   workspace panel on the right shows the rendered plan and that the Phase 2
-   pill turns blue with an advance arrow.
-5. Click the advance arrow and confirm the transition. A fresh agent starts
-   Phase 2 and writes the bundle (tool chips such as `init_bundle` and
-   `write_competition_yaml` appear). When the phase completes, the workspace
-   footer shows the competition bundle (`.zip`) as a working download link
-   alongside `workspace.zip`.
-6. Confirm that the per-turn footer shows
-   `turn ≈ $X · session $Y / $5.00 · ctx Z% (N tok)`.
-7. Click the locked Plan pill and confirm the transition. The bundle is
-   deleted and the Phase 1 chat resumes for revisions.
-8. Optionally, expand the **Publish to Codabench** form in the workspace
-   footer, enter a username and password, and click Upload. The status shows
-   "uploading...", after which the competition URL appears inline (30 to 90
-   seconds).
-
-Press Ctrl-C to stop the local server.
+Open http://127.0.0.1:8500, enter your `SHARED_PASSWORD`, and start chatting.
 
 ---
 
-## 2. Deploying to Hugging Face Spaces
+## Environment variables
 
-### 2.1 Create a private Space
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | For multi-user | — | API key. Local dev can use subscription login instead. |
+| `SHARED_PASSWORD` | Yes | — | Gates access to the UI (single shared password). |
+| `OPENALEX_MAILTO` | Yes | — | Email for OpenAlex polite-pool (alex-mcp). |
+| `CODABENCH_USERNAME` | For upload | — | Codabench account (can also be entered in the UI form). |
+| `CODABENCH_PASSWORD` | For upload | — | Codabench password (can also be entered in the UI form). |
+| `AUTOCODABENCH_DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Claude model to use. |
+| `MAX_USD_PER_SESSION` | No | `5.0` | Hard cost cap per session (USD). |
+| `AUTOCODABENCH_CONTEXT_WINDOW` | No | `200000` | Token denominator for context-% display. |
+| `HF_TOKEN` | For HF Spaces | — | Write-scoped HF token. Enables run upload to HF Dataset. |
+| `AUTOCODABENCH_RUNS_REPO` | No | `ktgiahieu/autocodabench-runs` | HF Dataset repo for run uploads. |
 
-1. Log in to https://huggingface.co.
-2. Click **+ New → Space**.
-3. Configure the settings as follows:
-   - **Owner**: your user or organization.
-   - **Space name**: for example, `autocodabench-alpha`.
-   - **License**: `mit`.
-   - **SDK**: **Docker** (Chainlit has no first-class template).
-   - **Hardware**: `CPU basic — 2 vCPU · 16 GB RAM · free` is sufficient.
-   - **Visibility**: **Private**.
-4. Click **Create Space**.
+---
 
-### 2.2 Add repository secrets
+## File structure
 
-Navigate to Settings → Variables and secrets → **New secret**. Use the
-Secrets table, not the Variables table, because Variables are public:
-
-| Secret name | Required | Value |
-|-------------|----------|-------|
-| `ANTHROPIC_API_KEY` | yes | `sk-ant-…` from console.anthropic.com |
-| `SHARED_PASSWORD` | yes | a 16-character random string; gates the UI |
-| `CHAINLIT_AUTH_SECRET` | yes | output of `chainlit create-secret` |
-| `OPENALEX_MAILTO` | yes | any working email address |
-| `HF_TOKEN` | optional | a token with `write` scope, used for the per-session HF Dataset upload (`autocodabench-runs`). If omitted, uploads silently become no-ops. |
-| `CODABENCH_USERNAME` | optional | fallback for the CLI MCP upload tool. The web UI publish form takes credentials from the user directly. |
-| `CODABENCH_PASSWORD` | optional | as above; fallback only |
-
-Optional Variables (visible in the Space settings, not secrets):
-
-| Variable | Default |
-|----------|---------|
-| `AUTOCODABENCH_DEFAULT_MODEL` | `claude-sonnet-4-6` |
-| `MAX_USD_PER_SESSION` | `5.0` |
-
-### 2.3 Push the code
-
-The `Dockerfile` at the repository root is the source of truth for the build.
-There are two push options.
-
-**Option A — git push (recommended)**, so that future updates require only a
-single `git push`:
-
-```bash
-# from repo root, on the try-web-ui branch
-git remote add hf https://huggingface.co/spaces/<your-user>/autocodabench-alpha
-git push hf try-web-ui:main
+```
+web/
+├── app.py               # Chainlit entry point — hooks only, no business logic
+├── config.py            # All constants: phases, tool allowlists, env var reads
+├── session_manager.py   # SessionManager — chat start/message/end lifecycle
+├── phase_manager.py     # PhaseManager — advance/revert, phase bar, bundle offer
+├── streaming.py         # Shared agent response streaming loop (used by both
+│                        # on_message and phase kickoffs)
+├── artifacts.py         # Transcript, CostLog, PublicArtifacts, PhaseState
+├── skills.py            # SKILL.md loader (strips frontmatter, returns body)
+├── upload_route.py      # POST /ac/upload-codabench FastAPI endpoint
+├── hf_persist.py        # HF Dataset upload after each turn
+├── phases/
+│   ├── plan.py          # Plan class — Phase 1 system prompt + revisit message
+│   ├── bundle.py        # Bundle class — Phase 2 system prompt + kickoff
+│   └── validate.py      # Validate class — Phase 3 (placeholder for v1)
+├── public/
+│   ├── login.css        # All custom CSS (login form, phase pills, workspace panel)
+│   ├── chat.js          # All custom JS (phase pills, workspace panel, init lock)
+│   └── sessions/        # Per-session HTML/JSON files served to the workspace panel
+├── .chainlit/
+│   ├── config.toml      # Chainlit configuration (cot, file upload, custom JS/CSS)
+│   └── translations/    # UI string translations (en-US.json has the button labels)
+└── chainlit.md          # Content shown in the README modal (📖 README button)
 ```
 
-You will be prompted for an HF write token; create one at
-https://huggingface.co/settings/tokens with the `write` scope.
+---
 
-**Option B — web upload.** Drag and drop the repository into the Space's
-"Files" tab.
+## Workspace panel
 
-### 2.4 Monitor the build
+The right-side panel is injected by `chat.js` and refreshes every 3.5 s by
+polling `/public/sessions/<sid>/manifest.json`. After every assistant turn,
+`PublicArtifacts.write()` renders:
 
-The "Logs" tab streams the build output. The first build takes approximately
-five minutes (pip install); subsequent builds take approximately thirty
-seconds when the cache is hit. When the log reports
-`Your app is available at <URL>`, open the URL and sign in.
+- **📝 implementation_plan.md** — the living plan document (Phase 1)
+- **📄 transcript.md** — full conversation with tool calls as collapsibles
+- **💰 cost.jsonl** — per-turn cost log
+- **📦 bundle.zip** — the built bundle (Phase 2+), downloadable
+- **📦 workspace.zip** — everything above as one archive
 
-### 2.5 Invite collaborators
-
-Navigate to Settings → **Members → Add member** and enter the collaborators'
-HF usernames; the Read role is sufficient. Collaborators open the URL and
-sign in with the `SHARED_PASSWORD`.
+The **Publish to Codabench** form in the panel footer POSTs to
+`/ac/upload-codabench` (handled by `upload_route.py`) using credentials
+typed by the user — credentials never touch the LLM.
 
 ---
 
-## 3. Operational notes
+## Phase pills
 
-### Phase model
+The phase pills live in the Chainlit header (injected by `chat.js`). They poll
+`/public/sessions/<sid>/phase_state.json` every 2 s. Clicking a pill:
 
-Each web session has its own:
-- **Run directory** at `.autocodabench/runs/web_<user>_<runtime>_<sid>/`
-  (anchored at the repository root via `AUTOCODABENCH_HOME`; the operator may
-  override this).
-- **MCP subprocess** with the `AUTOCODABENCH_RUN_DIR` environment variable
-  set to that run directory. Bundles are written to `<run>/bundles/<slug>/`.
-- **Public session directory** at `web/public/sessions/<sid>/` containing
-  `plan.html`, `transcript.html`, `cost.html`, `bundle.zip`,
-  `workspace.zip`, and `manifest.json` together with `phase_state.json`,
-  which are polled by chat.js.
+- **Active pill** — flashes the README button (no action, already here)
+- **Locked pill** — confirm dialog → triggers `AC_REVERT::<phase>` action
+- **Pending pill with ▶** — confirm dialog → triggers `AC_ADVANCE::<phase>` action
 
-On every phase transition (between Plan and Competition Creation), the SDK
-client is disconnected and a fresh client is spawned with the new phase's
-system prompt and tool allowlist; the chat history is dropped entirely.
-
-### Cold start
-
-Hugging Face Spaces puts a free-tier Space to sleep after approximately 48
-hours without traffic. The first request wakes the container, which takes
-approximately 30 seconds.
-
-### Data locations
-
-- **Inside the container**: `.autocodabench/runs/web_*` contains chat
-  transcripts, the plan, the bundle, the cost log, and MCP tool snapshots.
-- **HF Dataset upload**: if `HF_TOKEN` is set, the run directory is uploaded
-  (subject to a text-only allowlist) to a private dataset
-  (`autocodabench-runs` by default; override with
-  `AUTOCODABENCH_RUNS_REPO`). This upload is the only durable record, because
-  the container filesystem is ephemeral.
-
-### Cost monitoring
-
-- **Anthropic**: https://console.anthropic.com/usage updates every few
-  minutes.
-- **HF Spaces** (free tier): nothing requires monitoring.
-- **Codabench**: each successful upload via the form creates a competition
-  under whichever username the user entered. Track these at
-  https://www.codabench.org/profiles/me/ once signed in.
-
-### Decommissioning the alpha
-
-1. In the Anthropic console, navigate to API keys and revoke the key (or
-   unset the corresponding HF secret).
-2. In the HF Space, navigate to Settings and select Delete this Space.
-3. Locally, run `git branch -D try-web-ui` after merging any work you intend
-   to keep.
+The actual Chainlit action buttons are hidden in a silent chat message and
+click-simulated by JS, keeping the Chainlit action callback system intact
+while allowing the custom pill UI.
 
 ---
 
-## 4. Troubleshooting
+## Adding Phase 3 (Validation)
+
+Phase 3 is currently a placeholder pill. To wire it up:
+
+1. Implement `Validate.send_kickoff_message()` in `phases/validate.py` to
+   call `run_agent_turn()` with the validation prompt.
+2. Ensure the `test-competition-bundle` skill exists under
+   `src/autocodabench/skills/test-competition-bundle/SKILL.md`.
+3. The `_phase_artifact_exists` check in `artifacts.py` already handles
+   `validation_report.md` — the agent just needs to write it.
+
+---
+
+## Deployment (HF Spaces)
+
+The `Dockerfile` at the repo root is detected automatically by HF Spaces.
+It installs `alex-mcp` from GitHub (not on PyPI), pins `fastmcp==2.14.7`,
+installs the `autocodabench` package in editable mode, then installs
+`web/requirements.txt`. The Space runs:
+
+```
+cd /app/web && chainlit run app.py --host 0.0.0.0 --port $PORT
+```
+
+Set these Repository Secrets on the Space:
+`ANTHROPIC_API_KEY`, `SHARED_PASSWORD`, `OPENALEX_MAILTO`,
+`CODABENCH_USERNAME`, `CODABENCH_PASSWORD`, `HF_TOKEN`, `CHAINLIT_AUTH_SECRET`
+
+---
+
+## Troubleshooting
 
 ### Sign-in loop locally
 `SHARED_PASSWORD` is not set, or it does not match the value being entered.
 The username field is informational only.
 
 ### Phase pill remains disabled after the agent reports the plan as saved
-The phase bar polls `web/public/sessions/<sid>/phase_state.json` every two
-seconds. If it is not updating, inspect the browser console for fetch
-errors. Also confirm that `specs/implementation_plan.md` actually exists in
-the run directory.
+The phase bar polls `/public/sessions/<sid>/phase_state.json` every two
+seconds. If it is not updating, inspect the browser console for fetch errors.
+Also confirm that `specs/implementation_plan.md` actually exists in the run
+directory.
 
 ### Bundle download remains grayed out after Phase 2 finishes
-Inspect the Space logs for warnings from `_find_bundle_zip`; it prefers
-`<run>/bundles/` and falls back to the global `.autocodabench/bundles/` if
-the environment propagation failed.
+Inspect the Space logs for warnings from `PublicArtifacts.find_bundle_zip`; it
+prefers `<run>/bundles/` and falls back to the global `.autocodabench/bundles/`
+if the environment propagation failed.
 
 ### Publish form reports "unknown error" or another unclear failure
-The `/ac/upload-codabench` route returns a non-empty `error` string for
-every failure path. If "unknown error" appears in the UI, expand the
-`<details>` block below the error message; it includes the full server
-response (HTTP status and body). Cross-reference this against the Space
-logs (search for `upload-codabench` lines).
+The `/ac/upload-codabench` route returns a non-empty `error` string for every
+failure path. Expand the `<details>` block below the error message for the full
+server response (HTTP status and body), then cross-reference the Space logs
+(search for `upload-codabench` lines).
 
 ### MCP server does not boot
-Inspect `web/.files/mcp_stderr_*` or the Space's main logs. The most common
-cause is a `fastmcp` version mismatch (the Dockerfile pins
-`fastmcp==2.14.7`).
+`session_manager.probe_mcp_imports()` surfaces import failures at chat start;
+read that message and the `mcp_stderr/` logs in the run dir. The most common
+cause is a `fastmcp` version mismatch (the Dockerfile pins `fastmcp==2.14.7`).
 
 ### HF Space build fails
-Read the build log. Common causes include:
-- A missing required repository secret (see Section 2.2).
-- A Python version mismatch; the Dockerfile uses `python:3.11-slim`.
+Read the build log. Common causes:
+- A missing required repository secret (see the deployment secrets list above).
 - A `pip install` step failing on a transient network error; re-trigger the
   build (Settings → Factory rebuild).
