@@ -34,6 +34,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 load_dotenv(_REPO_ROOT / ".env")
 
+# ---------------------------------------------------------------------------
+# Logging: emit INFO from our own loggers so step-level traces are visible.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
+logging.getLogger("autocodabench").setLevel(logging.INFO)
+
 os.environ.setdefault("AUTOCODABENCH_HOME", str(_REPO_ROOT / ".autocodabench"))
 
 # ---------------------------------------------------------------------------

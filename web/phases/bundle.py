@@ -7,6 +7,7 @@ then validates and zips. The resulting bundle.zip is the phase artifact.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import chainlit as cl
@@ -14,6 +15,8 @@ import chainlit as cl
 from config import PHASE_BUNDLE, PHASE_TITLE
 from skills import load_skill_body
 from streaming import run_agent_turn
+
+log = logging.getLogger("autocodabench.web.bundle")
 
 
 class Bundle:
@@ -55,6 +58,8 @@ class Bundle:
         The agent is given a synthetic prompt to start building the bundle
         without waiting for the user to type anything.
         """
+        log.info("[bundle] send_kickoff_message start — run_dir=%s", run_dir)
+        log.info("[bundle] sending Phase 2 intro card")
         await cl.Message(
             author="autocodabench",
             content=(
@@ -67,9 +72,12 @@ class Bundle:
                 "and a one-click Upload-to-Codabench button."
             ),
         ).send()
+        log.info("[bundle] Phase 2 intro card sent")
 
         response_msg = cl.Message(content="", author="autocodabench")
+        log.info("[bundle] sending empty response_msg placeholder")
         await response_msg.send()
+        log.info("[bundle] empty response_msg sent — calling run_agent_turn")
         await run_agent_turn(
             client,
             "Begin Phase 2. Read `specs/implementation_plan.md` first, "
@@ -79,3 +87,4 @@ class Bundle:
             run_dir,
             response_msg,
         )
+        log.info("[bundle] run_agent_turn returned — Phase 2 kickoff complete")

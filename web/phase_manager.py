@@ -184,21 +184,28 @@ class PhaseManager:
     @staticmethod
     async def advance_to_phase(target: str) -> None:
         """Move forward to target. Delegates to revert if target is behind current."""
+        log.info("[phase] advance_to_phase called: target=%r", target)
         if target not in PHASE_ORDER:
+            log.warning("[phase] advance_to_phase: unknown target %r — ignoring", target)
             return
         run_dir = Path(cl.user_session.get("run_dir"))
         current = cl.user_session.get("phase") or PHASE_PLAN
+        log.info("[phase] advancing %r → %r", current, target)
 
         if target == current:
+            log.info("[phase] already on %r — no-op", target)
             return
         tgt_idx = PHASE_ORDER.index(target)
         cur_idx = PHASE_ORDER.index(current)
 
         if tgt_idx < cur_idx:
+            log.info("[phase] target is behind current — delegating to revert_to_phase")
             await PhaseManager.revert_to_phase(target)
             return
 
+        log.info("[phase] checking artifact_exists for phase=%r in run_dir=%s", current, run_dir)
         if not PhaseState.artifact_exists(run_dir, current):
+            log.warning("[phase] artifact missing for %r — blocking advance", current)
             await cl.Message(
                 author="autocodabench",
                 content=(
@@ -218,13 +225,18 @@ class PhaseManager:
         cl.user_session.set("phase", target)
 
         mcp_servers = cl.user_session.get("mcp_servers") or {}
+        log.info("[phase] switching SDK client to phase=%r", target)
         await _switch_sdk_client(run_dir, target, mcp_servers)
+        log.info("[phase] SDK client switched — writing transcript entry")
 
         Transcript.append(run_dir, role="user", text=f"[ui] Advance to {PHASE_TITLE[target]}.")
+        log.info("[phase] sending phase kickoff for target=%r", target)
         await PhaseManager._send_phase_kickoff(run_dir, target)
+        log.info("[phase] phase kickoff complete for target=%r", target)
 
         PhaseManager.write_state(run_dir)
         await PhaseManager.refresh_phase_controls()
+        log.info("[phase] advance_to_phase DONE: now on %r", target)
 
     @staticmethod
     async def revert_to_phase(target: str) -> None:
@@ -268,13 +280,20 @@ class PhaseManager:
     @staticmethod
     async def _send_phase_kickoff(run_dir: Path, target: str) -> None:
         """Dispatch to the phase-specific kickoff handler."""
+        log.info("[phase] _send_phase_kickoff: target=%r", target)
         client = cl.user_session.get("client")
         if target == PHASE_BUNDLE:
             from phases.bundle import Bundle
+            log.info("[phase] calling Bundle.send_kickoff_message")
             await Bundle.send_kickoff_message(run_dir, client)
+            log.info("[phase] Bundle.send_kickoff_message returned")
         elif target == PHASE_VALIDATE:
             from phases.validate import Validate
+            log.info("[phase] calling Validate.send_kickoff_message")
             await Validate.send_kickoff_message(run_dir, client)
+            log.info("[phase] Validate.send_kickoff_message returned")
+        else:
+            log.info("[phase] no kickoff handler for target=%r", target)
 
     @staticmethod
     async def _send_phase_revisit(run_dir: Path, target: str) -> None:

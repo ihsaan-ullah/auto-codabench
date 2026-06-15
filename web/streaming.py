@@ -13,6 +13,7 @@ from pathlib import Path
 import chainlit as cl
 from claude_agent_sdk import (
     AssistantMessage,
+    RateLimitEvent,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -93,19 +94,31 @@ async def run_agent_turn(
     open_steps: dict[str, tuple[cl.Step, str]] = {}
     turn_parts: list[dict] = []
     tool_idx_by_id: dict[str, int] = {}
+    msg_count = 0
 
+    log.info("[turn] START — prompt %.80r", prompt)
     try:
+        log.info("[turn] calling client.query()")
         await client.query(prompt)
+        log.info("[turn] client.query() returned — entering receive_response() loop")
+
         async for message in client.receive_response():
+            msg_count += 1
+            log.info("[turn] message #%d: %s", msg_count, type(message).__name__)
 
             if isinstance(message, AssistantMessage):
+                block_types = [type(b).__name__ for b in message.content]
+                log.info("[turn] AssistantMessage blocks: %s", block_types)
                 for block in message.content:
                     if isinstance(block, TextBlock):
+                        log.debug("[turn] TextBlock len=%d", len(block.text))
                         await response_msg.stream_token(block.text)
                         turn_parts.append({"kind": "text", "text": block.text})
 
                     elif isinstance(block, ToolUseBlock):
+                        log.info("[turn] ToolUseBlock name=%r id=%s", block.name, block.id)
                         if block.name in _HIDDEN_TOOLS:
+                            log.debug("[turn] hidden tool %r — skipping chip", block.name)
                             continue
                         op   = operation_label(block.name, block.input)
                         step = cl.Step(
@@ -115,7 +128,9 @@ async def run_agent_turn(
                             parent_id=response_msg.id,
                         )
                         step.input = block.input
+                        log.info("[turn] sending step chip for tool=%r op=%r", block.name, op)
                         await step.send()
+                        log.info("[turn] step chip sent for tool=%r", block.name)
                         open_steps[block.id] = (step, op)
                         turn_parts.append({
                             "kind":     "tool",
@@ -129,15 +144,25 @@ async def run_agent_turn(
                         tool_idx_by_id[block.id] = len(turn_parts) - 1
 
                     elif isinstance(block, ThinkingBlock):
-                        pass  # not surfaced in the UI
+                        log.debug("[turn] ThinkingBlock (not surfaced)")
 
             elif isinstance(message, UserMessage):
                 blocks = message.content if isinstance(message.content, list) else []
+                result_blocks = [b for b in blocks if isinstance(b, ToolResultBlock)]
+                log.info("[turn] UserMessage with %d ToolResultBlock(s)", len(result_blocks))
                 for block in blocks:
                     if not isinstance(block, ToolResultBlock):
                         continue
+                    is_error = bool(getattr(block, "is_error", False))
+                    log.info(
+                        "[turn] ToolResultBlock tool_use_id=%s is_error=%s content_len=%d",
+                        block.tool_use_id,
+                        is_error,
+                        len(str(block.content or "")),
+                    )
                     record = open_steps.pop(block.tool_use_id, None)
                     if record is None:
+                        log.warning("[turn] ToolResultBlock for unknown id=%s — skipping", block.tool_use_id)
                         continue
                     step, op = record
                     step.name = op
@@ -155,11 +180,12 @@ async def run_agent_turn(
                     else:
                         out_text = str(block.content or "")
 
-                    is_error = bool(getattr(block, "is_error", False))
                     if is_error:
                         step.is_error = True
                     step.output = out_text
+                    log.info("[turn] updating step chip op=%r is_error=%s out_len=%d", op, is_error, len(out_text))
                     await step.update()
+                    log.info("[turn] step chip updated op=%r", op)
 
                     idx = tool_idx_by_id.get(block.tool_use_id)
                     if idx is not None:
@@ -178,6 +204,7 @@ async def run_agent_turn(
                 else:
                     in_tok  = int(getattr(usage, "input_tokens",  0) or 0)
                     out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+                log.info("[turn] ResultMessage cost=$%.4f cum=$%.4f in_tok=%d out_tok=%d", cost, cum, in_tok, out_tok)
                 if in_tok:
                     cl.user_session.set("last_input_tokens", in_tok)
                 if out_tok:
@@ -203,19 +230,55 @@ async def run_agent_turn(
 
             elif isinstance(message, SystemMessage):
                 subtype = getattr(message, "subtype", "")
+                log.info("[turn] SystemMessage subtype=%r", subtype)
                 if subtype in ("budget_exceeded", "rate_limit", "stop"):
                     await cl.Message(
                         content=f"_[system: {subtype}]_",
                         author="autocodabench",
                     ).send()
 
+            elif isinstance(message, RateLimitEvent):
+                info = message.rate_limit_info
+                status = getattr(info, "status", "unknown")
+                utilization = getattr(info, "utilization", None)
+                resets_at = getattr(info, "resets_at", None)
+                log.info(
+                    "[turn] RateLimitEvent status=%r utilization=%s resets_at=%s",
+                    status, utilization, resets_at,
+                )
+                if status == "rejected":
+                    import datetime
+                    if resets_at:
+                        reset_dt = datetime.datetime.fromtimestamp(resets_at, tz=datetime.timezone.utc)
+                        wait_secs = max(0, int((reset_dt - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()))
+                        reset_str = f" Resets in ~{wait_secs}s (at {reset_dt.strftime('%H:%M:%S')} UTC)."
+                    else:
+                        reset_str = ""
+                    log.warning("[turn] rate limit REJECTED — agent is paused.%s", reset_str)
+                    await cl.Message(
+                        content=f"_⏳ Rate limit reached — waiting for the window to reset.{reset_str}_",
+                        author="autocodabench",
+                    ).send()
+                elif status == "allowed_warning":
+                    pct = f"{utilization * 100:.0f}%" if utilization is not None else "high"
+                    log.warning("[turn] rate limit warning — utilization=%s", pct)
+                    await cl.Message(
+                        content=f"_⚠️ Approaching rate limit ({pct} utilization) — may pause soon._",
+                        author="autocodabench",
+                    ).send()
+
+        log.info("[turn] receive_response() loop exited normally after %d messages", msg_count)
+
     except Exception as e:
+        log.exception("[turn] EXCEPTION in run_agent_turn: %s: %s", type(e).__name__, e)
         await cl.Message(
             content=f"**Error:** `{type(e).__name__}: {e}`",
             author="autocodabench",
         ).send()
 
+    log.info("[turn] calling response_msg.update()")
     await response_msg.update()
+    log.info("[turn] END — %d messages processed, %d turn_parts", msg_count, len(turn_parts))
 
     # Write completed turn to transcript.
     if turn_parts:

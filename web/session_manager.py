@@ -262,7 +262,10 @@ class SessionManager:
     @staticmethod
     async def on_message(msg: cl.Message) -> None:
         """Handle one user message: augment with attachments, stream response."""
+        phase = cl.user_session.get("phase") or "unknown"
+        log.info("[session] on_message — phase=%r content=%.80r", phase, msg.content)
         if not cl.user_session.get("ready"):
+            log.warning("[session] on_message called before session ready — dropping")
             await cl.Message(
                 content="_Still initializing — give me a few more seconds._",
                 author="autocodabench",
@@ -273,6 +276,7 @@ class SessionManager:
         run_dir = Path(cl.user_session.get("run_dir"))
 
         if client is None:
+            log.error("[session] on_message: no client in session — cannot respond")
             await cl.Message(content="(no active session; please refresh)").send()
             return
 
@@ -283,11 +287,14 @@ class SessionManager:
 
         response_msg = cl.Message(content="", author="autocodabench")
         await response_msg.send()
+        log.info("[session] starting run_agent_turn for user message")
         await run_agent_turn(client, augmented_text, run_dir, response_msg)
+        log.info("[session] run_agent_turn complete — writing state and checking bundle")
 
         PhaseManager.write_state(run_dir)
         await PhaseManager.refresh_phase_controls()
         await PhaseManager.maybe_offer_bundle_actions()
+        log.info("[session] on_message DONE")
         asyncio.create_task(persist_to_hf(run_dir))
 
     @staticmethod
