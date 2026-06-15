@@ -19,6 +19,7 @@ from config import (
     CONTEXT_WINDOW_TOKENS,
     DEFAULT_MODEL,
     MAX_USD_PER_SESSION,
+    PHASE_ARTIFACT,
     PHASE_BUNDLE,
     PHASE_ORDER,
     PHASE_PLAN,
@@ -149,8 +150,10 @@ class PhaseManager:
         run_dir  = Path(cl.user_session.get("run_dir") or ".")
 
         actions: list[cl.Action] = []
-        if cur_idx + 1 < len(PHASE_ORDER):
-            nxt = PHASE_ORDER[cur_idx + 1]
+        # One hidden advance button per forward phase so chat.js can simulate a
+        # jump to ANY reachable phase (not just the adjacent one). The actual
+        # reachability gate lives in advance_to_phase + the pill logic.
+        for nxt in PHASE_ORDER[cur_idx + 1:]:
             actions.append(cl.Action(
                 name="ac_advance_phase",
                 payload={"target": nxt},
@@ -203,15 +206,21 @@ class PhaseManager:
             await PhaseManager.revert_to_phase(target)
             return
 
-        log.info("[phase] checking artifact_exists for phase=%r in run_dir=%s", current, run_dir)
-        if not PhaseState.artifact_exists(run_dir, current):
-            log.warning("[phase] artifact missing for %r — blocking advance", current)
+        # Gate on the TARGET's prerequisite (its input artifact), not the
+        # current phase — this is what lets a user jump straight to a later
+        # phase once its input exists (built upstream OR uploaded via chat).
+        log.info("[phase] checking prerequisite for target=%r in run_dir=%s", target, run_dir)
+        if not PhaseState.prerequisite_met(run_dir, target):
+            prev = PHASE_ORDER[PHASE_ORDER.index(target) - 1]
+            log.warning("[phase] prerequisite missing for %r (needs %r) — blocking", target, prev)
             await cl.Message(
                 author="autocodabench",
                 content=(
-                    f"⚠ Can't advance to {PHASE_TITLE[target]} — "
-                    f"{PHASE_TITLE[current]} hasn't produced "
-                    f"`{cl.user_session.get('phase_artifact', '')}` yet."
+                    f"⚠ Can't open {PHASE_TITLE[target]} yet — it needs "
+                    f"`{PHASE_ARTIFACT[prev]}` from {PHASE_TITLE[prev]}.\n\n"
+                    f"Either complete {PHASE_TITLE[prev]} first, or drop that "
+                    f"file into the chat and I'll seed it so you can jump here "
+                    f"directly."
                 ),
             ).send()
             return

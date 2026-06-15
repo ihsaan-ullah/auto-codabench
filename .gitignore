@@ -39,7 +39,7 @@ web/.files/
 # Per-session web runtime artifacts (manifest/plan/transcript/bundle HTML+zip).
 # Written at runtime by web/app.py; never source.
 web/public/sessions/
-
+web/READING_GUIDE.md
 
 experiments/bundle_creation_test/runs/*/
 trash_folder/

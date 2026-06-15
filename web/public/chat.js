@@ -352,7 +352,7 @@
                 cur:   state.current,
                 nxt:   state.next,
                 can:   state.can_advance,
-                items: (state.phases || []).map((x) => [x.id, x.status]),
+                items: (state.phases || []).map((x) => [x.id, x.status, !!x.reachable]),
             });
             if (sig === _lastPhasePillsSig) return;
             _lastPhasePillsSig = sig;
@@ -364,10 +364,12 @@
                 pill.className = "ac-pp ac-pp-" + ph.status;
                 pill.dataset.phaseId     = ph.id;
                 pill.dataset.phaseStatus = ph.status;
+                // A phase AHEAD of current is jumpable as soon as its input
+                // prerequisite is on disk (built upstream OR uploaded) —
+                // `reachable` carries that, so the user can skip straight to
+                // it (e.g. upload a bundle → jump to Validation).
                 const isAdvanceTarget =
-                    (ph.status === "pending"
-                     && state.next === ph.id
-                     && state.can_advance);
+                    (ph.status === "pending" && !!ph.reachable);
                 const num = idx + 1;
                 const lockIcon = (ph.status === "locked") ? " 🔒" : "";
                 const advIcon  = isAdvanceTarget ? " ▶" : "";

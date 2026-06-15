@@ -25,12 +25,15 @@ class Plan:
     def system_prompt() -> str:
         """Build the Phase 1 system prompt.
 
-        Loads the autocodabench-plan skill body and appends a short web-UI
-        footer reminding the agent that phase transitions are button-driven
-        (not agent-triggered) and that Phase 2 starts with no memory of this
+        Loads the Phase 1 plan skill body and appends a short web-UI footer
+        reminding the agent that phase transitions are button-driven (not
+        agent-triggered) and that Phase 2 starts with no memory of this
         conversation.
         """
-        base = load_skill_body("autocodabench-plan", "plan")
+        # Packaged skill directory is `plan/` (its frontmatter name is still
+        # `autocodabench-plan`); load by directory name, keep the old name as a
+        # back-compat fallback.
+        base = load_skill_body("plan", "autocodabench-plan")
         if not base:
             base = "(plan skill body missing — contact the operator.)"
 

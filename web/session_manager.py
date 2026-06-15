@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,10 @@ from config import (
     CONTEXT_WINDOW_TOKENS,
     DEFAULT_MODEL,
     MAX_USD_PER_SESSION,
+    PHASE_BUNDLE,
     PHASE_PLAN,
+    PHASE_TITLE,
+    PHASE_VALIDATE,
     PYTHON_BIN,
     REPO_ROOT,
     TOOLS_BY_PHASE,
@@ -154,6 +158,103 @@ def _extract_attachment_text(element) -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Phase-seeding from chat uploads
+#
+# A user can enter the pipeline at a later phase by dropping the upstream
+# artifact into the chat instead of producing it agentically:
+#   - implementation_plan.md  → seeds the Phase 1 output → jump to Phase 2.
+#   - a bundle .zip (with competition.yaml) → seeds the Phase 2 output → jump
+#     to Phase 3.
+# Seeded artifacts land exactly where the built ones would, so the rest of the
+# UI (phase gating, downloads, validate kickoff) needs no special-casing.
+# ---------------------------------------------------------------------------
+
+def _safe_slug(name: str) -> str:
+    """Filesystem-safe bundle slug derived from an uploaded filename stem."""
+    stem = Path(name).stem.strip().lower()
+    cleaned = "".join(c if (c.isalnum() or c in "-_") else "-" for c in stem)
+    cleaned = cleaned.strip("-_")
+    return cleaned or "uploaded-bundle"
+
+
+def _zip_is_bundle(zip_path: Path) -> bool:
+    """True if the zip contains a competition.yaml (i.e. looks like a bundle)."""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            return any(n.rstrip("/").endswith("competition.yaml") for n in zf.namelist())
+    except Exception as e:
+        log.warning("zip inspect failed for %s: %s", zip_path, e)
+        return False
+
+
+def _seed_bundle_from_zip(run_dir: Path, zip_path: Path) -> str | None:
+    """Extract an uploaded bundle zip into <run>/bundles/<slug>/.
+
+    Normalises a single wrapping top-level directory so competition.yaml lands
+    at the bundle root, then drops a copy of the zip alongside it (so
+    find_bundle_zip + the downloads manifest pick it up). Returns the slug, or
+    None on failure.
+    """
+    slug = _safe_slug(zip_path.name)
+    dest = run_dir / "bundles" / slug
+    tmp = run_dir / ".tmp_bundle_upload"
+    try:
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp)
+        # Locate the directory that actually holds competition.yaml.
+        comp = next((p for p in tmp.rglob("competition.yaml")), None)
+        bundle_root = comp.parent if comp is not None else tmp
+        dest.mkdir(parents=True, exist_ok=True)
+        for item in bundle_root.iterdir():
+            target = dest / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)
+        shutil.copy2(zip_path, dest / f"{slug}.zip")
+        return slug
+    except Exception as e:
+        log.warning("seed bundle from %s failed: %s", zip_path, e)
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _ingest_seed_artifacts(run_dir: Path, msg) -> list[str]:
+    """Seed phase artifacts from recognised chat attachments.
+
+    Returns a list of seeded kinds ('plan' and/or 'bundle'). Unrecognised
+    attachments are ignored here (they still flow through the normal
+    attachment-extraction path).
+    """
+    elements = getattr(msg, "elements", None) or []
+    seeded: list[str] = []
+    for el in elements:
+        path = getattr(el, "path", None)
+        name = getattr(el, "name", None) or (Path(path).name if path else "")
+        if not path or not Path(path).exists():
+            continue
+        lname = name.lower()
+        if lname == "implementation_plan.md" or lname.endswith("/implementation_plan.md"):
+            specs = run_dir / "specs"
+            specs.mkdir(exist_ok=True)
+            try:
+                shutil.copy2(path, specs / "implementation_plan.md")
+                seeded.append("plan")
+            except Exception as e:
+                log.warning("seed plan from %s failed: %s", path, e)
+        elif lname.endswith(".zip") and _zip_is_bundle(Path(path)):
+            if _seed_bundle_from_zip(run_dir, Path(path)) is not None:
+                seeded.append("bundle")
+    return seeded
+
+
+# ---------------------------------------------------------------------------
 # SessionManager
 # ---------------------------------------------------------------------------
 
@@ -245,6 +346,11 @@ class SessionManager:
                 "explore the design space with you, citing the literature as "
                 "we go. You can also drop a PDF / markdown design doc and I'll "
                 "fill in the gaps.\n\n"
+                "**Start at any phase by dropping a file in the chat:**\n"
+                "- an `implementation_plan.md` → jump to "
+                f"**{PHASE_TITLE[PHASE_BUNDLE]}**.\n"
+                "- a competition **bundle `.zip`** → jump to "
+                f"**{PHASE_TITLE[PHASE_VALIDATE]}**.\n\n"
                 "_New here? Open **Readme** in the top-right for how the "
                 "phase bar works._\n\n"
                 f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
@@ -282,6 +388,20 @@ class SessionManager:
 
         cl.user_session.set("had_user_message", True)
 
+        # Phase-seeding: if the user dropped an implementation_plan.md or a
+        # bundle .zip, save it as the corresponding phase artifact and let them
+        # jump straight to the next phase instead of running the planner.
+        seeded = _ingest_seed_artifacts(run_dir, msg)
+        if seeded:
+            await SessionManager._announce_seeded(run_dir, seeded)
+            session_id = cl.user_session.get("session_id") or ""
+            PhaseManager.write_state(run_dir)
+            await PhaseManager.refresh_phase_controls()
+            PublicArtifacts.write(run_dir, session_id)
+            asyncio.create_task(persist_to_hf(run_dir))
+            log.info("[session] on_message seeded=%s — short-circuiting agent turn", seeded)
+            return
+
         augmented_text = SessionManager._augment_user_message(run_dir, msg)
         Transcript.append(run_dir, role="user", text=augmented_text)
 
@@ -313,6 +433,29 @@ class SessionManager:
                 await client.disconnect()
             except Exception:
                 pass
+
+    @staticmethod
+    async def _announce_seeded(run_dir: Path, seeded: list[str]) -> None:
+        """Tell the user which artifact was imported and where they can jump."""
+        lines: list[str] = []
+        if "plan" in seeded:
+            lines.append(
+                f"📝 Saved your **implementation_plan.md** as the "
+                f"{PHASE_TITLE[PHASE_PLAN]} artifact. Click the "
+                f"**{PHASE_TITLE[PHASE_BUNDLE]}** pill in the phase bar to "
+                f"build the bundle from it — or keep chatting to revise the "
+                f"plan first."
+            )
+        if "bundle" in seeded:
+            lines.append(
+                f"📦 Imported your **bundle** as the "
+                f"{PHASE_TITLE[PHASE_BUNDLE]} artifact. Click the "
+                f"**{PHASE_TITLE[PHASE_VALIDATE]}** pill to lint it."
+            )
+        await cl.Message(
+            author="autocodabench",
+            content="### ✅ Artifact imported\n\n" + "\n\n".join(lines),
+        ).send()
 
     @staticmethod
     def _augment_user_message(run_dir: Path, msg: cl.Message) -> str:

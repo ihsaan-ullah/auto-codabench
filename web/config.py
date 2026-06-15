@@ -88,7 +88,9 @@ BUNDLE_TOOLS = [
 VALIDATE_TOOLS = [
     "mcp__autocodabench__autocodabench_validate_bundle",
     "mcp__autocodabench__autocodabench_current_run",
-    "Read", "Grep", "Glob",
+    # Write lets the validate agent persist validation_report.md (the Phase 3
+    # artifact) to the run dir.
+    "Read", "Grep", "Glob", "Write",
 ]
 
 TOOLS_BY_PHASE = {

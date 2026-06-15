@@ -104,11 +104,15 @@ The right-side panel is injected by `chat.js` and refreshes every 3.5 s by
 polling `/public/sessions/<sid>/manifest.json`. After every assistant turn,
 `PublicArtifacts.write()` renders:
 
-- **📝 implementation_plan.md** — the living plan document (Phase 1)
+- **📝 implementation_plan.md** — the living plan document (Phase 1), viewable + downloadable
+- **✅ validation_report.md** — the Phase 3 lint report, viewable + downloadable
 - **📄 transcript.md** — full conversation with tool calls as collapsibles
 - **💰 cost.jsonl** — per-turn cost log
 - **📦 bundle.zip** — the built bundle (Phase 2+), downloadable
 - **📦 workspace.zip** — everything above as one archive
+
+Each phase's output is in the panel's **downloads** list (plan `.md`,
+`bundle.zip`, validation report `.md`), plus the all-in-one `workspace.zip`.
 
 The **Publish to Codabench** form in the panel footer POSTs to
 `/ac/upload-codabench` (handled by `upload_route.py`) using credentials
@@ -125,22 +129,52 @@ The phase pills live in the Chainlit header (injected by `chat.js`). They poll
 - **Locked pill** — confirm dialog → triggers `AC_REVERT::<phase>` action
 - **Pending pill with ▶** — confirm dialog → triggers `AC_ADVANCE::<phase>` action
 
+A pending pill shows ▶ (is jumpable) whenever its `reachable` flag is set in
+`phase_state.json` — i.e. its **input prerequisite** is on disk. You can jump
+to *any* reachable phase, not just the adjacent one. `advance_to_phase` gates
+on the target's prerequisite (`PhaseState.prerequisite_met`), and one hidden
+`AC_ADVANCE::<phase>` button is emitted per forward phase so the jump click has
+a target.
+
 The actual Chainlit action buttons are hidden in a silent chat message and
 click-simulated by JS, keeping the Chainlit action callback system intact
 while allowing the custom pill UI.
 
+### Entering at a later phase (chat upload)
+
+A phase's prerequisite can be **uploaded** instead of built, so a user can
+start anywhere (mirrors the CLI's separable `plan` / `build` / `validate`):
+
+- drop an `implementation_plan.md` → seeded to `<run>/specs/` → jump to Phase 2.
+- drop a bundle `.zip` (contains `competition.yaml`) → extracted to
+  `<run>/bundles/<slug>/` → jump to Phase 3.
+
+Detection + seeding live in `session_manager.py` (`_ingest_seed_artifacts`);
+seeded files land exactly where built ones would, so gating, downloads, and the
+validate kickoff need no special-casing. Each phase output
+(`implementation_plan.md`, `bundle.zip`, `validation_report.md`) is in the
+panel's **downloads** list.
+
 ---
 
-## Adding Phase 3 (Validation)
+## Phase 3 (Validation)
 
-Phase 3 is currently a placeholder pill. To wire it up:
+Phase 3 drives the `autocodabench_validate_bundle` MCP tool — the same schema
+lint the `autocodabench validate` CLI exposes — against the bundle built in
+Phase 2, then writes `validation_report.md`:
 
-1. Implement `Validate.send_kickoff_message()` in `phases/validate.py` to
-   call `run_agent_turn()` with the validation prompt.
-2. Ensure the `test-competition-bundle` skill exists under
-   `src/autocodabench/skills/test-competition-bundle/SKILL.md`.
-3. The `_phase_artifact_exists` check in `artifacts.py` already handles
-   `validation_report.md` — the agent just needs to write it.
+1. `Validate.system_prompt()` (`phases/validate.py`) is an inline prompt
+   (there is no agent "validate" skill in the package — validation is the
+   deterministic linter, surfaced to the agent as an MCP tool).
+2. `Validate.send_kickoff_message()` calls `run_agent_turn()` so the agent
+   starts validating as soon as the phase opens.
+3. `VALIDATE_TOOLS` in `config.py` grants the lint tool plus `Write` so the
+   agent can persist the report; `artifact_exists` in `artifacts.py` checks for
+   `validation_report.md` under the run dir.
+
+Note: this is the schema lint only, not the full three-tier check framework
+(deterministic + judged + attestation) the CLI `validate` runs end to end —
+that framework isn't exposed over MCP.
 
 ---
 

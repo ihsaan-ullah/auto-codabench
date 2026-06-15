@@ -241,14 +241,15 @@ class PublicArtifacts:
             plan_ready = plan_path is not None and plan_path.stat().st_size > 0
 
             if plan_ready:
+                plan_text = plan_path.read_text(encoding="utf-8", errors="replace")
                 (out / "plan.html").write_text(
-                    render_md_to_html(
-                        plan_path.read_text(encoding="utf-8", errors="replace"),
-                        "implementation_plan.md",
-                    ),
+                    render_md_to_html(plan_text, "implementation_plan.md"),
                     encoding="utf-8",
                 )
+                # Raw markdown copy so the plan is directly downloadable.
+                (out / "implementation_plan.md").write_text(plan_text, encoding="utf-8")
             else:
+                (out / "implementation_plan.md").unlink(missing_ok=True)
                 (out / "plan.html").write_text(
                     "<!doctype html><html><head><meta charset='utf-8'>"
                     "<style>body{font:14px/1.5 -apple-system,sans-serif;"
@@ -328,6 +329,20 @@ class PublicArtifacts:
                     encoding="utf-8",
                 )
 
+            # --- validation_report.md (Phase 3 output) ---
+            report = run_dir / "validation_report.md"
+            report_ready = report.is_file() and report.stat().st_size > 0
+            if report_ready:
+                report_text = report.read_text(encoding="utf-8", errors="replace")
+                (out / "validation_report.html").write_text(
+                    render_md_to_html(report_text, "validation_report.md"),
+                    encoding="utf-8",
+                )
+                (out / "validation_report.md").write_text(report_text, encoding="utf-8")
+            else:
+                (out / "validation_report.html").unlink(missing_ok=True)
+                (out / "validation_report.md").unlink(missing_ok=True)
+
             # --- bundle.zip ---
             bundle_src = PublicArtifacts.find_bundle_zip(run_dir)
             bundle_pub = out / "bundle.zip"
@@ -396,9 +411,31 @@ class PublicArtifacts:
                     "tag":   _tag(spec_html),
                 })
 
+            if (out / "validation_report.html").is_file():
+                tabs.append({
+                    "name":  "✅ validation_report.md",
+                    "url":   f"/public/sessions/{session_id}/validation_report.html",
+                    "kind":  "validation",
+                    "ready": True,
+                    "tag":   _tag(out / "validation_report.html"),
+                })
+
             bundle_ready = bundle_pub.is_file()
             ws_ready     = workspace_zip.is_file()
+            plan_dl      = out / "implementation_plan.md"
+            report_dl    = out / "validation_report.md"
+            plan_dl_ready   = plan_dl.is_file()
+            report_dl_ready = report_dl.is_file()
             downloads: list[dict] = [
+                {
+                    "name":     "📝 implementation_plan.md",
+                    "filename": "implementation_plan.md",
+                    "url":      f"/public/sessions/{session_id}/implementation_plan.md",
+                    "kind":     "plan",
+                    "ready":    plan_dl_ready,
+                    "size":     plan_dl.stat().st_size if plan_dl_ready else 0,
+                    "tag":      _tag(plan_dl) if plan_dl_ready else "missing",
+                },
                 {
                     "name":     "📦 competition bundle (.zip)",
                     "filename": "bundle.zip",
@@ -407,6 +444,15 @@ class PublicArtifacts:
                     "ready":    bundle_ready,
                     "size":     bundle_pub.stat().st_size if bundle_ready else 0,
                     "tag":      _tag(bundle_pub) if bundle_ready else "missing",
+                },
+                {
+                    "name":     "✅ validation_report.md",
+                    "filename": "validation_report.md",
+                    "url":      f"/public/sessions/{session_id}/validation_report.md",
+                    "kind":     "validation",
+                    "ready":    report_dl_ready,
+                    "size":     report_dl.stat().st_size if report_dl_ready else 0,
+                    "tag":      _tag(report_dl) if report_dl_ready else "missing",
                 },
                 {
                     "name":     "📦 workspace.zip (all artifacts)",
@@ -466,21 +512,41 @@ class PhaseState:
         return False
 
     @staticmethod
-    def phase_status(phase: str, current: str, history: list[str],
-                     artifact_exists: bool) -> str:
-        """Return one of: 'active', 'locked', or 'pending'.
+    def prerequisite_met(run_dir: Path, phase: str) -> bool:
+        """Is this phase's INPUT available, so the user may jump to it?
+
+        A phase's input is the immediately preceding phase's output artifact:
+          Plan     → no prerequisite (always reachable).
+          Bundle   → needs the plan (implementation_plan.md).
+          Validate → needs a bundle (built in Phase 2 or uploaded).
+
+        This is what powers "jump to any reachable phase": the artifact can be
+        produced by the prior phase OR seeded by the user via a chat upload.
+        """
+        pi = PHASE_ORDER.index(phase)
+        if pi == 0:
+            return True
+        prev = PHASE_ORDER[pi - 1]
+        return PhaseState.artifact_exists(run_dir, prev)
+
+    @staticmethod
+    def phase_status(phase: str, current: str) -> str:
+        """Return one of: 'active', 'locked', or 'pending' (index-relative).
 
         active  — this is the current phase.
-        locked  — phase is complete and its artifact is on disk.
-        pending — phase has not been reached yet.
+        locked  — a phase BEHIND the current one (click = revert / revise).
+        pending — a phase AHEAD of the current one (click = advance/jump if its
+                  prerequisite is met; see `prerequisite_met`).
+
+        Status is purely positional; whether an ahead phase is *clickable* is
+        decided from the separate `reachable` flag, so an uploaded artifact for
+        a future phase doesn't mislabel it as a completed/behind phase.
         """
         if phase == current:
             return "active"
         pi = PHASE_ORDER.index(phase)
         ci = PHASE_ORDER.index(current)
-        if pi < ci or artifact_exists or (phase in history):
-            return "locked"
-        return "pending"
+        return "locked" if pi < ci else "pending"
 
     @staticmethod
     def write(run_dir: Path, session_id: str, *,
@@ -492,21 +558,28 @@ class PhaseState:
         try:
             out = public_session_dir(session_id)
 
+            cur_idx     = PHASE_ORDER.index(current)
             phases_payload = []
             for ph in PHASE_ORDER:
-                exists = PhaseState.artifact_exists(run_dir, ph)
+                exists    = PhaseState.artifact_exists(run_dir, ph)
+                pi        = PHASE_ORDER.index(ph)
+                # A forward phase is "reachable" (jumpable) when its input
+                # prerequisite is on disk; behind/current phases are always
+                # navigable (revert / stay).
+                reachable = (pi <= cur_idx) or PhaseState.prerequisite_met(run_dir, ph)
                 phases_payload.append({
-                    "id":       ph,
-                    "title":    PHASE_TITLE[ph],
-                    "artifact": PHASE_ARTIFACT[ph],
-                    "exists":   exists,
-                    "status":   PhaseState.phase_status(ph, current, history, exists),
+                    "id":        ph,
+                    "title":     PHASE_TITLE[ph],
+                    "artifact":  PHASE_ARTIFACT[ph],
+                    "exists":    exists,
+                    "reachable": reachable,
+                    "status":    PhaseState.phase_status(ph, current),
                 })
 
-            cur_idx     = PHASE_ORDER.index(current)
             next_phase  = PHASE_ORDER[cur_idx + 1] if cur_idx + 1 < len(PHASE_ORDER) else None
+            # Back-compat single flag: can we step to the immediate next phase?
             can_advance = (next_phase is not None
-                           and PhaseState.artifact_exists(run_dir, current))
+                           and PhaseState.prerequisite_met(run_dir, next_phase))
 
             payload = {
                 "session_id":  session_id,
