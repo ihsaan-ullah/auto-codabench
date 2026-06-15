@@ -593,14 +593,22 @@
                         el.title = ready
                             ? `Download ${d.filename || ""}`
                             : (d.kind === "bundle"
-                                ? "Available after Phase 2 finishes"
+                                ? "Available after Phase 2 — Competition Creation finishes"
+                                : d.kind === "validation"
+                                ? "Available after Phase 3 — Validation finishes"
                                 : "Not ready yet");
                         const sizeHTML = ready
                             ? `<span class="ac-dl-size">${_formatBytes(d.size)}</span>`
-                            : `<span class="ac-dl-size">— not ready</span>`;
+                            : `<span class="ac-dl-size ac-dl-pending">not ready</span>`;
+                        const descHTML = d.desc
+                            ? `<span class="ac-dl-desc">${d.desc}</span>`
+                            : "";
                         el.innerHTML =
-                            `<span class="ac-dl-label">${d.name}</span>`
-                            + sizeHTML;
+                            `<span class="ac-dl-top">` +
+                                `<span class="ac-dl-label">${d.name}</span>` +
+                                sizeHTML +
+                            `</span>` +
+                            descHTML;
                         dlHost.appendChild(el);
                     });
                 }

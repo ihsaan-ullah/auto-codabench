@@ -43,14 +43,12 @@ def _build_sdk_options(run_dir: Path, phase: str, mcp_servers: dict) -> ClaudeAg
     """
     from phases.plan import Plan
     from phases.bundle import Bundle
-    from phases.validate import Validate
     import os
     from config import REPO_ROOT
 
     system_prompts = {
-        PHASE_PLAN:     Plan.system_prompt,
-        PHASE_BUNDLE:   Bundle.system_prompt,
-        PHASE_VALIDATE: Validate.system_prompt,
+        PHASE_PLAN:   Plan.system_prompt,
+        PHASE_BUNDLE: Bundle.system_prompt,
     }
     prompt_fn = system_prompts.get(phase, Plan.system_prompt)
 
@@ -224,10 +222,15 @@ class PhaseManager:
         PhaseManager.reset_phase_session_state()
         cl.user_session.set("phase", target)
 
-        mcp_servers = cl.user_session.get("mcp_servers") or {}
-        log.info("[phase] switching SDK client to phase=%r", target)
-        await _switch_sdk_client(run_dir, target, mcp_servers)
-        log.info("[phase] SDK client switched — writing transcript entry")
+        # Phase 3 (validate) runs pure Python — no agent, no MCP subprocess.
+        # Skip the SDK client switch to avoid spawning an unused subprocess.
+        if target != PHASE_VALIDATE:
+            mcp_servers = cl.user_session.get("mcp_servers") or {}
+            log.info("[phase] switching SDK client to phase=%r", target)
+            await _switch_sdk_client(run_dir, target, mcp_servers)
+            log.info("[phase] SDK client switched")
+        else:
+            log.info("[phase] Phase 3 — skipping SDK client switch (no agent needed)")
 
         Transcript.append(run_dir, role="user", text=f"[ui] Advance to {PHASE_TITLE[target]}.")
         log.info("[phase] sending phase kickoff for target=%r", target)
@@ -309,8 +312,11 @@ class PhaseManager:
 
         All download + publish UX lives in the workspace panel. This chat
         message is just a pointer; it fires at most once per session.
+        Not shown in Phase 3 — the user is past the bundle step.
         """
         if cl.user_session.get("bundle_actions_offered"):
+            return
+        if cl.user_session.get("phase") == PHASE_VALIDATE:
             return
         run_dir    = Path(cl.user_session.get("run_dir") or ".")
         session_id = cl.user_session.get("session_id") or ""
@@ -326,13 +332,17 @@ class PhaseManager:
         await cl.Message(
             author="autocodabench",
             content=(
-                f"## 📦 Bundle ready ({size_mb:.1f} MB)\n\n"
+                f"## Bundle ready ({size_mb:.1f} MB)\n\n"
                 f"Open the **workspace panel on the right** to:\n\n"
                 f"- **Download** `bundle.zip` (or `workspace.zip` for "
                 f"everything: plan + transcript + cost + bundle).\n"
                 f"- **Publish to Codabench**: enter your Codabench username + "
                 f"password in the form at the bottom of the panel and "
                 f"click *Upload &amp; publish*.\n\n"
-                f"_Direct link:_ **[📥 bundle.zip]({download_url})**"
+                f"_Direct link:_ **[bundle.zip]({download_url})**\n\n"
+                f"---\n\n"
+                f"**Next:** click **Advance to Phase 3 — Validate** in the "
+                f"phase bar above to run the automated check framework against "
+                f"your bundle."
             ),
         ).send()

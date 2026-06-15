@@ -642,9 +642,9 @@ button[data-ac-phase-nav] {
 }
 .ac-dl-btn {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
     padding: 9px 12px;
     border-radius: 8px;
     border: 1px solid color-mix(in oklab, currentColor 22%, transparent);
@@ -686,6 +686,12 @@ button[data-ac-phase-nav] {
     background: color-mix(in oklab, Canvas 92%, currentColor 4%) !important;
     border-color: color-mix(in oklab, currentColor 18%, transparent) !important;
 }
+.ac-dl-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
 .ac-dl-btn .ac-dl-label { flex: 1; min-width: 0; }
 .ac-dl-btn .ac-dl-size {
     flex: 0 0 auto;
@@ -693,6 +699,18 @@ button[data-ac-phase-nav] {
     font-size: 11px;
     font-weight: 500;
     color: color-mix(in oklab, CanvasText 55%, transparent);
+}
+.ac-dl-btn .ac-dl-pending {
+    color: color-mix(in oklab, CanvasText 40%, transparent);
+    font-style: italic;
+}
+.ac-dl-btn .ac-dl-desc {
+    font-size: 11px;
+    font-weight: 400;
+    color: color-mix(in oklab, CanvasText 60%, transparent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Publish form — collapsed by default; click the title row to open. */
