@@ -236,6 +236,7 @@ class PhaseManager:
 
         PhaseManager.write_state(run_dir)
         await PhaseManager.refresh_phase_controls()
+        await PhaseManager.maybe_offer_bundle_actions()
         log.info("[phase] advance_to_phase DONE: now on %r", target)
 
     @staticmethod
