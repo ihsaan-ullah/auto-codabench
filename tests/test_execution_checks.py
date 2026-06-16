@@ -166,6 +166,6 @@ def test_report_renders_execution_section(demo_bundle, tmp_path, monkeypatch):
                             "data": {"reference_data": ["truth.csv"], "input_data_present": True},
                             "logs_dir": "/x"})
     md = validate_bundle_path(b, execute=True).to_markdown()
-    assert "## Execution" in md
+    assert "## ▶ Execution" in md
     assert "executed now" in md
     assert "acc=0.9" in md

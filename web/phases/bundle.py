@@ -82,7 +82,13 @@ class Bundle:
                 "Codabench bundle directly: `competition.yaml`, "
                 "`scoring_program/`, `solution/`, `pages/`, then validate "
                 "and zip. After that you'll get a download link in chat "
-                "and a one-click Upload-to-Codabench button."
+                "and a one-click Upload-to-Codabench button.\n\n"
+                "⏱ **Heads up:** building a *verified* bundle **creates and "
+                "runs** it in **Docker** using the `docker_image` declared in "
+                "`competition.yaml` — expect **~5–10 minutes** (longer on the "
+                "first run, which pulls the image). If Docker isn't available "
+                "here, the agent skips the runtime check and Phase 3 will run "
+                "it instead."
             ),
         ).send()
         log.info("[bundle] Phase 2 intro card sent")

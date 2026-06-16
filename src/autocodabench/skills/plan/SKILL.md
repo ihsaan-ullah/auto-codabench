@@ -229,6 +229,39 @@ autocodabench_log_event(
 )
 ```
 
+Then ALSO save a structured scorecard of the 7 design sections so the UI can
+render a reliable design-quality table (this mirrors the ✓/⚠/✗ roadmap table —
+map ✓→`ok`, ⚠→`warn`, ✗→`missing`). Emit it exactly once, after the final plan
+revision:
+
+```
+autocodabench_snapshot_spec(
+    filename="design_assessment.json",
+    body=<a JSON string matching the schema below>,
+)
+```
+
+Schema (exactly 7 sections, ids 1–7, in this order). `status` reflects how
+concretely the plan nails each section: `"ok"` = fully specified; `"warn"` =
+specified but with caveats/assumptions; `"missing"` = unresolved / deferred.
+`note` is one short sentence on what's decided or still open.
+
+```json
+{
+  "schema_version": 1,
+  "competition_slug": "<short-kebab-slug>",
+  "sections": [
+    {"id": 1, "key": "task",     "name": "Task formulation",            "status": "ok|warn|missing", "note": "..."},
+    {"id": 2, "key": "data",     "name": "Data & splits",               "status": "ok|warn|missing", "note": "..."},
+    {"id": 3, "key": "metric",   "name": "Metric",                      "status": "ok|warn|missing", "note": "..."},
+    {"id": 4, "key": "baseline", "name": "Baseline",                    "status": "ok|warn|missing", "note": "..."},
+    {"id": 5, "key": "rules",    "name": "Rules & submission limits",   "status": "ok|warn|missing", "note": "..."},
+    {"id": 6, "key": "ethics",   "name": "Ethics & dual-use",           "status": "ok|warn|missing", "note": "..."},
+    {"id": 7, "key": "schedule", "name": "Schedule & sustainability",   "status": "ok|warn|missing", "note": "..."}
+  ]
+}
+```
+
 ---
 
 ## 3. Hand-off message

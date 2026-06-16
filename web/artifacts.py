@@ -43,9 +43,26 @@ _MD_DOC_CSS = (
     "p code,li code{background:#eff1f4;padding:1px 4px;border-radius:3px}"
     "table{border-collapse:collapse;margin:14px 0}"
     "table td,table th{border:1px solid #d0d7de;padding:6px 10px}"
+    "td.ac-pass{background:#e6f4ea}td.ac-fail{background:#fce8e6}"
+    "td.ac-warn{background:#fef7e0}"
     "a{color:#0969da}"
     "</style>"
 )
+
+
+def _tint_status_cells(html: str) -> str:
+    """Tint table cells that start with a status emoji (✅/❌/⚠️).
+
+    Pure CSS can't select a cell by its text content, so we tag the cell on the
+    server: a leading status emoji in a <td> gets a colour class the CSS styles.
+    Matches the ⚠️ variation-selector form (U+26A0 U+FE0F) and the bare form.
+    """
+    return (
+        html.replace("<td>✅", "<td class='ac-pass'>✅")
+            .replace("<td>❌", "<td class='ac-fail'>❌")
+            .replace("<td>⚠️", "<td class='ac-warn'>⚠️")
+            .replace("<td>⚠", "<td class='ac-warn'>⚠")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +83,9 @@ def render_md_to_html(md_text: str, title: str) -> str:
     """Convert a markdown string to a self-contained HTML page."""
     try:
         import markdown as _md_lib  # type: ignore
-        body = _md_lib.markdown(md_text, extensions=["fenced_code", "tables"])
+        body = _tint_status_cells(
+            _md_lib.markdown(md_text, extensions=["fenced_code", "tables"])
+        )
     except Exception:
         body = (
             "<pre style='white-space:pre-wrap'>"
@@ -499,20 +518,23 @@ class PhaseState:
         return False
 
     @staticmethod
-    def phase_status(phase: str, current: str, history: list[str],
-                     artifact_exists: bool) -> str:
-        """Return one of: 'active', 'locked', or 'pending'.
+    def phase_status(phase: str, current: str, artifact_exists: bool) -> str:
+        """Return a progress-only status: 'active' | 'done' | 'skipped' | 'pending'.
 
-        active  — this is the current phase.
-        locked  — phase is complete and its artifact is on disk.
-        pending — phase has not been reached yet.
+        Pills are progress indicators (the guided wizard drives advancement via
+        explicit buttons), so status is purely positional:
+          active  — the current phase.
+          done    — a phase before current that produced its artifact.
+          skipped — a phase before current with no artifact (e.g. the user
+                    started at Validation by uploading a bundle).
+          pending — a phase after current, not reached yet.
         """
         if phase == current:
             return "active"
         pi = PHASE_ORDER.index(phase)
         ci = PHASE_ORDER.index(current)
-        if pi < ci or artifact_exists or (phase in history):
-            return "locked"
+        if pi < ci:
+            return "done" if artifact_exists else "skipped"
         return "pending"
 
     @staticmethod
@@ -520,7 +542,7 @@ class PhaseState:
               current: str, history: list[str],
               last_input_tokens: int, last_output_tokens: int,
               cum_cost: float, max_usd: float,
-              context_window: int) -> None:
+              context_window: int, input_mode: str = "normal") -> None:
         """Write phase_state.json for the given session."""
         try:
             out = public_session_dir(session_id)
@@ -533,20 +555,14 @@ class PhaseState:
                     "title":    PHASE_TITLE[ph],
                     "artifact": PHASE_ARTIFACT[ph],
                     "exists":   exists,
-                    "status":   PhaseState.phase_status(ph, current, history, exists),
+                    "status":   PhaseState.phase_status(ph, current, exists),
                 })
-
-            cur_idx     = PHASE_ORDER.index(current)
-            next_phase  = PHASE_ORDER[cur_idx + 1] if cur_idx + 1 < len(PHASE_ORDER) else None
-            can_advance = (next_phase is not None
-                           and PhaseState.artifact_exists(run_dir, current))
 
             payload = {
                 "session_id":  session_id,
                 "updated_at":  utc_now(),
                 "current":     current,
-                "next":        next_phase,
-                "can_advance": can_advance,
+                "input_mode":  input_mode,
                 "phases":      phases_payload,
                 "context": {
                     "input_tokens":  last_input_tokens,

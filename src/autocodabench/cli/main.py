@@ -79,6 +79,10 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
                         "ollama:<model> (local, keyless), openai:<model>, or an "
                         "OpenAI-compatible URL with '#<model>'")
     p.add_argument("--model", default=None, help="model override for --backend")
+    p.add_argument("--assessment", default=None,
+                   help="path to a Phase-1 design_assessment.json (or a dir "
+                        "containing one); adds the design scorecard to the "
+                        "report. Auto-discovered from the bundle dir if omitted.")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="emit the machine-readable report instead of markdown")
 
@@ -127,10 +131,15 @@ def _cmd_validate(args: argparse.Namespace) -> int:
                                   judged=args.judged, execute=args.execute,
                                   backend=backend)
 
+    # Optional Phase-1 design scorecard: explicit --assessment, else look in
+    # the bundle dir (and its specs/). Absent/malformed → omitted gracefully.
+    from ..checks import load_design_assessment
+    assessment = load_design_assessment(args.assessment or args.bundle)
+    md = report.to_markdown(design_assessment=assessment)
+
     if run_dir is not None:
         try:
-            (run_dir / "validation_report.md").write_text(
-                report.to_markdown(), encoding="utf-8")
+            (run_dir / "validation_report.md").write_text(md, encoding="utf-8")
             (run_dir / "validation_report.json").write_text(
                 json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")
         except OSError:
@@ -139,7 +148,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        print(report.to_markdown())
+        print(md)
         if run_dir is not None:
             print(f"\nReport + run logs: {run_dir}")
     return 0 if report.ok else 1

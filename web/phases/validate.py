@@ -1,12 +1,15 @@
-"""Phase 3 — Validation.
+"""Phase 3 — Validation (Chainlit UI layer only).
 
-Runs the autocodabench deterministic check framework against the bundle
-produced in Phase 2. No agent is involved — this is pure Python:
-validate_bundle_path_async reads the zip, runs all registered checks, and
-writes validation_report.md + validation_report.json to the run dir.
+The validation *feature* lives in the package (`autocodabench.checks`): running
+the framework (`validate_bundle_path`), loading the Phase-1 design scorecard
+(`load_design_assessment`), and rendering the report (`render_report_markdown`,
+`render_judged_section`). This module is just the web presentation:
 
-The results are surfaced in chat (verdict + gate-failure list) and as a new
-tab in the workspace panel.
+  - `send_kickoff_message` — Option A (create-from-scratch): validate the
+    bundle Phase 2 produced.
+  - `run_validation` — shared driver; also called for Option B (validate an
+    uploaded bundle) from session_manager.
+  - the interactive "also run LLM-judged checks?" prompt (UI-only).
 """
 from __future__ import annotations
 
@@ -29,111 +32,170 @@ class Validate:
     PHASE_ID = PHASE_VALIDATE
 
     @staticmethod
+    def system_prompt() -> str:
+        """Stub — Phase 3 runs the check framework directly, no agent."""
+        return "(Phase 3 runs the deterministic check framework directly — no agent.)"
+
+    @staticmethod
     async def send_kickoff_message(run_dir: Path, client) -> None:  # noqa: ARG004
-        """Run the check framework against the Phase 2 bundle and surface results.
-
-        No agent is used. Steps:
-          1. Locate bundle zip (same helper Phase 2 uses).
-          2. Run validate_bundle_path_async — deterministic checks only.
-          3. Write validation_report.md + .json to run_dir.
-          4. Refresh public artifacts so the workspace panel tab appears.
-          5. Send a summary message in chat.
-        """
+        """Option A entry: validate the bundle Phase 2 produced."""
         log.info("[validate] send_kickoff_message start — run_dir=%s", run_dir)
-
-        session_id = cl.user_session.get("session_id") or ""
-
-        # --- locate bundle ---
         bundle_zip = PublicArtifacts.find_bundle_zip(run_dir)
         if bundle_zip is None:
-            log.warning("[validate] no bundle zip found in run_dir=%s", run_dir)
             await cl.Message(
                 author="autocodabench",
                 content=(
                     f"# {PHASE_TITLE[PHASE_VALIDATE]}\n\n"
-                    "⚠️ No bundle found. Go back to **Phase 2 — Competition "
-                    "Creation** and ensure the agent finishes and zips the bundle."
+                    "⚠️ No bundle found. Go back to **Phase 2** and make sure the "
+                    "agent finished and zipped the bundle."
                 ),
             ).send()
             return
+        await Validate.run_validation(run_dir, bundle_zip, executed_in_phase2=True)
 
-        log.info("[validate] bundle located: %s", bundle_zip)
+    @staticmethod
+    async def run_validation(run_dir: Path, bundle_path: Path, *,
+                             executed_in_phase2: bool = False) -> None:
+        """Run the check framework on `bundle_path` and surface the report.
+
+        Always runs `execute=True` (Docker baseline). For Option A the build
+        phase's run is reused when the bundle is unchanged.
+        """
+        session_id = cl.user_session.get("session_id") or ""
+        bundle_path = Path(bundle_path)
+        if not bundle_path.exists():
+            await cl.Message(
+                author="autocodabench",
+                content=f"**Validation error:** bundle not found at `{bundle_path}`.",
+            ).send()
+            return
 
         await cl.Message(
             author="autocodabench",
             content=(
                 f"# {PHASE_TITLE[PHASE_VALIDATE]}\n\n"
                 f"Running the autocodabench check framework against "
-                f"`{bundle_zip.name}` — this is deterministic (no LLM, no "
-                f"Docker) and takes a few seconds…"
+                f"`{bundle_path.name}` — executing the baseline in **Docker** "
+                f"(this can take several minutes; it pulls the bundle's "
+                f"`docker_image` if needed)…"
             ),
         ).send()
 
-        # --- run checks ---
+        # --- deterministic + execution pass (off the event loop) ---
         try:
-            from autocodabench.checks import validate_bundle_path_async
-            log.info("[validate] calling validate_bundle_path_async")
-            report = await asyncio.to_thread(
-                _run_sync_validation, bundle_zip
-            )
-            log.info("[validate] validation complete: ok=%s counts=%s",
-                     report.ok, report.counts)
+            report = await asyncio.to_thread(_run_validation_sync, bundle_path, True)
+            log.info("[validate] done: ok=%s counts=%s", report.ok, report.counts)
         except Exception as e:
-            log.exception("[validate] validation raised: %s: %s", type(e).__name__, e)
+            log.exception("[validate] validation raised: %s", e)
             await cl.Message(
                 author="autocodabench",
                 content=(
                     f"**Validation error:** `{type(e).__name__}: {e}`\n\n"
-                    "You can still download the bundle and validate it manually:\n"
-                    "```\nautocodabench validate-bundle <path/to/bundle.zip>\n```"
+                    "You can still download the bundle and validate it locally:\n"
+                    "```\nautocodabench validate <path/to/bundle.zip>\n```"
                 ),
             ).send()
             return
 
-        # --- write reports ---
-        md_text = report.to_markdown()
-        try:
-            (run_dir / "validation_report.md").write_text(md_text, encoding="utf-8")
-            (run_dir / "validation_report.json").write_text(
-                json.dumps(report.to_dict(), indent=2, default=str),
-                encoding="utf-8",
-            )
-            log.info("[validate] reports written to run_dir")
-        except OSError as e:
-            log.warning("[validate] failed to write report files: %s", e)
+        # --- design scorecard (Phase-1 artifact; absent for Option B) ---
+        from autocodabench.checks import load_design_assessment, render_report_markdown
+        assessment = load_design_assessment(run_dir)
 
-        Transcript.append(run_dir, role="claude", text=md_text)
-
-        # Refresh workspace panel so the tab appears alongside the summary message.
+        # --- write artifacts (same rich report the CLI produces) ---
+        _write_reports(run_dir, report, assessment)
+        Transcript.append(run_dir, role="claude",
+                          text=report.to_markdown(design_assessment=assessment))
         if session_id:
             PublicArtifacts.write(run_dir, session_id)
 
-        # --- chat summary ---
-        verdict = "✅ PASS" if report.ok else "❌ FAIL"
-        counts = report.counts
-        counts_str = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
-
-        from autocodabench.checks.base import Status
-        fails = report.by_status(Status.FAIL)
-        fail_lines = ""
-        if fails:
-            fail_lines = "\n\n**Gate failures (fix before uploading):**\n" + "\n".join(
-                f"- **[{r.check_id}]** {r.message}" for r in fails
-            )
-
+        # --- chat: the full report + a pointer to the panel ---
+        body = render_report_markdown(report, design_assessment=assessment)
         await cl.Message(
             author="autocodabench",
             content=(
-                f"## Validation — {verdict}\n\n"
-                f"Results: {counts_str}{fail_lines}\n\n"
-                f"Open the **✅ validation_report.md** tab in the workspace "
-                f"panel for the full report with findings and attestations."
+                body + "\n\n_Open the **✅ validation_report.md** tab in the "
+                "workspace panel for the downloadable report._"
             ),
         ).send()
-        log.info("[validate] send_kickoff_message complete")
+
+        # --- offer the LLM-judged step ---
+        await Validate._offer_judged(run_dir, bundle_path, session_id)
+
+    @staticmethod
+    async def _offer_judged(run_dir: Path, bundle_path: Path, session_id: str) -> None:
+        """Ask whether to also run LLM-judged checks; run + append if yes."""
+        res = await cl.AskActionMessage(
+            content=(
+                "### Also run LLM-judged validation?\n\n"
+                "It runs `judged-docs-config-consistency` — an LLM reads your "
+                "participant-facing `pages/*.md` and flags **contradictions** "
+                "against `competition.yaml` (e.g. a page promises a metric or "
+                "submission limit the config doesn't declare). It's **advisory "
+                "only** — it never changes the pass/fail verdict above. Needs "
+                "Claude auth, ~30–60s and a small token cost."
+            ),
+            actions=[
+                cl.Action(name="judged", payload={"run": "yes"}, label="✨ Yes, run LLM-judged checks"),
+                cl.Action(name="judged", payload={"run": "no"}, label="Skip"),
+            ],
+            timeout=300,
+        ).send()
+        if (((res or {}).get("payload") or {}).get("run")) != "yes":
+            await cl.Message(author="autocodabench",
+                             content="_Skipped LLM-judged validation._").send()
+            return
+
+        await cl.Message(author="autocodabench",
+                         content="Running LLM-judged checks…").send()
+        try:
+            from autocodabench.checks import (
+                validate_bundle_path_async, render_judged_section,
+            )
+            jreport = await validate_bundle_path_async(
+                bundle_path, execute=False, judged=True,
+            )
+        except Exception as e:
+            log.warning("[validate] judged pass failed: %s", e)
+            await cl.Message(
+                author="autocodabench",
+                content=(
+                    f"_LLM-judged validation unavailable: "
+                    f"`{type(e).__name__}: {e}`. (Needs Claude auth.)_"
+                ),
+            ).send()
+            return
+
+        section = render_judged_section(jreport)
+        _append_to_report(run_dir, "\n\n---\n\n" + section + "\n")
+        if session_id:
+            PublicArtifacts.write(run_dir, session_id)
+        await cl.Message(author="autocodabench", content=section).send()
 
 
-def _run_sync_validation(bundle_zip: Path):
-    """Sync wrapper — runs in a thread so the event loop stays unblocked."""
+# ---------------------------------------------------------------------------
+# Module helpers (thin glue over the package)
+# ---------------------------------------------------------------------------
+
+def _run_validation_sync(bundle_path: Path, execute: bool):
+    """Sync wrapper run inside a thread so the event loop stays responsive."""
     from autocodabench.checks import validate_bundle_path
-    return validate_bundle_path(bundle_zip)
+    return validate_bundle_path(bundle_path, execute=execute)
+
+
+def _write_reports(run_dir: Path, report, assessment) -> None:
+    try:
+        (run_dir / "validation_report.md").write_text(
+            report.to_markdown(design_assessment=assessment), encoding="utf-8")
+        (run_dir / "validation_report.json").write_text(
+            json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")
+    except OSError as e:
+        log.warning("[validate] failed to write report files: %s", e)
+
+
+def _append_to_report(run_dir: Path, text: str) -> None:
+    try:
+        path = run_dir / "validation_report.md"
+        prior = path.read_text(encoding="utf-8") if path.is_file() else ""
+        path.write_text(prior + text, encoding="utf-8")
+    except OSError as e:
+        log.warning("[validate] failed to append to report: %s", e)

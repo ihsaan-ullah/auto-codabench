@@ -26,6 +26,8 @@ from config import (
     DEFAULT_MODEL,
     MAX_USD_PER_SESSION,
     PHASE_PLAN,
+    PHASE_TITLE,
+    PHASE_VALIDATE,
     PYTHON_BIN,
     REPO_ROOT,
     TOOLS_BY_PHASE,
@@ -226,38 +228,95 @@ class SessionManager:
                 author="autocodabench",
             ).send()
 
-        # 3. SDK client for Phase 1.
-        cl.user_session.set("phase",              PHASE_PLAN)
+        # 3. Per-session bookkeeping.
         cl.user_session.set("phase_history",      [])
         cl.user_session.set("last_input_tokens",  0)
         cl.user_session.set("last_output_tokens", 0)
         cl.user_session.set("cum_cost_usd",       0.0)
+        cl.user_session.set("input_mode",         "normal")
 
-        client = ClaudeSDKClient(options=_build_sdk_options(run_dir, PHASE_PLAN, mcp_servers))
-        await client.connect()
-        cl.user_session.set("client", client)
+        # 4. Upfront wizard: what does the user want to do this session?
+        mode = await SessionManager._ask_entry_mode()
+        cl.user_session.set("entry_mode", mode)
 
-        # 4. Greeting (READY_PHRASE must appear here for chat.js to unlock the input).
-        await cl.Message(
-            content=(
-                "# AutoCodabench\n\n"
-                "Tell me a competition idea — a sentence is enough — and I'll "
-                "explore the design space with you, citing the literature as "
-                "we go. You can also drop a PDF / markdown design doc and I'll "
-                "fill in the gaps.\n\n"
-                "_New here? Open **Readme** in the top-right for how the "
-                "phase bar works._\n\n"
-                f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
-                f"budget ${MAX_USD_PER_SESSION:.2f}_"
-            ),
-            author="autocodabench",
-        ).send()
+        if mode == "validate":
+            # Option B — validate an existing bundle. Land on Phase 3, no agent;
+            # the user uploads a .zip and we run the check framework on it.
+            cl.user_session.set("phase",                PHASE_VALIDATE)
+            cl.user_session.set("client",               None)
+            cl.user_session.set("awaiting_bundle_upload", True)
+            cl.user_session.set("input_mode",           "attach_only")
+            await SessionManager._send_validate_greeting(session_id)
+        else:
+            # Option A — create from scratch. Phase 1 agent session.
+            cl.user_session.set("phase", PHASE_PLAN)
+            client = ClaudeSDKClient(options=_build_sdk_options(run_dir, PHASE_PLAN, mcp_servers))
+            await client.connect()
+            cl.user_session.set("client", client)
+            await SessionManager._send_create_greeting(session_id)
+
         cl.user_session.set("ready", True)
 
         # 5. Pre-write public artifacts and phase state.
         PublicArtifacts.write(run_dir, session_id)
         PhaseManager.write_state(run_dir)
-        await PhaseManager.refresh_phase_controls()
+
+    # ----- wizard entry -----------------------------------------------------
+
+    @staticmethod
+    async def _ask_entry_mode() -> str:
+        """Ask the user, upfront, which path they want. Returns 'create'|'validate'."""
+        res = await cl.AskActionMessage(
+            content=(
+                "### Welcome to AutoCodabench\n\n"
+                "What would you like to do? (Start a **New Chat** any time to "
+                "switch.)"
+            ),
+            actions=[
+                cl.Action(name="entry_mode", payload={"mode": "create"},
+                          label="🛠 Create a bundle from scratch (PDF optional)"),
+                cl.Action(name="entry_mode", payload={"mode": "validate"},
+                          label="✅ I have a bundle — validate it"),
+            ],
+            timeout=900,
+        ).send()
+        return ((res or {}).get("payload", {}) or {}).get("mode") or "create"
+
+    @staticmethod
+    async def _send_create_greeting(session_id: str) -> None:
+        """Option A greeting. Must contain the READY_PHRASE for the init-gate."""
+        await cl.Message(
+            content=(
+                "# AutoCodabench — create from scratch\n\n"
+                "Tell me a competition idea — a sentence is enough — and I'll "
+                "explore the design space with you, citing the literature as "
+                "we go. You can also drop a PDF / markdown design doc and I'll "
+                "fill in the gaps.\n\n"
+                "When the plan is ready I'll show a **▶ Proceed to Phase 2** "
+                "button. The phase bar at the top tracks your progress.\n\n"
+                f"_session `{session_id}` · model `{DEFAULT_MODEL}` · "
+                f"budget ${MAX_USD_PER_SESSION:.2f}_"
+            ),
+            author="autocodabench",
+        ).send()
+
+    @staticmethod
+    async def _send_validate_greeting(session_id: str) -> None:
+        """Option B greeting. Contains the attach-mode READY_PHRASE."""
+        await cl.Message(
+            content=(
+                f"# {PHASE_TITLE[PHASE_VALIDATE]} — validate an existing bundle\n\n"
+                "**Attach your bundle `.zip`** below and press send. I'll run "
+                "the autocodabench check framework against it — including a "
+                "Docker execution of the baseline (this can take several "
+                "minutes, and will pull the bundle's `docker_image` if needed) "
+                "— and write you a report.\n\n"
+                "_Typing is disabled until the bundle is validated; just attach "
+                "the file and send._\n\n"
+                f"_session `{session_id}`_"
+            ),
+            author="autocodabench",
+        ).send()
 
     @staticmethod
     async def on_message(msg: cl.Message) -> None:
@@ -272,12 +331,24 @@ class SessionManager:
             ).send()
             return
 
-        client  = cl.user_session.get("client")
         run_dir = Path(cl.user_session.get("run_dir"))
 
+        # Option B — validate-existing-bundle: expect a .zip attachment.
+        if (cl.user_session.get("entry_mode") == "validate"
+                and cl.user_session.get("awaiting_bundle_upload")):
+            await SessionManager._handle_bundle_upload(run_dir, msg)
+            return
+
+        client = cl.user_session.get("client")
         if client is None:
-            log.error("[session] on_message: no client in session — cannot respond")
-            await cl.Message(content="(no active session; please refresh)").send()
+            # Phase 3 (validate) has no agent. Any further chat just guides.
+            await cl.Message(
+                author="autocodabench",
+                content=(
+                    "Validation runs without a chat agent. Start a **New Chat** "
+                    "to validate another bundle or to create one from scratch."
+                ),
+            ).send()
             return
 
         cl.user_session.set("had_user_message", True)
@@ -292,10 +363,56 @@ class SessionManager:
         log.info("[session] run_agent_turn complete — writing state and checking bundle")
 
         PhaseManager.write_state(run_dir)
-        await PhaseManager.refresh_phase_controls()
+        await PhaseManager.maybe_offer_proceed_to_build(run_dir)
         await PhaseManager.maybe_offer_bundle_actions()
         log.info("[session] on_message DONE")
         asyncio.create_task(persist_to_hf(run_dir))
+
+    @staticmethod
+    async def _handle_bundle_upload(run_dir: Path, msg: cl.Message) -> None:
+        """Option B: take the attached .zip and run Phase 3 validation on it."""
+        zip_path = SessionManager._find_zip_attachment(run_dir, msg)
+        if zip_path is None:
+            await cl.Message(
+                author="autocodabench",
+                content="Please **attach a competition bundle `.zip`** and press send.",
+            ).send()
+            return
+
+        cl.user_session.set("had_user_message", True)
+        cl.user_session.set("awaiting_bundle_upload", False)
+        cl.user_session.set("input_mode", "locked")
+        PhaseManager.write_state(run_dir)
+        Transcript.append(run_dir, role="user",
+                          text=f"[ui] Uploaded `{zip_path.name}` for validation.")
+
+        from phases.validate import Validate
+        await Validate.run_validation(run_dir, zip_path, executed_in_phase2=False)
+
+        cl.user_session.set("input_mode", "normal")
+        PhaseManager.write_state(run_dir)
+        asyncio.create_task(persist_to_hf(run_dir))
+
+    @staticmethod
+    def _find_zip_attachment(run_dir: Path, msg: cl.Message) -> Path | None:
+        """Return the path to the first .zip attachment, mirrored into uploads/."""
+        uploads_dir = run_dir / "uploads"
+        uploads_dir.mkdir(exist_ok=True)
+        for el in (getattr(msg, "elements", None) or []):
+            src = getattr(el, "path", None)
+            name = getattr(el, "name", None) or (Path(src).name if src else "")
+            if not src or not Path(src).exists():
+                continue
+            if not name.lower().endswith(".zip"):
+                continue
+            dest = uploads_dir / Path(name).name
+            try:
+                shutil.copy2(src, dest)
+                return dest
+            except Exception as e:
+                log.warning("failed to mirror uploaded zip %s: %s", src, e)
+                return Path(src)
+        return None
 
     @staticmethod
     async def on_chat_end() -> None:

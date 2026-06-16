@@ -51,57 +51,15 @@ class ValidationReport:
         """Results carrying execution evidence (a run was performed or reused)."""
         return [r for r in self.results if r.details is not None]
 
-    def to_markdown(self) -> str:
-        lines: list[str] = []
-        verdict = "✅ PASS" if self.ok else "❌ FAIL"
-        lines.append(f"# Bundle validation — {verdict}")
-        lines.append("")
-        lines.append(f"Bundle: `{self.bundle_dir}`")
-        counts = self.counts
-        lines.append("Results: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
-        lines.append("")
+    def to_markdown(self, *, design_assessment: dict | None = None) -> str:
+        """Render the report as markdown (status tables + execution evidence).
 
-        # Execution summary — "what ran, on what data, from which phase, for how
-        # long, under which condition" — rendered up front when runs happened.
-        ex_rows = self.execution_results
-        if ex_rows:
-            lines.append("## Execution")
-            lines.append("_The bundle was run, not just inspected. Each row is a "
-                         "real ingestion+scoring or notebook run in the declared "
-                         "Docker image._")
-            lines.append("")
-            for r in ex_rows:
-                mark = {"pass": "✓", "fail": "✗", "finding": "⚠",
-                        "skipped": "•"}.get(r.status.value, "·")
-                lines.append(f"- {mark} **[{r.check_id}]** {r.message}")
-                for sub in _detail_lines(r.details):
-                    lines.append(f"    - {sub}")
-            lines.append("")
-
-        def section(title: str, rows: list[CheckResult], note: str | None = None) -> None:
-            if not rows:
-                return
-            lines.append(f"## {title}")
-            if note:
-                lines.append(f"_{note}_")
-            lines.append("")
-            for r in rows:
-                where = f" `{r.where}`" if r.where else ""
-                cite = f" — {r.citation}" if r.citation else ""
-                lines.append(f"- **[{r.check_id}]**{where} {r.message}{cite}")
-            lines.append("")
-
-        section("Gate failures", self.by_status(Status.FAIL),
-                "Deterministic checks that block upload — fix these.")
-        section("Findings (advisory)", self.by_status(Status.FINDING),
-                "Design risks and LLM-judged observations. They do not gate, "
-                "but each one is a known failure mode with a citation.")
-        section("Attestations required", self.by_status(Status.ATTESTATION_REQUIRED),
-                "Only a human can certify these. Unchecked ≠ done.")
-        section("Skipped", self.by_status(Status.SKIPPED),
-                "Checks that need declared facts or were inapplicable.")
-        section("Passed", self.by_status(Status.PASS))
-        return "\n".join(lines)
+        Delegates to :mod:`autocodabench.checks.render` so the CLI and the web
+        UI render identically. Pass ``design_assessment`` (a parsed
+        ``design_assessment.json``) to prepend the Phase-1 design scorecard.
+        """
+        from .render import render_report_markdown
+        return render_report_markdown(self, design_assessment=design_assessment)
 
 
 def _detail_lines(details: dict[str, Any] | None) -> list[str]:
