@@ -18,6 +18,7 @@ python -m pytest tests/                   # unit suite — fast, fully keyless, 
 autocodabench demo --out /tmp/demo        # rebuild+validate the demo bundle from a recorded run
 autocodabench validate <bundle-dir-or-zip> [--facts facts.yaml]
 autocodabench checks list                 # registered checks by tier, with citations
+autocodabench doctor                       # check system prerequisites (Docker daemon, npx, git) pip can't install
 
 # Auth-requiring paths (subscription login preferred; ANTHROPIC_API_KEY second):
 autocodabench auth status [--no-probe]    # active path + masked creds; verifies the SDK can sign in (live turn) unless --no-probe

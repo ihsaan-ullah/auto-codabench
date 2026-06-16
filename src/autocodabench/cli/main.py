@@ -422,6 +422,11 @@ def _cmd_create(args: argparse.Namespace) -> int:
         print(f"--pdf: not a file: {args.pdf}", file=sys.stderr)
         return 2
 
+    # The pipeline's build phase self-validates inside Docker — fail fast on a
+    # missing daemon now, before the plan phase spends any model budget.
+    if not _require_docker(getattr(args, "skip_docker_check", False)):
+        return 2
+
     if not _require_live_claude_auth(args.backend):
         return 2
 
@@ -727,6 +732,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
             print(f"error: plan file not found: {plan_arg}", file=sys.stderr)
             return 2
 
+    # Phase 2 self-validates by running the bundle inside Docker — catch a
+    # missing daemon now, before any model spend, rather than mid-build.
+    if not _require_docker(getattr(args, "skip_docker_check", False)):
+        return 2
+
     if not _require_live_claude_auth(args.backend):
         return 2
 
@@ -927,6 +937,60 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# doctor — system prerequisites (the bits pip cannot install)
+# ---------------------------------------------------------------------------
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from ..preflight import render_report, system_report
+
+    checks = system_report()
+    if getattr(args, "as_json", False):
+        print(json.dumps([c.as_dict() for c in checks], indent=2))
+    else:
+        print("autocodabench system check — prerequisites pip cannot install:\n")
+        print(render_report(checks))
+        print()
+
+    failed_required = [c for c in checks if c.required and c.status == "fail"]
+    optional_missing = [c for c in checks if not c.required and c.status != "ok"]
+    if args.as_json:
+        return 1 if failed_required else 0
+    if failed_required:
+        print(f"✗ {len(failed_required)} required prerequisite(s) missing — "
+              "phases 2-3 will not run until fixed.")
+        return 1
+    if optional_missing:
+        print(f"✓ required prerequisites OK; {len(optional_missing)} optional "
+              "item(s) missing (see ⚠️ above).")
+    else:
+        print("✓ all prerequisites satisfied.")
+    return 0
+
+
+def _require_docker(skip: bool = False) -> bool:
+    """Fail fast — before any model spend — when Docker isn't ready for phase 2/3.
+
+    Returns True if the command may proceed (Docker ready, or explicitly skipped).
+    """
+    if skip:
+        print("INFO: --skip-docker-check set; skipping the Docker preflight. Phase 2 "
+              "self-validation will fail later if no daemon is reachable.", file=sys.stderr)
+        return True
+    from ..preflight import check_docker
+
+    c = check_docker()
+    if c.status == "fail":
+        print(f"\n{c.glyph} Docker is required for this command but is unavailable:",
+              file=sys.stderr)
+        print(f"   {c.detail}", file=sys.stderr)
+        print(f"   fix: {c.hint}", file=sys.stderr)
+        print("   (run `autocodabench doctor` to check all prerequisites, or pass "
+              "--skip-docker-check to bypass.)", file=sys.stderr)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------
 
@@ -950,6 +1014,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "utilities:\n"
             "  demo       rebuild + validate the shipped demo bundle, no keys  (keyless)\n"
             "  checks     list the registered checks by tier                   (keyless)\n"
+            "  doctor     check system prerequisites (Docker, Node/npx, git)   (keyless)\n"
             "  auth       report / choose / verify the Claude auth path\n"
             "\n"
             "backends: every agentic command accepts --backend — claude[:model] (default),\n"
@@ -1000,6 +1065,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         "(mutually exclusive with the positional plan argument)")
     p.add_argument("--no-validate", action="store_true",
                    help="skip the post-build validation pass")
+    p.add_argument("--skip-docker-check", action="store_true",
+                   help="bypass the upfront Docker preflight (the build will fail "
+                        "later if no daemon is reachable)")
     p.add_argument("--backend", default=None,
                    help="LLM backend: claude[:model] (default), ollama:<model>, "
                         "openai:<model>, or an OpenAI-compatible URL with '#<model>'")
@@ -1040,6 +1108,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="cumulative cost cap per phase")
     p.add_argument("--no-validate", action="store_true",
                    help="skip the post-build validation pass")
+    p.add_argument("--skip-docker-check", action="store_true",
+                   help="bypass the upfront Docker preflight (the build phase will "
+                        "fail later if no daemon is reachable)")
     _add_research_args(p)
     p.add_argument("--yes", "-y", action="store_true",
                    help="do not prompt to confirm before starting")
@@ -1082,6 +1153,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["list"], nargs="?", default="list")
     p.add_argument("--json", action="store_true", dest="as_json")
     p.set_defaults(func=_cmd_checks)
+
+    p = sub.add_parser("doctor", help="check system prerequisites pip cannot "
+                                      "install (Docker, Node/npx, git)")
+    p.add_argument("--json", action="store_true", dest="as_json")
+    p.set_defaults(func=_cmd_doctor)
 
     return parser
 

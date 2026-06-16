@@ -28,6 +28,25 @@ way software is tested: against an executable checklist before launch.
 > It must not be deleted on the HF side; the prose below it may be edited
 > freely.
 
+## Requirements
+
+`pip install -e .` installs every Python dependency. A few capabilities also
+need **system tools that pip cannot install** — they are not Python packages:
+
+| Tool | Needed for | Required? |
+|------|-----------|-----------|
+| **Docker** (daemon running) | Phases 2–3 — the build phase self-validates, and `validate`'s runtime checks run, by executing the bundle inside its declared `docker_image` exactly as the Codabench worker does | **Yes**, for build/validate runtime; not for Phase 1 planning or the keyless file checks |
+| **Node / `npx`** | Launching the external OpenAlex research MCP server in Phase 1 | Optional — planning works without it, just without that source |
+| **git** | The Claude Agent SDK's git-aware behavior | Recommended |
+
+Run **`autocodabench doctor`** to check all three at once (with per-OS install
+hints); it's also run automatically at the start of `build` /
+`plan-build-validate`, so a missing Docker daemon is caught **before** any model
+spend rather than mid-build. Install Docker from
+[Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS/Windows)
+or [Docker Engine](https://docs.docker.com/engine/install/) (Linux); see
+[`docker/`](docker/) for the base images.
+
 ## Quickstart (no API keys required)
 
 The following commands exercise the full pipeline without any LLM
