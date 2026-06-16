@@ -99,6 +99,14 @@ class OpenAICompatBackend:
         tools = local_tools.select_tools(task.allowed_tools)
         tool_specs = [t.spec() for t in tools]
 
+        # Filesystem sandbox: confine in-process tool execution to the roots
+        # this phase was given (parity with the Claude backend's PreToolUse
+        # hook). MCP-equivalent local tools are unaffected.
+        sandbox = None
+        if task.fs_roots:
+            from .sandbox import FsSandbox
+            sandbox = FsSandbox(task.fs_roots)
+
         messages: list[dict[str, Any]] = []
         if task.system_prompt:
             messages.append({"role": "system", "content": task.system_prompt})
@@ -161,8 +169,12 @@ class OpenAICompatBackend:
                         result_text = json.dumps(
                             {"error": f"unparseable tool arguments: {e}"})
                     else:
-                        result_text = await asyncio.to_thread(
-                            local_tools.execute_tool, name, arguments)
+                        denial = sandbox.check(name, arguments) if sandbox else None
+                        if denial:
+                            result_text = json.dumps({"error": denial})
+                        else:
+                            result_text = await asyncio.to_thread(
+                                local_tools.execute_tool, name, arguments)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call.get("id", ""),

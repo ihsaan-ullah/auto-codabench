@@ -42,6 +42,20 @@ BUILD_TOOLS = [
 ]
 
 
+def _fs_roots(run_dir: Path | str, data: str | Path | None = None) -> list[str]:
+    """The directories a phase is allowed to read from, enforced by code.
+
+    Always the run/session workspace (its plan, bundle, and snapshots); plus any
+    user-supplied ``--data`` directory. Everything else — the rest of the repo,
+    a ground-truth bundle, the wider filesystem — is off-limits (see
+    ``backends.sandbox``).
+    """
+    roots = [str(Path(run_dir).resolve())]
+    if data:
+        roots.append(str(Path(data).expanduser().resolve()))
+    return roots
+
+
 @dataclass
 class PlanResult:
     """Result of a standalone plan phase (Phase 1)."""
@@ -237,6 +251,7 @@ async def create_async(
         trace_path=p1.path / "agent_trace" / "plan.jsonl",
         on_text=on_text,
         on_event=on_event,
+        fs_roots=_fs_roots(run_dir, data),
     ))
     emit({"kind": "phase_done", "phase": "plan", "ok": plan_result.ok,
           "num_turns": plan_result.num_turns,
@@ -272,6 +287,7 @@ async def create_async(
         trace_path=p2.path / "agent_trace" / "build.jsonl",
         on_text=on_text,
         on_event=on_event,
+        fs_roots=_fs_roots(run_dir, data),
     ))
     emit({"kind": "phase_done", "phase": "build", "ok": build_result.ok,
           "num_turns": build_result.num_turns,
@@ -396,6 +412,7 @@ async def plan_async(
         trace_path=run_dir / "agent_trace" / "plan.jsonl",
         on_text=on_text,
         on_event=on_event,
+        fs_roots=_fs_roots(run_dir, data),
     ))
 
     plan_path = run_dir / "specs" / "implementation_plan.md"
@@ -483,6 +500,7 @@ async def bundle_async(
         trace_path=run_dir / "agent_trace" / "build.jsonl",
         on_text=on_text,
         on_event=on_event,
+        fs_roots=_fs_roots(run_dir),
     ))
 
     bundle_dir, zip_path = _find_bundle(run_dir)

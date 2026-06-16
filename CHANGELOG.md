@@ -6,7 +6,32 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Phase read boundary is now code-enforced** (`backends.sandbox.FsSandbox`):
+  the Claude backend runs under `bypassPermissions`, so the per-phase tool
+  allowlist was an *auto-approve* list, not a deny-list — generic `Bash`/`Read`/
+  `Glob` could roam the whole filesystem, and the planner was observed reading a
+  ground-truth bundle elsewhere in the repo. Each agent phase now declares the
+  roots it may touch (`AgentTask.fs_roots` — its run/session workspace plus any
+  `--data` dir); the Claude backend enforces them with a `PreToolUse` hook (plus
+  `disallowed_tools` as a backstop) and the OpenAI-compatible backend checks
+  before executing a tool in-process. Shell/network/`Task` tools are denied
+  outright; file tools are confined to the declared roots. Wired into `plan`,
+  `build`, and `create` (the reformat phase keeps `Bash` and its existing
+  path-based isolation).
+
 ### Added
+- **Live CLI progress** (`autocodabench.cli.progress.ProgressUI`): the agentic
+  commands (`create`/`plan`/`build`) now show an animated status line —
+  `Composing…`, a white blob sweeping a dim track, and per-phase elapsed
+  seconds — so a long phase never looks frozen. Above it, the SDK's per-step
+  stream is rendered as a friendly narrative: the agent's own narration, each
+  tool call as a short action with a change summary (e.g. `⏺ Write scoring
+  program  +84 lines`, `⏺ Edit score.py  +4 -2 lines`), and the milestones the
+  agent addresses to the user. The animation runs only on a TTY; redirected
+  output (logs, pipes) falls back to plain, ANSI-free scrollable lines.
+  `--debug` keeps the full developer trace (raw tool errors, raw tool ids,
+  gutter-ruled narration); `--quiet` keeps the final-summary-only mode.
 - **validate-bench** (`benchmark/autocodabench_validate_bench/`): the second
   end-to-end benchmark — seeds known authoring defects into a clean bundle and
   measures the validator's catch rate per tier (precision/recall/F1), with a
