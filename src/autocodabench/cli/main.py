@@ -154,6 +154,13 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         _print_docker_preflight(image, required=args.execute, note=note)
         print()
 
+    # Executing validation runs the bundle in Docker — fail fast (consistent
+    # with build / plan-build-validate) when the daemon isn't reachable, instead
+    # of letting each run check error out one by one. Static validation
+    # (--no-execute) needs no Docker, so it is not gated.
+    if args.execute and not _require_docker():
+        return 2
+
     if args.judged and not _require_live_claude_auth(args.backend):
         return 2
     backend = None
@@ -424,7 +431,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
 
     # The pipeline's build phase self-validates inside Docker — fail fast on a
     # missing daemon now, before the plan phase spends any model budget.
-    if not _require_docker(getattr(args, "skip_docker_check", False)):
+    if not _require_docker():
         return 2
 
     if not _require_live_claude_auth(args.backend):
@@ -734,7 +741,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     # Phase 2 self-validates by running the bundle inside Docker — catch a
     # missing daemon now, before any model spend, rather than mid-build.
-    if not _require_docker(getattr(args, "skip_docker_check", False)):
+    if not _require_docker():
         return 2
 
     if not _require_live_claude_auth(args.backend):
@@ -1065,9 +1072,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         "(mutually exclusive with the positional plan argument)")
     p.add_argument("--no-validate", action="store_true",
                    help="skip the post-build validation pass")
-    p.add_argument("--skip-docker-check", action="store_true",
-                   help="bypass the upfront Docker preflight (the build will fail "
-                        "later if no daemon is reachable)")
     p.add_argument("--backend", default=None,
                    help="LLM backend: claude[:model] (default), ollama:<model>, "
                         "openai:<model>, or an OpenAI-compatible URL with '#<model>'")
@@ -1108,9 +1112,6 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="cumulative cost cap per phase")
     p.add_argument("--no-validate", action="store_true",
                    help="skip the post-build validation pass")
-    p.add_argument("--skip-docker-check", action="store_true",
-                   help="bypass the upfront Docker preflight (the build phase will "
-                        "fail later if no daemon is reachable)")
     _add_research_args(p)
     p.add_argument("--yes", "-y", action="store_true",
                    help="do not prompt to confirm before starting")
