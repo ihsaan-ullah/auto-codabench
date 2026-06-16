@@ -300,11 +300,12 @@ async def create_async(
               "title": "Validating the bundle",
               "detail": "running the registered pre-launch checks, including "
                         "executing the bundle (reusing the build phase's runs)"})
-        from ..checks import validate_bundle_path_async
+        from ..checks import validate_bundle_path_async, load_design_assessment
         report = await validate_bundle_path_async(bundle_dir, execute=True)
+        assessment = load_design_assessment(p1.path)  # Phase-1 design scorecard
         try:
             (p3.path / "validation_report.md").write_text(
-                report.to_markdown(), encoding="utf-8")
+                report.to_markdown(design_assessment=assessment), encoding="utf-8")
             import json as _json
             (p3.path / "validation_report.json").write_text(
                 _json.dumps(report.to_dict(), indent=2, default=str), encoding="utf-8")

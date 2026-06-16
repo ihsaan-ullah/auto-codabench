@@ -1,83 +1,56 @@
 # AutoCodabench
 
-A scientific-friend chat assistant for designing **Codabench** competitions.
+A scientific-friend assistant for designing and validating **Codabench** competitions.
 
 ---
 
-## How this app works — 3 phases
+## Pick what you want to do (at the start of every chat)
 
-The phase bar at the top of the page (next to **Readme**) is your navigation surface. Each phase has its own
-fresh agent and the chat history is dropped between phases.
+When a chat begins you choose one of two paths. To switch later, start a **New Chat** and choose again.
 
-### 1. 📝 Plan *(you start here)*
+- **🛠 Create a bundle from scratch** — go through Plan → Build → Validate. Optionally drop a PDF/markdown proposal to seed the plan.
+- **✅ I have a bundle — validate it** — skip straight to validation. The composer locks to *attach-only*: drop your bundle `.zip` and press send.
 
-You interact with the agent until it converges on a one-page
-`implementation_plan.md` covering all 7 design sections of a Codabench
-competition (task, data, metric, baseline, rules, ethics, schedule).
+The **phase bar** at the top shows progress only (● in progress · ✓ done · ⤼ skipped). You move forward with the **▶ Proceed** buttons that appear in chat — clicking a pill just flashes this Readme.
 
-Review the plan in the **workspace panel on the right** (📝
-`implementation_plan.md` tab). When it looks right, click the
-**▶ Advance to Phase 2** button at the top.
+---
 
-### 2. 📦 Competition Creation
+## Path A — Create a bundle from scratch
 
-A *fresh* agent reads the implementation plan and packages a Codabench `.zip`
-directly:
+**1. 📝 Plan.** Chat with the agent until it converges on a one-page `implementation_plan.md` covering the 7 design sections (task, data, metric, baseline, rules, ethics, schedule). Review it in the **workspace panel** on the right. When ready, click **▶ Proceed to Phase 2**.
 
-- `competition.yaml`
-- `scoring_program/score.py` — implements your metric
-- `solution/sample_code_submission/model.py` — the baseline class from
-  the plan
-- four standard pages (overview, evaluation, terms, data)
+**2. 📦 Build.** A fresh agent (no memory of the chat) reads the plan and writes the Codabench bundle — `competition.yaml`, `scoring_program/score.py`, the baseline `solution/`, and the standard pages — then validates and zips it. It also **builds and runs the bundle in Docker** using the `docker_image` from `competition.yaml` (**~5–10 min** for a verified bundle; longer on first run while the image pulls). You get a `bundle.zip` download and an **⬆️ Upload to Codabench** button. Click **▶ Proceed to Phase 3**.
 
-After validation + zip, a 📦 `bundle.zip` tab appears in the
-workspace panel for download. A one-click **⬆️ Upload to Codabench**
-button also shows up in chat — clicking it publishes the competition
-and surfaces the Codabench URL.
+**3. ✅ Validate.** See below — same as Path B, plus a **design scorecard** (Table A) comparing your plan against best practice.
 
-### 3. ✅ Validation
+---
 
-The autocodabench check framework runs automatically against the bundle
-produced in Phase 2 — no agent, no waiting, just a few seconds of pure
-Python. It produces a `validation_report.md` covering three tiers:
+## Path B — Validate an existing bundle
 
-- **Gate failures** — deterministic checks that must pass before upload
-  (e.g. `competition.yaml` required keys, missing referenced files,
-  leaderboard key/score mismatch).
-- **Findings** — advisory observations that do not block upload but flag
-  known design risks (with citations).
-- **Attestations** — criteria only a human can certify; surfaced as an
-  explicit checklist.
+Attach your bundle `.zip` and press send. AutoCodabench runs the full check framework, **executing the baseline in Docker** (it pulls the `docker_image` if needed), and writes a report.
 
-After the checks finish you will see a **✅ PASS / ❌ FAIL** verdict in
-chat with any gate failures listed inline. The full report opens in the
-**✅ `validation_report.md`** tab in the workspace panel and is also
-available as a download.
+---
 
-### Revise your plan: Back-navigation
+## What validation produces
 
-Once you're in Phase 2, Phase 1 turns into a 🔒 lock. Click the 🔒 pill to **go back to Phase 1** and **discard the current bundle**.
+A **✅ PASS / ❌ FAIL** verdict in chat plus two colorful tables, and a downloadable `validation_report.md`:
+
+- **Table A — design scorecard** *(create-path only)*: each of the 7 design sections marked ✅ / ⚠️ / ❌ against best practice.
+- **Table B — checks**: every check with ✅ pass / ❌ fail / ⚠️ finding / 📋 attestation / • skipped.
+  - **Gate failures (❌)** must be fixed before upload (e.g. missing `competition.yaml` keys, broken file refs, a baseline that crashes in Docker).
+  - **Findings (⚠️)** are advisory design risks (with citations) — they don't block upload.
+  - **Attestations (📋)** are criteria only a human can certify.
+
+After the report, you'll be offered an optional **✨ LLM-judged** pass: an LLM reads your participant-facing pages and flags **contradictions** against `competition.yaml` (e.g. a page promises a metric or submission limit the config doesn't declare). It's advisory only and needs Claude auth.
+
+Everything is downloadable from the workspace panel: `implementation_plan.md`, `bundle.zip`, `validation_report.md`, and a combined `workspace.zip`.
 
 ---
 
 ## Internal note — operator checklist
 
-(_This block is for the project maintainer / internal testers._)
+(_For the project maintainer / internal testers._) This is a **private alpha**:
 
-This is a **private alpha** for invited collaborators:
-
-- Logs are uploaded to a private HF Dataset
-  repo named `https://huggingface.co/datasets/ktgiahieu/autocodabench-runs/tree/main`
-- The session has a hard Anthropic API budget cap (default **$5.00**;
-  configurable via `MAX_USD_PER_SESSION`).
-
-### Known limitations
-
-- Phase 2 picks sensible sklearn defaults if the plan doesn't fully
-  specify a baseline / metric.
-- HF Spaces is CPU-only, ≤16 GB RAM. Curated package whitelist:
-  `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `seaborn`, `scipy`,
-  `pillow`.
-- Phase 3 runs deterministic checks only (no Docker execution, no
-  LLM-judged checks). Pass `--judged` via the CLI for the full advisory
-  tier outside the web UI.
+- Logs are uploaded to a private HF Dataset (`ktgiahieu/autocodabench-runs`).
+- Each session has a hard Anthropic budget cap (default **$5.00**, via `MAX_USD_PER_SESSION`).
+- HF Spaces is CPU-only, ≤16 GB RAM; if Docker isn't available, Phase 2 skips the runtime check and Phase 3's Docker execution checks report as *skipped* rather than failing.

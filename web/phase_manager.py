@@ -131,53 +131,37 @@ class PhaseManager:
             cum_cost=float(cl.user_session.get("cum_cost_usd") or 0.0),
             max_usd=MAX_USD_PER_SESSION,
             context_window=CONTEXT_WINDOW_TOKENS,
+            input_mode=str(cl.user_session.get("input_mode") or "normal"),
         )
         PublicArtifacts.write(run_dir, sid)
 
     @staticmethod
-    async def refresh_phase_controls() -> None:
-        """Maintain a single hidden cl.Message with phase-action buttons.
+    async def maybe_offer_proceed_to_build(run_dir: Path) -> None:
+        """Once Phase 1's plan exists, surface a one-time 'Proceed to Phase 2' button.
 
-        chat.js finds these buttons by their stable label prefix
-        (AC_ADVANCE::<phase> / AC_REVERT::<phase>), hides them visually,
-        and simulates clicks when the user clicks a pill in the phase bar.
+        Phase advancement in the guided wizard is driven by explicit buttons
+        (not the progress-only pills). Fires at most once per session.
         """
-        current  = cl.user_session.get("phase") or PHASE_PLAN
-        cur_idx  = PHASE_ORDER.index(current)
-        run_dir  = Path(cl.user_session.get("run_dir") or ".")
-
-        actions: list[cl.Action] = []
-        if cur_idx + 1 < len(PHASE_ORDER):
-            nxt = PHASE_ORDER[cur_idx + 1]
-            actions.append(cl.Action(
+        if cl.user_session.get("phase") != PHASE_PLAN:
+            return
+        if cl.user_session.get("proceed_to_build_offered"):
+            return
+        if not PhaseState.artifact_exists(run_dir, PHASE_PLAN):
+            return
+        cl.user_session.set("proceed_to_build_offered", True)
+        await cl.Message(
+            author="autocodabench",
+            content=(
+                "### ✅ Plan ready\n\n"
+                "`implementation_plan.md` is saved (open it in the workspace "
+                "panel). When you're happy with it, proceed to build the bundle."
+            ),
+            actions=[cl.Action(
                 name="ac_advance_phase",
-                payload={"target": nxt},
-                label=f"AC_ADVANCE::{nxt}",
-                tooltip=f"Advance to {PHASE_TITLE[nxt]}",
-            ))
-        for prev in PHASE_ORDER[:cur_idx]:
-            actions.append(cl.Action(
-                name="ac_revert_phase",
-                payload={"target": prev},
-                label=f"AC_REVERT::{prev}",
-                tooltip=f"Back to {PHASE_TITLE[prev]} (discards downstream)",
-            ))
-
-        msg: cl.Message | None = cl.user_session.get("phase_controls_msg")
-        placeholder = "_phase controls (hidden — driven by the top phase bar)_"
-        if msg is None:
-            msg = cl.Message(content=placeholder, author="ac-phase-controls", actions=actions)
-            await msg.send()
-            cl.user_session.set("phase_controls_msg", msg)
-        else:
-            msg.actions = actions
-            try:
-                await msg.update()
-            except Exception as e:
-                log.warning("phase_controls update failed: %s — sending fresh", e)
-                msg = cl.Message(content=placeholder, author="ac-phase-controls", actions=actions)
-                await msg.send()
-                cl.user_session.set("phase_controls_msg", msg)
+                payload={"target": PHASE_BUNDLE},
+                label="▶ Proceed to Phase 2 — Build the bundle",
+            )],
+        ).send()
 
     @staticmethod
     async def advance_to_phase(target: str) -> None:
@@ -238,7 +222,6 @@ class PhaseManager:
         log.info("[phase] phase kickoff complete for target=%r", target)
 
         PhaseManager.write_state(run_dir)
-        await PhaseManager.refresh_phase_controls()
         await PhaseManager.maybe_offer_bundle_actions()
         log.info("[phase] advance_to_phase DONE: now on %r", target)
 
@@ -279,7 +262,6 @@ class PhaseManager:
         await PhaseManager._send_phase_revisit(run_dir, target)
 
         PhaseManager.write_state(run_dir)
-        await PhaseManager.refresh_phase_controls()
 
     @staticmethod
     async def _send_phase_kickoff(run_dir: Path, target: str) -> None:
@@ -341,8 +323,14 @@ class PhaseManager:
                 f"click *Upload &amp; publish*.\n\n"
                 f"_Direct link:_ **[bundle.zip]({download_url})**\n\n"
                 f"---\n\n"
-                f"**Next:** click **Advance to Phase 3 — Validate** in the "
-                f"phase bar above to run the automated check framework against "
-                f"your bundle."
+                f"**Next — Phase 3 validation** runs the full check framework "
+                f"and **executes your bundle in Docker** using the "
+                f"`docker_image` from `competition.yaml` (~5–10 min for a "
+                f"verified bundle; it pulls the image if needed)."
             ),
+            actions=[cl.Action(
+                name="ac_advance_phase",
+                payload={"target": PHASE_VALIDATE},
+                label="▶ Proceed to Phase 3 — Validate the bundle",
+            )],
         ).send()
