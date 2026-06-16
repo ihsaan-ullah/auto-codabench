@@ -79,12 +79,16 @@ def test_doctor_exit_code(monkeypatch, capsys):
 
 def test_require_docker_blocks(monkeypatch, capsys):
     from autocodabench.cli import main as M
-    monkeypatch.setattr(M, "_require_docker", M._require_docker)  # ensure real fn
+    # A failing Docker check blocks build / plan-build-validate, and the message
+    # points at the prerequisites doc.
     monkeypatch.setattr(
         P, "check_docker",
         lambda: P.Check("Docker", "fail", True, "x", "no daemon", "install it"))
-    # skip=True always passes (and warns).
-    assert M._require_docker(skip=True) is True
-    # skip=False with a failing check blocks.
-    assert M._require_docker(skip=False) is False
-    assert "Docker is required" in capsys.readouterr().err
+    assert M._require_docker() is False
+    err = capsys.readouterr().err
+    assert "Docker is required" in err and M._PREREQS_URL in err
+    # A healthy Docker check lets it proceed.
+    monkeypatch.setattr(
+        P, "check_docker",
+        lambda: P.Check("Docker", "ok", True, "x", "ok", ""))
+    assert M._require_docker() is True

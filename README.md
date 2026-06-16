@@ -28,6 +28,23 @@ way software is tested: against an executable checklist before launch.
 > It must not be deleted on the HF side; the prose below it may be edited
 > freely.
 
+## Prerequisites
+
+`pip install -e .` installs all Python dependencies. Two phases also need
+**system tools pip cannot install**:
+
+- **Docker** (daemon running) — required for `build` and `validate --execute`,
+  which run a bundle inside its `docker_image` exactly as Codabench does.
+  Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  (macOS/Windows) or [Docker Engine](https://docs.docker.com/engine/install/)
+  (Linux) and start it.
+- **Node / `npx`** (OpenAlex research) and **git** (Agent SDK) — optional but
+  recommended.
+
+Run `autocodabench doctor` to check all three at once. Phase-1 planning and the
+keyless static validator need none of this — so the quickstart below runs as-is,
+and `validate` will simply point you here if Docker is missing.
+
 ## Quickstart (no API keys required)
 
 The following commands exercise the full pipeline without any LLM

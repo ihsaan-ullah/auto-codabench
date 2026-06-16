@@ -34,6 +34,11 @@ from pathlib import Path
 
 from .. import __version__
 
+# Where the human-readable prerequisites (Docker, Node/npx, git + install steps)
+# live. Surfaced in Docker-preflight messages so a user without Docker is pointed
+# straight at how to install it.
+_PREREQS_URL = "https://github.com/ktgiahieu/auto-codabench#prerequisites"
+
 
 def _require_live_claude_auth(backend_spec: str | None) -> bool:
     """Preflight before starting a live Claude session: if no auth path
@@ -151,15 +156,12 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         else:
             note = (f"Codabench will run this bundle inside the image above ({src}). "
                     "Static validation only (--no-execute): the bundle is not run.")
+        # When executing, this surfaces a loud, link-bearing warning if Docker
+        # isn't reachable — but does NOT block: static checks still run and the
+        # runtime checks report the missing-Docker error, so the user is informed
+        # and can choose to install Docker (see the link) and re-run, or proceed.
         _print_docker_preflight(image, required=args.execute, note=note)
         print()
-
-    # Executing validation runs the bundle in Docker — fail fast (consistent
-    # with build / plan-build-validate) when the daemon isn't reachable, instead
-    # of letting each run check error out one by one. Static validation
-    # (--no-execute) needs no Docker, so it is not gated.
-    if args.execute and not _require_docker():
-        return 2
 
     if args.judged and not _require_live_claude_auth(args.backend):
         return 2
@@ -393,6 +395,7 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
         print()
         for w in warn:
             print(f"WARNING: {w}", file=sys.stderr)
+        print(f"WARNING: prerequisites & install steps → {_PREREQS_URL}", file=sys.stderr)
     return p
 
 
@@ -974,15 +977,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
-def _require_docker(skip: bool = False) -> bool:
+def _require_docker() -> bool:
     """Fail fast — before any model spend — when Docker isn't ready for phase 2/3.
 
-    Returns True if the command may proceed (Docker ready, or explicitly skipped).
+    Used by `build` / `plan-build-validate`, where the build phase self-validates
+    inside Docker and proceeding without it only wastes model budget. Returns
+    True if the command may proceed. (`validate` deliberately does NOT call this —
+    its static checks are useful without Docker; it only warns.)
     """
-    if skip:
-        print("INFO: --skip-docker-check set; skipping the Docker preflight. Phase 2 "
-              "self-validation will fail later if no daemon is reachable.", file=sys.stderr)
-        return True
     from ..preflight import check_docker
 
     c = check_docker()
@@ -991,8 +993,8 @@ def _require_docker(skip: bool = False) -> bool:
               file=sys.stderr)
         print(f"   {c.detail}", file=sys.stderr)
         print(f"   fix: {c.hint}", file=sys.stderr)
-        print("   (run `autocodabench doctor` to check all prerequisites, or pass "
-              "--skip-docker-check to bypass.)", file=sys.stderr)
+        print(f"   prerequisites & install steps → {_PREREQS_URL}", file=sys.stderr)
+        print("   (run `autocodabench doctor` to check all prerequisites.)", file=sys.stderr)
         return False
     return True
 
