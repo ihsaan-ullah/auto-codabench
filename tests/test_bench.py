@@ -36,11 +36,45 @@ def test_audit_no_score_when_status_fail():
     assert "boom" in v["error_summary"]
 
 
-def test_audit_metric_mismatch():
-    final = {"status": "pass", "scores": {"accuracy": 0.9}}
+def test_audit_metric_mismatch_when_unresolvable():
+    # Several produced metrics, none matching the expected name (exact or
+    # normalized) and not a single score → genuinely unresolvable.
+    final = {"status": "pass", "scores": {"precision": 0.8, "recall": 0.7}}
     v = audit.audit_submission(final, EXPECTED)
     assert v["verdict"] == audit.METRIC_MISMATCH
     assert v["within_tolerance"] is False
+
+
+def test_audit_normalized_metric_name_match():
+    # Ground truth names the metric `*_metric`; the generated bundle drops the
+    # suffix. They should still be compared (the smoke-test failure mode).
+    expected = {"metric": "geometric_mean_accuracy_metric", "score": 0.0,
+                "tolerance": 0.001}
+    final = {"status": "pass", "scores": {"geometric_mean_accuracy": 6.8e-5,
+                                          "arithmetic_mean_accuracy": 0.35,
+                                          "worst_group_accuracy": 0}}
+    v = audit.audit_submission(final, expected)
+    assert v["verdict"] == audit.PASS
+    assert v["metric_match"] == "normalized"
+    assert v["metric_key"] == "geometric_mean_accuracy"
+
+
+def test_audit_sole_numeric_score_fallback():
+    # A bundle that reports exactly one numeric score: use it even if the name
+    # differs, and let the tolerance compare decide.
+    final = {"status": "pass", "scores": {"score": 0.905}}
+    v = audit.audit_submission(final, EXPECTED)   # EXPECTED metric=balanced_accuracy=0.90
+    assert v["metric_match"] == "sole"
+    assert v["verdict"] == audit.PASS
+
+
+def test_audit_exact_match_takes_precedence_over_normalized():
+    final = {"status": "pass",
+             "scores": {"balanced_accuracy": 0.905, "balanced_accuracy_metric": 0.0}}
+    v = audit.audit_submission(final, EXPECTED)
+    assert v["metric_match"] == "exact"
+    assert v["metric_key"] == "balanced_accuracy"
+    assert v["verdict"] == audit.PASS
 
 
 def test_audit_primary_score_key_precedence():

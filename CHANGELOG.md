@@ -117,6 +117,22 @@ All notable changes to autocodabench. Format follows
   bundle directory or zip, hand-written or generated.
 
 ### Fixed
+- **create-bench reformat phase could hang indefinitely.** A reformat agent
+  that launched a background training process plus a file-watch "monitor" and
+  ended its turn expecting an interactive notification would strand the run
+  forever (no `final.json`). The non-interactive reformat footer now forbids
+  background processes and requires synchronous, single-turn execution through
+  `autocodabench_run_user_submission`, and `reformat_and_run_async` gained a
+  wall-clock timeout (default 30 min) that fails the submission rather than
+  blocking. Found by the first live create-bench run.
+- **create-bench under-reported score fidelity on metric-name differences.**
+  The auditor matched the produced score by exact metric-key name, so a
+  freshly generated bundle that named its column `geometric_mean_accuracy`
+  scored 0 agreement against a ground truth named `geometric_mean_accuracy_metric`
+  even when the *number* matched within tolerance. `bench.audit.resolve_score`
+  now matches exact → normalized-name → sole-numeric and records which tier
+  matched (`metric_match`), so fidelity measures the reproduced score, not the
+  column name.
 - **Starting-kit notebook execution used an invalid command.** The runner
   invoked `jupyter execute --inplace --allow-errors=false`, but the pinned
   `nbclient` 0.7.4 exposes an argparse `jupyter execute` CLI with no

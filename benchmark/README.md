@@ -46,7 +46,12 @@ For one competition × one backbone (see `autocodabench_create_bench/run.py`):
 - **score fidelity** (the headline) — each ground-truth submission is adapted
   to the bundle and scored, then the produced score is compared to that
   submission's `expected_result.json` **within tolerance**. The
-  *score-agreement rate* is the fraction within tolerance.
+  *score-agreement rate* is the fraction within tolerance. The auditor matches
+  the produced metric to the expected one by exact key → normalized name
+  (e.g. `geometric_mean_accuracy` ≈ `geometric_mean_accuracy_metric`) →
+  sole-numeric score, so a numerically-correct bundle isn't penalized for
+  naming its column differently than the reference; the verdict records which
+  way it matched (`metric_match`).
 - **cost / turns**, and the **missing-information inventory** (what the model
   had to infer because the proposal didn't say).
 
