@@ -67,6 +67,11 @@ class AgentTask:
     #   {"kind": "tool_result", "is_error": bool, "preview": str}
     #   {"kind": "result", "num_turns": int, "cost_usd": float | None}
     on_event: Callable[[dict], None] | None = None
+    # Filesystem sandbox: when set, the agent's generic file tools (Read/Write/
+    # Edit/Glob/Grep/…) are confined to these roots and shell/network tools are
+    # denied — a code-enforced read boundary so a phase only ever touches the
+    # inputs it was given (see backends.sandbox). MCP tools are unaffected.
+    fs_roots: list[str] | None = None
 
 
 @runtime_checkable

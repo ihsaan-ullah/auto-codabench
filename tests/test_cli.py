@@ -21,7 +21,7 @@ _EVENTS = [
      "preview": "Cancelled: parallel tool call Bash(...) errored"},
     {"kind": "tool_use", "name": "mcp__autocodabench__autocodabench_log_event",
      "input": {"kind": "deviation", "message": "Removed multi_class; acc 0.92."}},
-    {"kind": "text", "text": "Internal reasoning the user need not see."},
+    {"kind": "text", "text": "Let me wire the scoring program next."},
     {"kind": "phase_done", "phase": "build", "ok": True, "num_turns": 23},
 ]
 
@@ -42,19 +42,22 @@ def test_default_renderer_is_user_oriented():
     # User-facing milestone + deviation messages are shown…
     assert "Wrote the scoring program." in out
     assert "Removed multi_class; acc 0.92." in out
-    # …but raw tool calls, raw errors, cancellations, and internal reasoning
-    # are suppressed.
+    # …tool calls are rendered as friendly actions (not raw tool ids)…
+    assert "Init bundle create" in out
     assert "init_bundle" not in out
+    # …the agent's narration is shown (it is the user-friendly story)…
+    assert "Let me wire the scoring program next." in out
+    # …but raw errors and benign parallel cancellations are suppressed.
     assert "TypeError" not in out
     assert "Cancelled" not in out
-    assert "Internal reasoning" not in out
 
 
 def test_debug_renderer_shows_full_trace_and_softens_cancellations():
     out = _render(_EVENTS, debug=True)
-    assert "init_bundle(create)" in out
+    assert "Init bundle create" in out             # friendly action…
+    assert "init_bundle" in out                    # …with the raw id kept greppable
     assert "TypeError" in out                      # genuine error shown
-    assert "Internal reasoning" in out             # narration shown
+    assert "Let me wire the scoring program next." in out  # narration shown
     assert "Cancelled" not in out                  # cascade is reworded…
     assert "retried" in out                        # …as a benign retry
 

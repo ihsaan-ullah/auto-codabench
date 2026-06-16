@@ -112,11 +112,46 @@ class ClaudeAgentBackend:
                 except Exception:  # a rendering bug must never kill the run
                     log.debug("on_event callback raised", exc_info=True)
 
+        # Filesystem sandbox (code-enforced read boundary). Under
+        # bypassPermissions the allowlist does not deny, so we add (a) a
+        # PreToolUse hook that denies escape tools and confines file tools to
+        # the declared roots — guardrail hooks run regardless of permission
+        # mode — and (b) disallowed_tools as a hard backstop for shells.
+        hooks = None
+        disallowed = None
+        if task.fs_roots:
+            from .sandbox import FsSandbox, _DENY_TOOLS
+            sandbox = FsSandbox(task.fs_roots)
+
+            async def _pre_tool_use(input_data, tool_use_id, context):
+                reason = sandbox.check(
+                    input_data.get("tool_name", ""),
+                    input_data.get("tool_input") or {})
+                if reason:
+                    log.info("sandbox denied %s: %s",
+                             input_data.get("tool_name"), reason)
+                    return {"hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    }}
+                return {}
+
+            try:
+                from claude_agent_sdk import HookMatcher
+                hooks = {"PreToolUse": [HookMatcher(hooks=[_pre_tool_use])]}
+            except ImportError:  # pragma: no cover - very old SDK
+                log.warning("SDK lacks HookMatcher; FS sandbox relies on "
+                            "disallowed_tools only")
+            disallowed = sorted(_DENY_TOOLS)
+
         options = ClaudeAgentOptions(
             model=task.model or self.model,
             system_prompt=task.system_prompt,
             mcp_servers=task.mcp_servers or {},
             allowed_tools=task.allowed_tools or [],
+            disallowed_tools=disallowed or [],
+            hooks=hooks,
             permission_mode=self.permission_mode,
             cwd=task.cwd,
             env=task.env or {},

@@ -195,98 +195,31 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
 # --- create: progress rendering -------------------------------------------
 
-def _short_tool_name(name: str) -> str:
-    """`mcp__autocodabench__autocodabench_write_scoring_program` → `write_scoring_program`."""
-    return name.split("__")[-1].replace("autocodabench_", "")
-
-
-def _tool_arg_summary(inp: dict) -> str:
-    """A short, identifying summary of a tool call's arguments for one line."""
-    if not isinstance(inp, dict) or not inp:
-        return ""
-    for key in ("name", "slug", "page", "filename", "path", "file_path",
-                "pattern", "spec_name", "kind"):
-        val = inp.get(key)
-        if isinstance(val, str) and val:
-            return f"({val})"
-    for val in inp.values():  # fall back to the first short scalar
-        if isinstance(val, str) and val:
-            return f"({val if len(val) <= 48 else val[:47] + '…'})"
-    return ""
-
-
-# Event kinds an agent uses to address the end user directly (via
-# `autocodabench_log_event(kind=..., message=...)`). These are surfaced in the
-# default, user-oriented view; "deviation" is highlighted as it reports a
-# departure from the locked plan.
-_USER_MESSAGE_KINDS = {"progress", "milestone", "status", "deviation"}
-
-
-def _is_parallel_cancellation(text: str) -> bool:
-    """A tool result that is a sibling-cancellation, not a genuine failure:
-    when one call in a parallel batch errors, the runtime cancels the others."""
-    low = (text or "").lower()
-    return "cancelled" in low and "parallel tool call" in low
-
-
 def _make_progress_renderer(*, debug: bool = False):
     """Return an `on_event` callback that renders pipeline progress.
 
-    Two registers share one renderer:
-
-    - **default** (``debug=False``) — a concise, user-oriented narrative:
-      phase headers, the milestone messages the agent emits for the user
-      (plain-language progress and deviation notices), and phase completion.
-      Raw tool calls, raw tool output, and the agent's internal reasoning are
-      omitted, as is the benign cancellation of parallel sibling calls.
-    - **debug** (``debug=True``) — the full developer trace: every tool call
-      with its arguments, tool errors (cancellations marked as benign
-      retries), and the agent's narration. Intended for diagnosing the
-      pipeline rather than routine use.
+    Thin shim over :class:`autocodabench.cli.progress.ProgressUI` — the live
+    spinner animates only inside the ``with`` block (see
+    :func:`_run_with_progress`); used bare, this is just the per-step renderer.
     """
-    bar = "─" * 60
+    from .progress import ProgressUI
+    return ProgressUI(debug=debug).on_event
 
-    def render(ev: dict) -> None:
-        kind = ev.get("kind")
-        if kind == "phase":
-            print(f"\n{bar}")
-            print(f" Phase {ev.get('index')}/{ev.get('total')} · {ev.get('title')}")
-            if debug and ev.get("detail"):
-                print(f" {ev['detail']}")
-            print(bar, flush=True)
-        elif kind == "phase_done":
-            mark = "✓" if ev.get("ok") else "✗"
-            turns = ev.get("num_turns")
-            tail = f" · {turns} turns" if (debug and turns) else ""
-            print(f"  {mark} {ev.get('phase')} phase complete{tail}", flush=True)
-        elif kind == "tool_use":
-            name = _short_tool_name(ev.get("name", "?"))
-            inp = ev.get("input") or {}
-            if name == "log_event":
-                message = inp.get("message")
-                ekind = (inp.get("kind") or "").lower()
-                if message and ekind in _USER_MESSAGE_KINDS:
-                    bullet = "⚠" if ekind == "deviation" else "•"
-                    print(f"  {bullet} {message}", flush=True)
-                elif debug:
-                    print(f"  ⏺ log_event({ekind})", flush=True)
-            elif debug:
-                print(f"  ⏺ {name}{_tool_arg_summary(inp)}", flush=True)
-        elif kind == "tool_result" and ev.get("is_error"):
-            preview = ev.get("preview") or "tool error"
-            if _is_parallel_cancellation(preview):
-                if debug:
-                    print("      ↻ retried (a parallel sibling call was "
-                          "cancelled — not a failure)", flush=True)
-            elif debug:
-                print(f"      ↳ ⚠ {preview}", flush=True)
-        elif kind == "text" and debug:
-            text = (ev.get("text") or "").strip()
-            if text:
-                for line in textwrap.wrap(text, width=84) or [""]:
-                    print(f"  │ {line}", flush=True)
 
-    return render
+def _run_with_progress(make_coro, *, debug: bool, quiet: bool):
+    """Run an agent pipeline coroutine while showing live progress.
+
+    ``make_coro(on_event)`` builds the awaitable given the progress callback (or
+    ``None`` when quiet). The animated status line only moves on a TTY;
+    redirected output falls back to plain, scrollable lines. The context manager
+    restores the cursor even if the run raises or is interrupted.
+    """
+    from .progress import ProgressUI
+    if quiet:
+        print("\n(running quietly — omit --quiet to see step-by-step progress)\n")
+        return asyncio.run(make_coro(None))
+    with ProgressUI(debug=debug) as ui:
+        return asyncio.run(make_coro(ui.on_event))
 
 
 def _bundle_docker_image(bundle_dir) -> str | None:
@@ -537,21 +470,19 @@ def _cmd_create(args: argparse.Namespace) -> int:
             print(file=sys.stderr)
             return _abort()
 
-    renderer = None if args.quiet else _make_progress_renderer(debug=debug)
-    if renderer is None:
-        print("\n(running quietly — omit --quiet to see step-by-step progress)\n")
-
-    result = asyncio.run(create_async(
-        args.idea,
-        data=args.data,
-        pdf=args.pdf,
-        backend=backend,
-        model=args.model,
-        max_budget_usd=args.max_budget_usd,
-        on_event=renderer,
-        validate=not args.no_validate,
-        session=session,
-    ))
+    result = _run_with_progress(
+        lambda on_event: create_async(
+            args.idea,
+            data=args.data,
+            pdf=args.pdf,
+            backend=backend,
+            model=args.model,
+            max_budget_usd=args.max_budget_usd,
+            on_event=on_event,
+            validate=not args.no_validate,
+            session=session,
+        ),
+        debug=debug, quiet=args.quiet)
 
     print("\n" + "═" * 60)
     print("Done.")
@@ -660,17 +591,17 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             print(file=sys.stderr)
             return _abort()
 
-    renderer = None if args.quiet else _make_progress_renderer(debug=debug)
-
-    result = asyncio.run(plan_async(
-        args.idea,
-        data=args.data,
-        pdf=args.pdf,
-        backend=backend,
-        model=args.model,
-        max_budget_usd=args.max_budget_usd,
-        on_event=renderer,
-    ))
+    result = _run_with_progress(
+        lambda on_event: plan_async(
+            args.idea,
+            data=args.data,
+            pdf=args.pdf,
+            backend=backend,
+            model=args.model,
+            max_budget_usd=args.max_budget_usd,
+            on_event=on_event,
+        ),
+        debug=debug, quiet=args.quiet)
 
     print("\n" + "═" * 60)
     print("Done." if result.ok else "Planning failed.")
@@ -796,16 +727,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
             print(file=sys.stderr)
             return _abort()
 
-    renderer = None if args.quiet else _make_progress_renderer(debug=debug)
-
-    result = asyncio.run(bundle_async(
-        **bundle_kwargs,
-        backend=backend,
-        model=args.model,
-        max_budget_usd=args.max_budget_usd,
-        validate=not args.no_validate,
-        on_event=renderer,
-    ))
+    result = _run_with_progress(
+        lambda on_event: bundle_async(
+            **bundle_kwargs,
+            backend=backend,
+            model=args.model,
+            max_budget_usd=args.max_budget_usd,
+            validate=not args.no_validate,
+            on_event=on_event,
+        ),
+        debug=debug, quiet=args.quiet)
 
     print("\n" + "═" * 60)
     print("Done." if result.ok else "Bundle creation failed.")
