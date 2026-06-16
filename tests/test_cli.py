@@ -101,6 +101,34 @@ def test_table_detection_helpers():
     assert _strip_md("**bold** and `code`") == "bold and code"
 
 
+def test_status_glyphs_are_colorized_on_tty():
+    from autocodabench.cli.progress import _colorize_glyphs, _GREEN, _YELLOW, _RED
+    out = _colorize_glyphs("✓ ⚠ ✗")
+    assert _GREEN in out and _YELLOW in out and _RED in out
+    # Non-glyph text is untouched.
+    assert _colorize_glyphs("plain") == "plain"
+
+
+def test_provenance_table_renders_with_glyphs():
+    from autocodabench.cli.progress import ProgressUI, _GREEN, _RED
+    import io, contextlib
+    text = (
+        "| # | Dimension | Status | Origin |\n"
+        "|---|---|---|---|\n"
+        "| 1 | Task | ✓ | proposal §2 |\n"
+        "| 3 | Metric | ✗ | inferred |\n"
+    )
+    ui = ProgressUI(debug=False)
+    ui.animate = True  # force ANSI so glyph colors are emitted
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ui._on_text({"text": text})
+    out = buf.getvalue()
+    assert "┌" in out and "Dimension" in out          # drawn as a box
+    assert _GREEN in out and _RED in out               # ✓ green, ✗ red
+    assert "|---|" not in out                           # separator not echoed
+
+
 def test_checks_list(capsys):
     assert main(["checks", "list"]) == 0
     out = capsys.readouterr().out

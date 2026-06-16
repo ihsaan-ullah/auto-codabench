@@ -100,10 +100,24 @@ def _one_line(text: Any, width: int) -> str:
 
 _MD_EMPH = re.compile(r"\*\*|__|`")
 
+# Status glyphs the planner emits in the provenance/coverage table, coloured in
+# the terminal: ✓ green (specified), ⚠ yellow (partial/assumption), ✗ red
+# (inferred). Variation selectors (e.g. ⚠️) are tolerated. Colouring wraps the
+# glyph in zero-width ANSI, so column alignment (computed on the plain text) is
+# preserved.
+_GLYPH_COLORS = {"✓": _GREEN, "✔": _GREEN, "⚠": _YELLOW, "✗": _RED, "✘": _RED, "❌": _RED}
+_GLYPH_RE = re.compile("([" + "".join(_GLYPH_COLORS) + "]️?)")
+
 
 def _strip_md(cell: str) -> str:
     """Drop the inline emphasis markers a terminal cell can't render."""
     return _MD_EMPH.sub("", cell or "").strip()
+
+
+def _colorize_glyphs(text: str) -> str:
+    """Wrap ✓/⚠/✗ status glyphs in their colour (TTY only — caller-gated)."""
+    return _GLYPH_RE.sub(
+        lambda m: f"{_GLYPH_COLORS[m.group(1)[0]]}{m.group(1)}{_RESET}", text)
 
 
 def _table_cells(line: str) -> list[str] | None:
@@ -174,6 +188,8 @@ def _render_md_table(header: list[str], rows: list[list[str]], max_width: int,
                 seg = (wrapped[c][li] if li < len(wrapped[c]) else "").ljust(widths[c])
                 if head and bold:
                     seg = f"{_BOLD}{seg}{_RESET}"
+                elif bold:  # body cell on a TTY — colour any status glyphs
+                    seg = _colorize_glyphs(seg)
                 parts.append(f" {seg} ")
             out.append(indent + bar + bar.join(parts) + bar)
         return out

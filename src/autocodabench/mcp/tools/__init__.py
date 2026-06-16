@@ -5,3 +5,4 @@ from . import validate  # noqa: F401
 from . import package  # noqa: F401
 from . import upload  # noqa: F401
 from . import runner  # noqa: F401
+from . import research  # noqa: F401 — first-party Kaggle competition discovery

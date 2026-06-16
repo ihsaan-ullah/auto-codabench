@@ -9,24 +9,41 @@ All notable changes to autocodabench. Format follows
 ### Added
 - **Phase-1 research capability** (`autocodabench.agent.research`): the plan
   phase can now consult external knowledge instead of the backbone's training
-  data alone — the **OpenAlex** MCP (`alex-mcp`) for recent related
-  competition/benchmark papers (NeurIPS Competition / Datasets & Benchmarks
-  tracks), the official **Kaggle** MCP (`kaggle-mcp`) for how similar
-  competitions are hosted, and the agent's **web search**. On by default; the
-  CLI shows each source's status in the pre-run config banner and exposes
-  `--no-research` (all off) plus `--no-openalex` / `--no-kaggle` /
-  `--no-web-search`. Servers launch via `uvx` by default, overridable per
-  source with `AUTOCODABENCH_OPENALEX_MCP_CMD` / `AUTOCODABENCH_KAGGLE_MCP_CMD`;
-  a missing launcher degrades gracefully (source marked unavailable, the plan
-  still runs). Kaggle reads **public** competitions only — no private key
-  required (a shared throw-away token is used unless you set `KAGGLE_API_TOKEN`
-  or `~/.kaggle/access_token`); OpenAlex needs only a courtesy contact email.
-  **Benchmark fairness:** only the Claude backend can host external MCP / web
-  tools, so create-bench records, per run, which sources the backbone could
-  actually use (`research.backend_supported` / `research.effective`) — the
-  asymmetry is recorded, not hidden. The network tools (`WebSearch`/`WebFetch`)
-  are gated past the filesystem sandbox only for a research-granted plan phase;
+  data alone, across three sources with deliberate diversity (web search is
+  demoted to a last resort because it is single-source and easily biased):
+  - **OpenAlex** — recent related competition/benchmark papers (NeurIPS
+    Competition / Datasets & Benchmarks tracks), via the external
+    [`openalex-research-mcp`](https://github.com/oksure/openalex-research-mcp)
+    server (topic/keyword works search, related-works, `top_ai_conferences`
+    venue preset). Launched with `npx`; keyless (a courtesy email is polite).
+  - **Kaggle** — how similar competitions are actually hosted (metric,
+    submission caps, team-size limits, phase deadlines, full description/rules
+    pages), via **first-party** tools in the autocodabench MCP server
+    (`autocodabench_search_kaggle_competitions` / `..._get_kaggle_competition`,
+    wrapping the Kaggle SDK). Public competitions only — no private key required
+    (a shared throw-away token is used unless you set `KAGGLE_API_TOKEN` or have
+    `~/.kaggle/`). Needs the `kaggle` package: `pip install autocodabench[research]`.
+  - **Web search** (`WebSearch`/`WebFetch`) — last resort, for narrow factual
+    lookups the structured sources can't answer.
+
+  On by default; the CLI shows each source's status in the pre-run config banner
+  and exposes `--no-research` (all off) plus `--no-openalex` / `--no-kaggle` /
+  `--no-web-search`. The OpenAlex launcher is overridable via
+  `AUTOCODABENCH_OPENALEX_MCP_CMD`; a missing launcher/package degrades
+  gracefully (source marked unavailable, the plan still runs). **Benchmark
+  fairness:** only the Claude backend can host external MCP / web tools, so
+  create-bench records, per run, which sources the backbone could actually use
+  (`research.backend_supported` / `research.effective`) — the asymmetry is
+  recorded, not hidden. The network tools (`WebSearch`/`WebFetch`) are gated
+  past the filesystem sandbox only for a research-granted plan phase;
   shells/`Task` stay denied.
+- **Provenance & coverage table at end of Phase 1**: the plan hand-off now
+  leads with a table that, for each of the seven design dimensions, marks
+  whether the decision was specified by the source material (**✓**), partially
+  specified (**⚠**), or inferred by the planner (**✗**), naming the evidence
+  consulted — so a reviewer sees how much of the design rests on their input
+  versus planner inference. The CLI renderer colours the glyphs (green/yellow/
+  red). Phase-1 hand-off text is now written in measured scientific prose.
 
 ### Changed
 - **`create` renamed to `plan-build-validate`** — the all-three-phases command

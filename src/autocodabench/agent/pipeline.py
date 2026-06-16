@@ -223,6 +223,12 @@ async def create_async(
     research_resolved = _resolve_research(rc, backend=backend)
     p1 = open_run(slug="create", phase="phase1_plan", **sid_kw)
     env, mcp_servers = _phase_env(p1.path)
+    # Inject research env (e.g. the Kaggle token) into BOTH the phase env and the
+    # autocodabench MCP server subprocess (which serves the first-party Kaggle
+    # tools), then add any external research servers (OpenAlex).
+    if research_resolved.env:
+        env = {**env, **research_resolved.env}
+        mcp_servers["autocodabench"]["env"].update(research_resolved.env)
     mcp_servers = {**mcp_servers, **research_resolved.servers}
     emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
           "title": "Planning the competition design",
@@ -393,8 +399,12 @@ async def plan_async(
 
     info = open_run(slug="plan")
     run_dir = info.path
-    mcp_servers = {**_mcp_servers(run_dir), **research_resolved.servers}
+    mcp_servers = _mcp_servers(run_dir)
     env = {**os.environ, "AUTOCODABENCH_RUN_DIR": str(run_dir)}
+    if research_resolved.env:
+        env = {**env, **research_resolved.env}
+        mcp_servers["autocodabench"]["env"].update(research_resolved.env)
+    mcp_servers = {**mcp_servers, **research_resolved.servers}
 
     plan_prompt = (
         "Open the run with autocodabench_open_run, then produce the "

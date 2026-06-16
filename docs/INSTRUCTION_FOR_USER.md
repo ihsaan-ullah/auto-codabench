@@ -203,19 +203,29 @@ where the output should go and confirms before starting.
 
 **Phase-1 research.** The banner also shows which external knowledge sources
 the planner may consult so the design is grounded in what already exists rather
-than the model's training data alone: **OpenAlex** (recent related competition /
-benchmark papers), **Kaggle** (how similar competitions are hosted), and **web
-search**. All on by default; turn them off with `--no-research` (all) or
-`--no-openalex` / `--no-kaggle` / `--no-web-search` (individually). These are a
-**Claude-only** capability — OpenAI-compatible / Ollama backbones cannot host the
-external MCP servers or web tools, and the banner says so. Kaggle reads **public**
-competitions only and needs no key from you (a shared throw-away token is used
-unless you set `KAGGLE_API_TOKEN` or save your own to `~/.kaggle/access_token`,
-generated at <https://www.kaggle.com/settings/api>); OpenAlex needs only a
-courtesy email. The servers launch via `uvx` (install [`uv`](https://docs.astral.sh/uv/)),
-overridable per source with `AUTOCODABENCH_OPENALEX_MCP_CMD` /
-`AUTOCODABENCH_KAGGLE_MCP_CMD`; if the launcher is missing the source is marked
-unavailable and the plan proceeds without it.
+than the model's training data alone:
+- **OpenAlex** — recent related competition / benchmark papers (topic search,
+  related works, top-AI-conference venue preset), via the external
+  `openalex-research-mcp` server launched with `npx` (install
+  [Node/npx](https://nodejs.org/); overridable with
+  `AUTOCODABENCH_OPENALEX_MCP_CMD`). Keyless; OpenAlex appreciates a courtesy
+  email (`OPENALEX_EMAIL`).
+- **Kaggle** — how similar competitions are hosted (metric, submission caps,
+  team-size limits, deadlines, full rules pages), via first-party tools that
+  wrap the Kaggle SDK. Install with `pip install autocodabench[research]`. Reads
+  **public** competitions only and needs no key from you — a shared throw-away
+  token is used unless you set `KAGGLE_API_TOKEN` (or have `~/.kaggle/`), with
+  your own token from <https://www.kaggle.com/settings/api>.
+- **Web search** — a last resort (single-source, easily biased); the planner is
+  instructed to prefer OpenAlex and Kaggle for related-work discovery.
+
+All on by default; turn them off with `--no-research` (all) or `--no-openalex` /
+`--no-kaggle` / `--no-web-search` (individually). Research is a **Claude-only**
+capability — OpenAI-compatible / Ollama backbones cannot host the external MCP
+server or web tools, and the banner says so. A missing launcher/package marks
+that source unavailable and the plan proceeds without it. Phase 1 ends with a
+**provenance table** (✓ specified by your input · ⚠ partially · ✗ inferred by the
+planner) so you can see at a glance which decisions warrant your review.
 
 The run reports progress at one of three levels of detail:
 

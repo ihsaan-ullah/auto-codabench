@@ -42,6 +42,13 @@ dev = [
     "pytest>=7.3.1",
     "pytest-asyncio>=0.21.0",
 ]
+# Phase-1 research sources. `kaggle` powers the first-party Kaggle competition
+# tools (search + full description) in the MCP server; it is imported lazily so
+# the keyless validator/replay paths never load it. The OpenAlex source uses the
+# external `openalex-research-mcp` server via `npx` (Node, no Python dep).
+research = [
+    "kaggle>=1.6",
+]
 
 [project.urls]
 Homepage = "https://github.com/ktgiahieu/auto-codabench"
