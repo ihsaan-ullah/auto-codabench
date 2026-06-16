@@ -20,6 +20,11 @@ from .base import (
 )
 from .facts import CompetitionFacts
 from .report import ValidationReport, checklist_coverage
+from .render import (
+    load_design_assessment,
+    render_judged_section,
+    render_report_markdown,
+)
 
 __all__ = [
     "Check",
@@ -32,7 +37,10 @@ __all__ = [
     "Tier",
     "ValidationReport",
     "checklist_coverage",
+    "load_design_assessment",
     "register",
+    "render_judged_section",
+    "render_report_markdown",
     "validate_bundle_path",
     "validate_bundle_path_async",
 ]

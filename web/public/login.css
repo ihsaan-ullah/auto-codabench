@@ -352,41 +352,32 @@ button[data-ac-impl-button="cancel"] {
     font-weight: 700;
 }
 
-/* Completed phase, click to revise. */
-.ac-pp-locked {
-    cursor: pointer;
-    color: rgba(255, 255, 255, 0.78);
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.10);
-}
-.ac-pp-locked:hover {
-    background: rgba(255, 255, 255, 0.14);
-    color: #fff;
-    transform: translateY(-0.5px);
+/* Completed phase (artifact produced). Progress-only — not clickable. */
+.ac-pp-done {
+    color: #bbf7d0;
+    background: rgba(34, 197, 94, 0.16);
+    border-color: rgba(34, 197, 94, 0.30);
 }
 
-/* Pending phase. Becomes clickable + accented when state.next +
- * can_advance — the JS adds the same class but a ▶ glyph appears in
- * the label, so the user has a visual cue without an extra button. */
+/* Skipped phase (user started later in the pipeline, e.g. validate-only). */
+.ac-pp-skipped {
+    color: rgba(255, 255, 255, 0.32);
+    background: rgba(255, 255, 255, 0.04);
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* Upcoming phase. */
 .ac-pp-pending {
     color: rgba(255, 255, 255, 0.40);
 }
-.ac-pp-pending[title^="Click to advance"] {
-    color: #fff;
-    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
-    border-color: rgba(255, 255, 255, 0.18);
-    cursor: pointer;
-    box-shadow: 0 1px 4px rgba(37, 99, 235, 0.45);
-}
-.ac-pp-pending[title^="Click to advance"]:hover {
-    filter: brightness(1.08);
-    transform: translateY(-0.5px);
-}
 
-/* Red-outline pulse on the Readme button. Triggered by chat.js when
- * the user clicks a phase pill that can't do anything yet — the
- * implicit nudge to "check Readme to learn how the bar works".
- * 3 short pulses over 3 s, then auto-stripped by chat.js. */
+/* Non-active pills are progress-only; clicking flashes the Readme. */
+.ac-pp-hint { cursor: help; }
+
+/* Red-outline pulse on the Readme button. Triggered by chat.js when the user
+ * clicks a progress-only phase pill — the nudge to read how the bar works.
+ * 3 short pulses over ~3 s, then auto-stripped by chat.js. */
 @keyframes ac-readme-flash-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.8); outline-color: #dc2626; }
     40%  { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);  outline-color: #dc2626; }
@@ -398,6 +389,14 @@ button[data-ac-impl-button="cancel"] {
     outline-offset: 2px !important;
     border-radius: 6px !important;
     animation: ac-readme-flash-pulse 1s ease-out 3 !important;
+}
+
+/* Attach-only composer (Option B — validate an existing bundle): typing is
+ * disabled (readOnly) but the file-attach + send buttons stay usable. */
+textarea.ac-attach-only {
+    opacity: 0.75;
+    cursor: not-allowed;
+    background: rgba(127, 127, 127, 0.06);
 }
 
 

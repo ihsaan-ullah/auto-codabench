@@ -111,4 +111,25 @@ def test_report_markdown_renders(demo_bundle):
     report = validate_bundle_path(demo_bundle)
     md = report.to_markdown()
     assert "Bundle validation" in md
-    assert "Attestations required" in md
+    # Unified status-table format (shared by CLI + web): a Checks table with
+    # status emoji; attestations surface as 📋 rows rather than a prose header.
+    assert "## 🔎 Checks" in md
+    assert "📋" in md
+
+
+def test_report_markdown_design_scorecard(demo_bundle):
+    """A passed-in design assessment renders the Phase-1 scorecard (Table A)."""
+    report = validate_bundle_path(demo_bundle)
+    assessment = {
+        "schema_version": 1,
+        "sections": [
+            {"id": 1, "key": "task", "name": "Task formulation",
+             "status": "ok", "note": "clear"},
+            {"id": 2, "key": "data", "name": "Data & splits",
+             "status": "missing", "note": "no split"},
+        ],
+    }
+    md = report.to_markdown(design_assessment=assessment)
+    assert "Design assessment" in md
+    assert "Task formulation" in md
+    assert "❌" in md  # the 'missing' section

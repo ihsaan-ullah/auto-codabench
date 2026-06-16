@@ -101,17 +101,6 @@ async def on_chat_end():
 
 @cl.action_callback("ac_advance_phase")
 async def on_advance_phase(action: cl.Action):
+    """Backs the explicit '▶ Proceed to Phase N' buttons surfaced at phase boundaries."""
     target = (action.payload or {}).get("target")
     await PhaseManager.advance_to_phase(str(target))
-
-
-@cl.action_callback("ac_revert_phase")
-async def on_revert_phase(action: cl.Action):
-    target = (action.payload or {}).get("target")
-    await PhaseManager.revert_to_phase(str(target))
-
-
-@cl.action_callback("ac_build_bundle")
-async def on_build_bundle(action: cl.Action):
-    """Legacy callback kept so any stale rendered message buttons still work."""
-    await PhaseManager.advance_to_phase("bundle")

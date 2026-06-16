@@ -32,9 +32,10 @@
 (function () {
     "use strict";
 
-    // The first stable line of the greeting (set in web/app.py). When this
-    // appears in the DOM we know on_chat_start has finished.
-    const READY_PHRASE = "Tell me a competition idea";
+    // Stable greeting phrases (set in web/session_manager.py). When any
+    // appears in the DOM we know on_chat_start has finished and can release
+    // the init lock. Option A uses the first; Option B (validate) the second.
+    const READY_PHRASES = ["Tell me a competition idea", "Attach your bundle"];
 
     // Short, tool-agnostic legend inserted into each expanded step. Kept
     // compact on purpose: the user expands a tool to see the JSON, not to
@@ -134,7 +135,8 @@
     // ---------------------------------------------------------------
     function syncInitGate() {
         const onChatPage = !!document.querySelector("textarea");
-        const isReady = document.body.textContent.includes(READY_PHRASE);
+        const bodyText = document.body.textContent;
+        const isReady = READY_PHRASES.some((p) => bodyText.includes(p));
 
         // -- banner --
         let banner = document.getElementById("ac-init-banner");
@@ -173,63 +175,42 @@
     }
 
     // ---------------------------------------------------------------
-    // (5) Tag the phase-switch action buttons by their label text so
-    //     CSS can style / hide them. The labels are stable — they come
-    //     from app.py's cl.Action(label=...) constants.
+    // (4b) Attach-only input mode (Option B — validate an existing bundle).
     //
-    // The new 3-phase model uses synthetic label prefixes
-    // (AC_ADVANCE::<phase>, AC_REVERT::<phase>) so chat.js can find
-    // them deterministically and simulate clicks from the phase-bar
-    // pill interactions. We tag them with data attributes here and
-    // hide them via CSS.
+    // The server sets `input_mode` in phase_state.json:
+    //   "normal"      — full composer (default).
+    //   "attach_only" — typing disabled, but the file-attach + send buttons
+    //                   stay usable so the user can upload a .zip and send.
+    //   "locked"      — same as attach_only visually (validation in flight).
+    // We use `readOnly` (not `disabled`) so the paperclip/send stay active.
+    // window.__acInputMode is refreshed by the phase_state poll.
     // ---------------------------------------------------------------
-    function tagPhaseActions() {
-        document.querySelectorAll("button").forEach((btn) => {
-            const t = (btn.textContent || "").trim();
-            if (!t) return;
-
-            // Legacy 2-phase buttons (kept for completeness, the new
-            // model doesn't emit these anymore).
-            if (!btn.dataset.acImplButton) {
-                if (t.startsWith("🛠 START IMPLEMENTATION")) {
-                    btn.dataset.acImplButton = "primary";
-                } else if (t.startsWith("✅ YES — switch to IMPLEMENTATION")) {
-                    btn.dataset.acImplButton = "confirm";
-                } else if (t.startsWith("❌ Cancel — keep planning")) {
-                    btn.dataset.acImplButton = "cancel";
+    const _ATTACH_PH = "Attach your bundle .zip and press send →";
+    function syncInputMode() {
+        if (!document.querySelector("textarea")) return;  // login page
+        const mode = window.__acInputMode || "normal";
+        const restrict = (mode === "attach_only" || mode === "locked");
+        document.querySelectorAll("textarea").forEach((el) => {
+            if (restrict) {
+                if (!el.readOnly) el.readOnly = true;
+                el.classList.add("ac-attach-only");
+                // Save the real placeholder once so we can restore it later.
+                if (el.dataset.acOrigPh === undefined) {
+                    el.dataset.acOrigPh = el.placeholder || "";
                 }
-            }
-
-            // 3-phase model: hidden navigation buttons. Match both the
-            // "AC_ADVANCE::kit" / "AC_REVERT::plan" forms.
-            if (!btn.dataset.acPhaseNav) {
-                const m = t.match(/^AC_(ADVANCE|REVERT)::([a-z]+)/);
-                if (m) {
-                    btn.dataset.acPhaseNav  = m[1].toLowerCase();  // advance|revert
-                    btn.dataset.acPhaseTarget = m[2];              // plan|kit|bundle
+                if (el.placeholder !== _ATTACH_PH) el.placeholder = _ATTACH_PH;
+            } else {
+                if (el.readOnly) el.readOnly = false;
+                el.classList.remove("ac-attach-only");
+                // Restore the original placeholder so the attach prompt doesn't
+                // linger after switching back to a normal composer (New Chat).
+                if (el.placeholder === _ATTACH_PH) {
+                    el.placeholder = el.dataset.acOrigPh || "";
                 }
+                if (el.dataset.acOrigPh !== undefined) delete el.dataset.acOrigPh;
             }
         });
     }
-
-    // Click the hidden cl.Action matching (kind, target). Walks the
-    // DOM bottom-up so we always pick the most recent button if
-    // Chainlit happened to leave older ones around.
-    function _clickHiddenPhaseNav(kind, target) {
-        const btns = Array.from(document.querySelectorAll(
-            `button[data-ac-phase-nav="${kind}"][data-ac-phase-target="${target}"]`
-        ));
-        if (btns.length === 0) {
-            console.warn("[autocodabench] no hidden phase-nav button for",
-                kind, target);
-            return false;
-        }
-        const target_btn = btns[btns.length - 1];
-        try { target_btn.click(); return true; }
-        catch (e) { console.error("[autocodabench] phase-nav click failed", e);
-                    return false; }
-    }
-
 
     // ---------------------------------------------------------------
     // (5b) PHASE PILLS in the Chainlit header strip.
@@ -298,15 +279,12 @@
         host.insertBefore(pills, host.firstChild);
     }
 
-    // Locate the Readme link in the header (same heuristic as
-    // _findHeaderHost). Cached after first hit.
+    // Locate the Readme link in the header. Cached after first hit.
     function _findReadmeButton() {
-        if (window.__acReadmeBtn
-            && document.body.contains(window.__acReadmeBtn)) {
+        if (window.__acReadmeBtn && document.body.contains(window.__acReadmeBtn)) {
             return window.__acReadmeBtn;
         }
-        const all = document.querySelectorAll("a, button");
-        for (const el of all) {
+        for (const el of document.querySelectorAll("a, button")) {
             if ((el.textContent || "").trim() === "Readme") {
                 window.__acReadmeBtn = el;
                 return el;
@@ -315,21 +293,15 @@
         return null;
     }
 
-    // Flash a red outline on the Readme button for a few seconds. Used
-    // when the user clicks a pill that can't do anything yet — the
-    // implicit nudge is "see Readme for how the bar works". CSS handles
-    // the animation; we just toggle the class.
+    // Flash a red outline on the Readme button. Triggered when the user clicks
+    // a progress-only phase pill — the nudge is "phases advance via the chat
+    // Proceed buttons; see the Readme to learn the flow".
     function _flashReadmeForHelp() {
         const btn = _findReadmeButton();
         if (!btn) return;
         btn.classList.remove("ac-readme-flash");
-        // Force a reflow so the class is re-added cleanly (otherwise
-        // rapid repeat clicks don't restart the animation).
-        void btn.offsetWidth;
+        void btn.offsetWidth;  // restart the animation on rapid repeat clicks
         btn.classList.add("ac-readme-flash");
-        // Auto-strip the class so a one-off click doesn't leave a
-        // permanent outline once the animation ends. Match the CSS
-        // animation duration (3 s).
         setTimeout(() => btn.classList.remove("ac-readme-flash"), 3200);
     }
 
@@ -346,84 +318,43 @@
             );
             if (!r.ok) return;
             const state = await r.json();
-            // Skip rebuilds when phase status hasn't changed (don't
-            // re-render on every cost/ctx tick).
+
+            // Cache the input mode for syncInputMode() (attach-only lock).
+            window.__acInputMode = state.input_mode || "normal";
+
+            // Pills are PROGRESS-ONLY: the guided wizard advances phases via
+            // explicit "Proceed" buttons in chat, not by clicking pills.
             const sig = JSON.stringify({
                 cur:   state.current,
-                nxt:   state.next,
-                can:   state.can_advance,
+                mode:  window.__acInputMode,
                 items: (state.phases || []).map((x) => [x.id, x.status]),
             });
             if (sig === _lastPhasePillsSig) return;
             _lastPhasePillsSig = sig;
 
+            const ICON = {active: " ●", done: " ✓", skipped: " ⤼", pending: ""};
+            const TIP  = {
+                active:  "In progress",
+                done:    "Completed",
+                skipped: "Skipped (you started later in the pipeline)",
+                pending: "Upcoming",
+            };
             pillsHost.innerHTML = "";
             (state.phases || []).forEach((ph, idx) => {
-                const pill = document.createElement("button");
-                pill.type = "button";
+                const pill = document.createElement("span");
                 pill.className = "ac-pp ac-pp-" + ph.status;
                 pill.dataset.phaseId     = ph.id;
                 pill.dataset.phaseStatus = ph.status;
-                const isAdvanceTarget =
-                    (ph.status === "pending"
-                     && state.next === ph.id
-                     && state.can_advance);
-                const num = idx + 1;
-                const lockIcon = (ph.status === "locked") ? " 🔒" : "";
-                const advIcon  = isAdvanceTarget ? " ▶" : "";
-                pill.textContent = `${num}. ${ph.title}${lockIcon}${advIcon}`;
-                // Tooltips + click behavior:
+                pill.textContent = `${idx + 1}. ${ph.title}${ICON[ph.status] || ""}`;
                 if (ph.status === "active") {
-                    pill.title = "Currently in " + ph.title;
-                    // Active pill — clicking it doesn't go anywhere, but
-                    // users tend to click their current phase to "open"
-                    // something. Flash the Readme so they learn the bar.
-                    pill.addEventListener("click", _flashReadmeForHelp);
-                } else if (ph.status === "locked") {
-                    pill.title = "Click to revise " + ph.title +
-                        " (discards everything after this phase)";
-                    pill.addEventListener("click", () => {
-                        const curName = (state.phases || []).find(
-                            (x) => x.id === state.current)?.title
-                            || state.current;
-                        const ok = confirm(
-                            "« BACK to " + ph.title + "\n\n" +
-                            "This will REOPEN " + ph.title + " for editing " +
-                            "and DISCARD the " + curName + " artifact " +
-                            "(it will be regenerated next time you " +
-                            "advance forward). The " + ph.title +
-                            " content itself is preserved so you can " +
-                            "edit it in place.\n\n" +
-                            "Continue?");
-                        if (!ok) return;
-                        _clickHiddenPhaseNav("revert", ph.id);
-                    });
-                } else if (isAdvanceTarget) {
-                    pill.title = "Click to advance to " + ph.title;
-                    pill.addEventListener("click", () => {
-                        const curName = (state.phases || []).find(
-                            (x) => x.id === state.current)?.title
-                            || state.current;
-                        const ok = confirm(
-                            "▶ ADVANCE to " + ph.title + "\n\n" +
-                            "This will LOCK " + curName + " (its artifact " +
-                            "becomes read-only at this phase's agent) and " +
-                            "start " + ph.title + " with a FRESH agent " +
-                            "that has NO memory of this conversation — " +
-                            "only the locked artifact carries forward.\n\n" +
-                            "You can come back later by clicking the 🔒 " +
-                            curName + " pill, but doing so will discard " +
-                            "any " + ph.title + " output and start over " +
-                            "when you re-advance.\n\n" +
-                            "Continue?");
-                        if (!ok) return;
-                        _clickHiddenPhaseNav("advance", ph.id);
-                    });
+                    pill.title = TIP.active;
                 } else {
-                    // Pending but not yet eligible to advance. Tell the
-                    // user via the Readme (more learnable than a toast).
-                    pill.title = "Complete the current phase first — " +
-                        "see Readme for how the phase bar works";
+                    // Pills are progress-only — you advance via the in-chat
+                    // "Proceed" buttons, not by clicking pills. Clicking one
+                    // flashes the Readme so the user learns how the bar works.
+                    pill.title = (TIP[ph.status] || "") +
+                        " — use the Proceed buttons in chat to move between phases";
+                    pill.classList.add("ac-pp-hint");
                     pill.addEventListener("click", _flashReadmeForHelp);
                 }
                 pillsHost.appendChild(pill);
@@ -451,16 +382,34 @@
     // ---------------------------------------------------------------
 
     function _currentSessionId() {
-        // Greeting includes `_session \`<12-char hex>\` · model …`.
-        // Pull it from the page text on first sight, then cache.
-        if (window.__acSessionId) return window.__acSessionId;
+        // The greeting includes `_session \`<hex>\``. We must RE-SCAN every
+        // call (not cache permanently): "New Chat" swaps the greeting and
+        // session id WITHOUT a page reload, so a cached id would keep us
+        // polling the previous session's phase_state.json — carrying its
+        // stale input_mode (the bug where the validate-mode lock leaks across
+        // New Chat, or fails to apply). On change we drop per-session caches.
         const text = document.body.textContent || "";
-        const m = text.match(/session\s+`?([a-f0-9]{8,16})`?/);
-        if (m) {
-            window.__acSessionId = m[1];
-            return m[1];
+        const matches = text.match(/session\s+`?[a-f0-9]{8,16}`?/g);
+        let sid = null;
+        if (matches && matches.length) {
+            const m = matches[matches.length - 1].match(/([a-f0-9]{8,16})/);
+            sid = m ? m[1] : null;
         }
-        return null;
+        if (sid && sid !== window.__acSessionId) {
+            window.__acSessionId = sid;
+            // Seed the lock from the fresh greeting so there's no typable
+            // flash before the first phase_state poll; the JSON is then
+            // authoritative (e.g. it flips to "normal" after validation).
+            window.__acInputMode =
+                text.includes("Attach your bundle") ? "attach_only" : "normal";
+            // Drop every per-session cache so pills/panel/downloads re-sync.
+            _lastPhasePillsSig = "";
+            _lastFileListSig = "";
+            _lastDownloadsSig = "";
+            for (const k in _lastTagByUrl) delete _lastTagByUrl[k];
+            window.__acPendingModeFetch = true;
+        }
+        return window.__acSessionId || null;
     }
 
     // Per-URL `tag` (size+mtime from manifest.json) of the version we
@@ -900,7 +849,8 @@
 
     function syncFilesToggle() {
         // Don't show during init.
-        const isReady = document.body.textContent.includes(READY_PHRASE);
+        const bodyText = document.body.textContent;
+        const isReady = READY_PHRASES.some((p) => bodyText.includes(p));
         const onChatPage = !!document.querySelector("textarea");
         const chips = _findFileChips();
         let btn = document.getElementById("ac-files-toggle");
@@ -932,12 +882,19 @@
 
     function tick() {
         syncInitGate();   // run first so the lock is up before anything else
+        _currentSessionId();  // detect New-Chat session swap early (resets caches)
+        if (window.__acPendingModeFetch) {
+            // New session detected — pull its phase_state now instead of
+            // waiting up to 2s, so the composer lock is correct immediately.
+            window.__acPendingModeFetch = false;
+            _refreshPhasePillsFromState();
+        }
+        syncInputMode();  // apply the attach-only / locked composer mode
         _injectSidePanel();      // sci-space-style persistent workspace panel
         _ensurePhasePills();     // header-row phase pills (slim, no chips)
         tagSteps();
         syncRunningDots();
         injectInlineHelp();
-        tagPhaseActions();
         // syncFilesToggle is now redundant — the persistent panel is
         // the primary file viewer. Keep the function around for the
         // edge case where the panel can't materialise (no session id).
