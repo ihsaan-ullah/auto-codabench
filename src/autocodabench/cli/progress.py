@@ -25,6 +25,7 @@ import sys
 import textwrap
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
@@ -120,6 +121,32 @@ def _colorize_glyphs(text: str) -> str:
         lambda m: f"{_GLYPH_COLORS[m.group(1)[0]]}{m.group(1)}{_RESET}", text)
 
 
+def _disp_width(s: str) -> int:
+    """Terminal display width of `s`, counting emoji as 2 cells.
+
+    The provenance table uses colour emoji (✅ ⚠️ ❌). ``len()`` undercounts
+    them — ✅/❌ are East-Asian "Wide", and ⚠️ is a base glyph + a U+FE0F
+    variation selector that requests emoji (double-width) presentation — so the
+    box borders would misalign. This counts those as 2 and the selector as 0.
+    """
+    width = 0
+    chars = list(s)
+    for i, ch in enumerate(chars):
+        if ch == "️" or unicodedata.combining(ch):
+            continue  # variation selector / combining mark: zero width
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if nxt == "️" or unicodedata.east_asian_width(ch) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _pad(s: str, width: int) -> str:
+    """Left-justify `s` to `width` *display* columns (emoji-aware ljust)."""
+    return s + " " * max(0, width - _disp_width(s))
+
+
 def _table_cells(line: str) -> list[str] | None:
     """Cells of a markdown table row, or ``None`` if the line isn't one."""
     s = (line or "").strip()
@@ -164,7 +191,7 @@ def _render_md_table(header: list[str], rows: list[list[str]], max_width: int,
     ncols = max(len(r) for r in all_rows)
     norm = [[_strip_md(r[c]) if c < len(r) else "" for c in range(ncols)]
             for r in all_rows]
-    natural = [max((len(norm[r][c]) for r in range(len(norm))), default=1)
+    natural = [max((_disp_width(norm[r][c]) for r in range(len(norm))), default=1)
                for c in range(ncols)]
     indent = "  "
     overhead = 3 * ncols + 1          # borders + one space of padding each side
@@ -185,7 +212,7 @@ def _render_md_table(header: list[str], rows: list[list[str]], max_width: int,
         for li in range(height):
             parts = []
             for c in range(ncols):
-                seg = (wrapped[c][li] if li < len(wrapped[c]) else "").ljust(widths[c])
+                seg = _pad(wrapped[c][li] if li < len(wrapped[c]) else "", widths[c])
                 if head and bold:
                     seg = f"{_BOLD}{seg}{_RESET}"
                 elif bold:  # body cell on a TTY — colour any status glyphs

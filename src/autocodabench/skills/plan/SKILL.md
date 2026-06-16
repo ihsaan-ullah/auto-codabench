@@ -1,6 +1,6 @@
 ---
 name: autocodabench-plan
-description: Phase 1 of an AutoCodabench session — through a short, citation-grounded roadmap conversation, produce one `implementation_plan.md` covering all 7 design sections of a Codabench competition. The plan must be CONCRETE enough that Phase 2 can package a working Codabench bundle from it directly (sklearn-class baselines, named metrics, ~200-row toy data). Save as `<run>/specs/implementation_plan.md`. When done, suggest the user click **Advance to Phase 2 — Competition Creation** in the phase bar.
+description: Phase 1 of an AutoCodabench session — through a short, citation-grounded roadmap conversation, produce one `implementation_plan.md` covering all 7 design sections of a Codabench competition. The plan must be CONCRETE enough that Phase 2 can package a working Codabench bundle from it directly (sklearn-class baselines, named metrics, ~200-row toy data). Save as `<run>/specs/implementation_plan.md`. When done, suggest the user click the **Advance to Phase 2 — Competition Creation** button.
 ---
 
 # AutoCodabench — Phase 1: Plan
@@ -283,26 +283,26 @@ the planner*, and name the evidence used (proposal section, an OpenAlex
 reviewer how much of the design rests on their input versus on the
 planner's inference, and therefore how much warrants their scrutiny.
 
-Use exactly these status glyphs in the Status column (the terminal
-renderer colours them): **✓** = specified in the source material; **⚠**
-= partially specified / specified with a planner assumption; **✗** =
-absent from the source and inferred by the planner.
+Use exactly these status glyphs in the Status column (they render in
+colour in both the web UI and the terminal): **✅** = specified in the
+source material; **⚠️** = partially specified / specified with a planner
+assumption; **❌** = absent from the source and inferred by the planner.
 
 ```
 **Provenance and coverage of design decisions.** The following table
 records, for each design dimension, the origin of the decision and the
-evidence consulted. Dimensions marked ✗ or ⚠ rest substantially on
+evidence consulted. Dimensions marked ❌ or ⚠️ rest substantially on
 planner inference and merit the closest review.
 
 | # | Design dimension          | Status | Origin & evidence consulted |
 |---|---------------------------|--------|-----------------------------|
-| 1 | Task formulation          | ✓/⚠/✗ | <proposal §… / inferred; note> |
-| 2 | Data & splits             | ✓/⚠/✗ | <…> |
-| 3 | Metric                    | ✓/⚠/✗ | <proposal / OpenAlex [oa:…] / Kaggle comp …> |
-| 4 | Baseline                  | ✓/⚠/✗ | <…> |
-| 5 | Rules & submission limits | ✓/⚠/✗ | <Kaggle comp … daily cap; or inferred> |
-| 6 | Ethics & dual-use         | ✓/⚠/✗ | <…> |
-| 7 | Schedule & sustainability | ✓/⚠/✗ | <Pavão Ch.5 / inferred> |
+| 1 | Task formulation          | ✅/⚠️/❌ | <proposal §… / inferred; note> |
+| 2 | Data & splits             | ✅/⚠️/❌ | <…> |
+| 3 | Metric                    | ✅/⚠️/❌ | <proposal / OpenAlex [oa:…] / Kaggle comp …> |
+| 4 | Baseline                  | ✅/⚠️/❌ | <…> |
+| 5 | Rules & submission limits | ✅/⚠️/❌ | <Kaggle comp … daily cap; or inferred> |
+| 6 | Ethics & dual-use         | ✅/⚠️/❌ | <…> |
+| 7 | Schedule & sustainability | ✅/⚠️/❌ | <Pavão Ch.5 / inferred> |
 
 <one or two sentences summarising how many dimensions were specified
 versus inferred, and which inferred decisions most affect correctness.>

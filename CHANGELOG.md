@@ -63,6 +63,13 @@ All notable changes to autocodabench. Format follows
   opaque tool chips, and the status bar tracks the current tool action /
   narration — bringing the browser's progress feedback to parity with the
   terminal.
+- **Provenance & coverage table uses colour-emoji status glyphs** — `✅`
+  (specified) / `⚠️` (partial) / `❌` (inferred) instead of the monochrome
+  `✓`/`⚠`/`✗`, so the table reads in colour in the web UI (where it renders as
+  native markdown). The CLI table renderer gained emoji-aware display-width
+  handling (`_disp_width`/`_pad`) so the box borders stay aligned despite the
+  double-width glyphs. The activity-log status marks stay monochrome `✓`/`✗`,
+  by design, to avoid colour clutter outside the table.
 
 ### Changed
 - **`create` renamed to `plan-build-validate`** — the all-three-phases command
@@ -83,6 +90,13 @@ All notable changes to autocodabench. Format follows
   outright; file tools are confined to the declared roots. Wired into `plan`,
   `build`, and `create` (the reformat phase keeps `Bash` and its existing
   path-based isolation).
+
+### Removed
+- **"Publish to Codabench" button (web UI workspace panel)** — the publish form
+  and its wiring/styles were removed from `web/public/{chat.js,login.css}`; that
+  flow is not maintained for now. Bundle/workspace **downloads** are unaffected.
+  (The backend `/ac/upload-codabench` route is left in place, unused, so it can
+  be re-enabled later.)
 
 ### Added
 - **Live CLI progress** (`autocodabench.cli.progress.ProgressUI`): the agentic

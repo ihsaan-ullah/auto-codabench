@@ -129,6 +129,41 @@ def test_provenance_table_renders_with_glyphs():
     assert "|---|" not in out                           # separator not echoed
 
 
+def test_disp_width_counts_emoji_as_two():
+    from autocodabench.cli.progress import _disp_width, _pad
+    # ✅/❌ are East-Asian "Wide"; ⚠️ is base glyph + a U+FE0F selector — all 2.
+    assert _disp_width("✅") == 2
+    assert _disp_width("❌") == 2
+    assert _disp_width("⚠️") == 2
+    assert _disp_width("✓") == 1 and _disp_width("Status") == 6
+    # Emoji-aware ljust pads to the right *display* width.
+    assert _disp_width(_pad("✅", 6)) == 6
+    assert _disp_width(_pad("⚠️", 6)) == 6
+
+
+def test_provenance_table_with_emoji_aligns():
+    """The provenance table uses colour emoji (✅/⚠️/❌); the CLI box must still
+    align — every border/content row renders to the same display width."""
+    from autocodabench.cli.progress import ProgressUI, _disp_width
+    import io, contextlib
+    text = (
+        "| # | Dimension | Status | Origin |\n"
+        "|---|---|---|---|\n"
+        "| 1 | Task | ✅ | proposal §2 |\n"
+        "| 2 | Metric | ❌ | inferred |\n"
+        "| 3 | Data | ⚠️ | partial |\n"
+    )
+    ui = ProgressUI(debug=False)
+    ui.animate = False  # plain output so widths are measurable
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ui._on_text({"text": text})
+    out = buf.getvalue()
+    assert "✅" in out and "❌" in out and "⚠️" in out  # emoji preserved
+    rows = [ln for ln in out.splitlines() if ln.strip() and ln.lstrip()[0] in "┌│├└"]
+    assert len({_disp_width(r) for r in rows}) == 1  # all rows same display width
+
+
 def test_checks_list(capsys):
     assert main(["checks", "list"]) == 0
     out = capsys.readouterr().out
