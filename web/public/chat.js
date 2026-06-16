@@ -1,21 +1,10 @@
 /* AutoCodabench chat UI tweaks (loaded as custom_js in chainlit config).
  *
- * Four responsibilities, all DOM-side only:
+ * DOM-side helpers only — the agent's tool-call activity is rendered as an
+ * inline CLI-style log by the server (web/streaming.py:TurnView), so this file
+ * no longer touches tool chips at all. Responsibilities:
  *
- * 1. Inline help inside expanded tool-step panels.
- *    The agent emits each MCP call as a cl.Step. Chainlit renders it as a
- *    collapsible "chip" with the input/output JSON revealed on expand. We
- *    inject a compact `<div class="ac-help-inline">` *inside* every panel
- *    so the help is only visible when the panel is open. No corner widget.
- *
- * 2. Animated dots on "Running …" chips.
- *    app.py sets the step name to `Running <operation>` while the call is
- *    in flight and rewrites it to `<operation>` (dropping the prefix) once
- *    the result arrives. We watch all step-chip buttons; if the label
- *    starts with `Running `, we append three pulsing dots. When the prefix
- *    is gone, we remove them.
- *
- * 3. Init banner + input lock from the moment the page loads.
+ * 1. Init banner + input lock from the moment the page loads.
  *    on_chat_start can take 5–30s (MCP probe + SDK connect). To avoid the
  *    chat looking ready before the server actually is, we:
  *      - inject a top-of-page banner the moment chat.js runs;
@@ -25,6 +14,13 @@
  *        we remove the banner and re-enable input.
  *    The lock is opt-in for chat pages only — we gate on the textarea
  *    existing, so the banner won't appear on the login screen.
+ *
+ * 2. Attach-only composer mode, phase pills, and the persistent workspace
+ *    side panel (notebook / transcript / cost / downloads / publish).
+ *
+ * IMPORTANT: only ever mount/restyle OUR OWN injected elements (appended to
+ * document.body). Never hide or restyle Chainlit's React-managed message DOM —
+ * doing so crashes the frontend and drops the websocket.
  *
  * Chainlit re-renders aggressively, so everything below is idempotent —
  * safe to call from a MutationObserver on every DOM mutation.
@@ -37,19 +33,6 @@
     // the init lock. Option A uses the first; Option B (validate) the second.
     const READY_PHRASES = ["Tell me a competition idea", "Attach your bundle"];
 
-    // Short, tool-agnostic legend inserted into each expanded step. Kept
-    // compact on purpose: the user expands a tool to see the JSON, not to
-    // read a wall of prose.
-    const HELP_HTML = `
-      <div class="ac-help-title">What this chip is</div>
-      <p>One MCP call the agent made — input JSON above, output below.
-      The full audit trail (raw JSON of every call, plus stdout) lives on
-      disk under <code>.autocodabench/runs/&lt;your session&gt;/</code>.</p>
-      <p><b>autocodabench</b> tools write competition-bundle files and
-      structured run-events. <b>alex-mcp</b> tools look up papers in
-      OpenAlex / PubMed / ORCID.</p>
-    `;
-
     const INIT_BANNER_HTML = `
       <span class="ac-init-spinner" aria-hidden="true"></span>
       <span>
@@ -58,70 +41,6 @@
         up to 30s on first connect. Chat input is locked until ready.
       </span>
     `;
-
-    // ---------------------------------------------------------------
-    // (1) Tag step chips so CSS and inject logic have a stable hook.
-    // ---------------------------------------------------------------
-    function tagSteps() {
-        document.querySelectorAll("button, [role='button']").forEach((el) => {
-            const txt = (el.textContent || "").trim();
-            if (!el.dataset.acStepBtn) {
-                if (/^Running /.test(txt)) {
-                    el.dataset.acStepBtn = "1";
-                    const host = el.closest("[data-step-id]")
-                        || el.parentElement?.parentElement
-                        || el.parentElement;
-                    if (host) host.setAttribute("data-ac-step", "1");
-                }
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------
-    // (2) Pulsing dots while the chip label starts with "Running ".
-    // ---------------------------------------------------------------
-    function syncRunningDots() {
-        document.querySelectorAll("[data-ac-step-btn='1']").forEach((btn) => {
-            const txt = (btn.textContent || "").trim();
-            const isRunning = /^Running /.test(txt);
-            const existing = btn.querySelector(".ac-dots");
-            if (isRunning && !existing) {
-                const dots = document.createElement("span");
-                dots.className = "ac-dots";
-                dots.setAttribute("aria-hidden", "true");
-                dots.innerHTML = "<span>.</span><span>.</span><span>.</span>";
-                btn.appendChild(dots);
-            } else if (!isRunning && existing) {
-                existing.remove();
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------
-    // (3) Inline help inside each expanded step panel.
-    // ---------------------------------------------------------------
-    function injectInlineHelp() {
-        document.querySelectorAll("[data-ac-step-btn='1']").forEach((btn) => {
-            if (btn.dataset.acHelpDone) return;
-            const controlsId = btn.getAttribute("aria-controls");
-            let panel = controlsId ? document.getElementById(controlsId) : null;
-            if (!panel) {
-                panel = btn.closest("[data-step-id]")?.querySelector(
-                    "[data-state='open'], [data-state='closed']"
-                );
-            }
-            if (!panel) {
-                panel = btn.parentElement?.nextElementSibling
-                    || btn.nextElementSibling;
-            }
-            if (!panel || panel.querySelector(":scope > .ac-help-inline")) return;
-            const help = document.createElement("div");
-            help.className = "ac-help-inline";
-            help.innerHTML = HELP_HTML;
-            panel.appendChild(help);
-            btn.dataset.acHelpDone = "1";
-        });
-    }
 
     // ---------------------------------------------------------------
     // (4) Init banner + input lock, applied from the *very first*
@@ -508,21 +427,15 @@
                 }
             }
 
-            // --- downloads + publish footer ---
+            // --- downloads footer ---
             const footer  = panel.querySelector(".ac-side-footer");
             const dlHost  = footer?.querySelector(".ac-dl-buttons");
-            const pubSec  = footer?.querySelector(".ac-pub-section");
             if (footer && dlHost) {
                 // The footer always has at least workspace.zip in the
                 // downloads list (built every turn). Keep it visible
                 // throughout so the user always knows where to look.
                 footer.setAttribute("data-state",
                     downloads.length > 0 ? "shown" : "hidden");
-                const bundleEntry = downloads.find(
-                    (d) => d.kind === "bundle");
-                const bundleReady = !!(bundleEntry && bundleEntry.ready);
-                pubSec?.setAttribute("data-bundle-ready",
-                    bundleReady ? "yes" : "no");
 
                 const dlSig = JSON.stringify(downloads.map(
                     (d) => [d.url, d.tag, d.size, !!d.ready]));
@@ -567,111 +480,8 @@
         }
     }
 
-    function _wirePublishForm(panel) {
-        const sec = panel.querySelector(".ac-pub-section");
-        if (!sec || sec.dataset.acWired) return;
-        sec.dataset.acWired = "1";
-
-        // Header toggle expands/collapses the form.
-        const toggle = sec.querySelector(".ac-pub-toggle");
-        toggle?.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const open = sec.getAttribute("data-state") !== "collapsed";
-            sec.setAttribute("data-state", open ? "collapsed" : "open");
-        });
-
-        const form   = sec.querySelector(".ac-pub-form");
-        const status = sec.querySelector(".ac-pub-status");
-        const submit = sec.querySelector(".ac-pub-submit");
-        if (!form || !status || !submit) return;
-
-        // Clicks inside the form shouldn't bubble up to the panel-level
-        // "click anywhere to open" handler (matters when the panel is
-        // collapsed — though we set the form hidden then anyway).
-        form.addEventListener("click", (e) => e.stopPropagation());
-
-        form.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const sid = _currentSessionId();
-            if (!sid) {
-                status.innerHTML =
-                    "<span class='ac-pub-err'>session id missing — refresh</span>";
-                return;
-            }
-            const fd = new FormData(form);
-            const username = (fd.get("username") || "").toString().trim();
-            const password = (fd.get("password") || "").toString();
-            if (!username || !password) {
-                status.innerHTML =
-                    "<span class='ac-pub-err'>username + password required</span>";
-                return;
-            }
-            // Disable form, show spinner.
-            submit.disabled = true;
-            const origLabel = submit.textContent;
-            submit.textContent = "⏳ Uploading…";
-            status.innerHTML =
-                "<span class='ac-pub-info'>uploading to Codabench "
-                + "(can take 30–90 s while it unpacks)…</span>";
-            try {
-                const r = await fetch("/ac/upload-codabench", {
-                    method:  "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body:    JSON.stringify({
-                        session_id: sid,
-                        username, password,
-                    }),
-                });
-                // Read the body ONCE as text so we can surface it raw
-                // when JSON parsing fails or the server returns an
-                // unexpected shape. Previously the bare `out.error` ||
-                // "unknown error" fallback hid the real failure mode.
-                const raw  = await r.text();
-                const safe = (s) => String(s)
-                    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;");
-                let out = null;
-                try { out = raw ? JSON.parse(raw) : null; }
-                catch { out = null; }
-
-                if (!out) {
-                    status.innerHTML =
-                        `<span class='ac-pub-err'>❌ server returned `
-                        + `HTTP ${r.status} non-JSON</span>`
-                        + `<details><summary>response body</summary>`
-                        + `<pre>${safe(raw).slice(0, 1500)}</pre></details>`;
-                    return;
-                }
-                if (!out.ok) {
-                    const msg = out.error
-                        || `HTTP ${r.status} with no error field`;
-                    status.innerHTML =
-                        `<span class='ac-pub-err'>❌ ${safe(msg)}</span>`
-                        + `<details><summary>full response (HTTP `
-                        + `${r.status})</summary>`
-                        + `<pre>${safe(JSON.stringify(out, null, 2))}</pre>`
-                        + `</details>`;
-                    return;
-                }
-                const url = out.competition_url || "#";
-                status.innerHTML =
-                    "<span class='ac-pub-ok'>✅ Published!</span><br>" +
-                    `<a class="ac-pub-link" href="${url}" `
-                    + `target="_blank" rel="noopener">${safe(url)}</a>`;
-                // Clear password but keep username so the user can
-                // retry / re-publish without retyping it.
-                form.querySelector("input[name='password']").value = "";
-            } catch (err) {
-                status.innerHTML =
-                    "<span class='ac-pub-err'>❌ network error: "
-                    + (err?.message || err) + "</span>";
-            } finally {
-                submit.disabled = false;
-                submit.textContent = origLabel;
-            }
-        });
-    }
+    // NOTE: the "Publish to Codabench" panel form was removed — that flow is
+    // not maintained for now. The backend route still exists but is unused.
 
     function _setPanelCollapsed(panel, collapsed) {
         // Use data-state as the primary hook (resistant to React
@@ -725,28 +535,6 @@
                     <div class="ac-foot-title">Downloads</div>
                     <div class="ac-dl-buttons"></div>
                 </section>
-                <section class="ac-pub-section" data-state="collapsed">
-                    <div class="ac-foot-title ac-pub-toggle">
-                        🚀 Publish to Codabench
-                        <span class="ac-pub-chev">▾</span>
-                    </div>
-                    <form class="ac-pub-form" autocomplete="off">
-                        <label>Username
-                          <input type="text" name="username"
-                                 autocomplete="username"
-                                 placeholder="codabench username" required>
-                        </label>
-                        <label>Password
-                          <input type="password" name="password"
-                                 autocomplete="current-password"
-                                 placeholder="codabench password" required>
-                        </label>
-                        <button type="submit" class="ac-pub-submit">
-                            🚀 Upload &amp; publish
-                        </button>
-                        <div class="ac-pub-status" role="status"></div>
-                    </form>
-                </section>
             </div>
         `;
         document.body.appendChild(panel);
@@ -793,10 +581,6 @@
         panel.querySelector(".ac-tabs").addEventListener("click", (e) => {
             e.stopPropagation();
         });
-
-        // Wire the bottom-panel publish form (idempotent — guarded
-        // internally by a data-attr).
-        _wirePublishForm(panel);
 
         // First fetch + then periodic refresh every 3.5 s, but only
         // while the panel is OPEN (see _refreshSidePanelFromManifest).
@@ -892,9 +676,6 @@
         syncInputMode();  // apply the attach-only / locked composer mode
         _injectSidePanel();      // sci-space-style persistent workspace panel
         _ensurePhasePills();     // header-row phase pills (slim, no chips)
-        tagSteps();
-        syncRunningDots();
-        injectInlineHelp();
         // syncFilesToggle is now redundant — the persistent panel is
         // the primary file viewer. Keep the function around for the
         // edge case where the panel can't materialise (no session id).
@@ -909,6 +690,7 @@
     // Poll the phase state JSON on its own ~2 s timer so pill updates
     // feel snappy without re-fetching the full workspace manifest.
     setInterval(_refreshPhasePillsFromState, 2000);
+
 
     // Apply the lock as soon as possible — ideally before React mounts
     // the chat input. We call tick() once synchronously here, then again

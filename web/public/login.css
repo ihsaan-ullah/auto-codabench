@@ -35,78 +35,14 @@ form:has(input[type="password"]):not(.ac-pub-form) > *:has(> button[type="submit
 /* ============================================================
  * Chat customizations — injected by web/public/chat.js.
  *
- * (1) Pulsing dots after "Running <operation>" step labels.
- * (2) Inline help inside expanded tool-step panels.
- *
- * Both rely on data-attributes that chat.js sets idempotently
- * on each MutationObserver tick.
+ * Tool-call activity is rendered as an inline CLI-style log by the
+ * server (web/streaming.py:TurnView), so there are no tool chips to
+ * style here anymore. What remains is the startup banner/lock, the
+ * attach-only composer, the phase pills, and the workspace panel.
  * ============================================================ */
 
-/* (1) ----- pulsing dots ---------------------------------- */
 
-.ac-dots {
-    display: inline-block;
-    margin-left: 4px;
-    letter-spacing: 1px;
-    /* Keep the dots on the baseline; don't push the chip height. */
-    line-height: 1;
-}
-.ac-dots > span {
-    display: inline-block;
-    opacity: 0.25;
-    animation: ac-dot-pulse 1.2s ease-in-out infinite;
-}
-.ac-dots > span:nth-child(2) { animation-delay: 0.15s; }
-.ac-dots > span:nth-child(3) { animation-delay: 0.30s; }
-
-@keyframes ac-dot-pulse {
-    0%, 60%, 100% { opacity: 0.25; }
-    30%           { opacity: 1;    }
-}
-
-/* (2) ----- inline help block inside expanded step panel ----
- *
- * Readability: explicit CanvasText / Canvas tokens so the box never
- * becomes white-on-white in light mode or black-on-black in dark
- * mode (the previous `color: inherit` was the bug). Both tokens are
- * the user's OS-level chrome colors — they adapt to the system
- * theme automatically.
- */
-
-.ac-help-inline {
-    margin: 12px 4px 4px 4px;
-    padding: 12px 14px;
-    border-radius: 8px;
-    border: 1px solid rgba(127, 127, 127, 0.35);
-    background: rgba(127, 127, 127, 0.08);
-    color: CanvasText;
-    font-size: 12.5px;
-    line-height: 1.5;
-    /* Tighter on phones; otherwise the chip panel widens too much. */
-    max-width: 64ch;
-}
-.ac-help-inline .ac-help-title {
-    font-weight: 600;
-    font-size: 13.5px;
-    margin-bottom: 6px;
-    color: CanvasText;
-}
-.ac-help-inline p {
-    margin: 6px 0;
-    color: CanvasText;
-}
-.ac-help-inline code {
-    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
-    font-size: 11.5px;
-    padding: 1px 4px;
-    border-radius: 3px;
-    background: rgba(127, 127, 127, 0.18);
-    color: CanvasText;
-}
-.ac-help-inline b { color: CanvasText; }
-
-
-/* (3) ----- init banner + input lock during session startup -----
+/* ----- init banner + input lock during session startup -----
  *
  * chat.js injects `#ac-init-banner` the moment the chat page is
  * rendered (before on_chat_start has even fired server-side) and
@@ -597,13 +533,11 @@ button[data-ac-phase-nav] {
     background: Canvas;
 }
 
-/* ----------- Workspace footer (downloads + publish form) -----------
- * Always present in the DOM; CSS toggles visibility via data-state
- * on the footer + each section. Downloads appear as soon as anything
- * downloadable lives in the manifest; the publish form is collapsed
- * by default and the toggle row expands it.
- * The footer also disappears when the right panel is collapsed
- * (handled lower down with the other collapsed-state hides). */
+/* ----------- Workspace footer (downloads) -----------
+ * Always present in the DOM; CSS toggles visibility via data-state on
+ * the footer. Downloads appear as soon as anything downloadable lives
+ * in the manifest. The footer also disappears when the right panel is
+ * collapsed (handled lower down with the other collapsed-state hides). */
 
 .ac-side-footer {
     border-top: 1px solid color-mix(in oklab, currentColor 16%, transparent);
@@ -712,111 +646,8 @@ button[data-ac-phase-nav] {
     text-overflow: ellipsis;
 }
 
-/* Publish form — collapsed by default; click the title row to open. */
-.ac-pub-section {
-    padding-bottom: 12px;
-}
-.ac-pub-toggle {
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-}
-.ac-pub-toggle:hover {
-    color: CanvasText;
-}
-.ac-pub-chev {
-    font-size: 12px;
-    transition: transform 0.15s ease-out;
-}
-.ac-pub-section[data-state="collapsed"] .ac-pub-form {
-    display: none;
-}
-.ac-pub-section[data-state="open"] .ac-pub-chev {
-    transform: rotate(180deg);
-}
-.ac-pub-form {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 14px 10px;
-}
-.ac-pub-form label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 11.5px;
-    color: color-mix(in oklab, CanvasText 70%, transparent);
-    font-weight: 600;
-}
-.ac-pub-form input {
-    padding: 7px 10px;
-    border-radius: 6px;
-    border: 1px solid color-mix(in oklab, currentColor 26%, transparent);
-    background: Canvas;
-    color: CanvasText;
-    font-size: 13px;
-    font-family: inherit;
-}
-.ac-pub-form input:focus {
-    outline: none;
-    border-color: #0969da;
-    box-shadow: 0 0 0 3px color-mix(in oklab, #0969da 22%, transparent);
-}
-.ac-pub-submit {
-    margin-top: 4px;
-    padding: 9px 12px;
-    border-radius: 8px;
-    border: 1px solid #2563eb;
-    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
-    color: #fff;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
-    transition: filter 0.1s ease-out, transform 0.1s ease-out;
-}
-.ac-pub-submit:hover:not(:disabled) {
-    filter: brightness(1.06);
-    transform: translateY(-0.5px);
-}
-.ac-pub-submit:disabled {
-    opacity: 0.6;
-    cursor: progress;
-    background: color-mix(in oklab, Canvas 78%, currentColor 12%);
-    border-color: color-mix(in oklab, currentColor 22%, transparent);
-    color: color-mix(in oklab, CanvasText 60%, transparent);
-    box-shadow: none;
-}
-.ac-pub-status {
-    min-height: 18px;
-    font-size: 12px;
-    color: color-mix(in oklab, CanvasText 75%, transparent);
-}
-.ac-pub-status .ac-pub-info { color: #0969da; font-weight: 500; }
-.ac-pub-status .ac-pub-ok   { color: #16a34a; font-weight: 700; }
-.ac-pub-status .ac-pub-err  { color: #dc2626; font-weight: 600; }
-.ac-pub-status .ac-pub-link {
-    display: inline-block;
-    margin-top: 4px;
-    font-family: ui-monospace, Menlo, monospace;
-    font-size: 11.5px;
-    color: #0969da !important;
-    word-break: break-all;
-}
-
-/* When the bundle is ready, draw a one-time pulse around the publish
- * toggle row so the user knows the panel just got useful. */
-.ac-pub-section[data-bundle-ready="yes"][data-state="collapsed"]
-        .ac-pub-toggle {
-    color: CanvasText;
-    animation: ac-pub-ready-pulse 1.4s ease-out 2;
-}
-@keyframes ac-pub-ready-pulse {
-    0%, 100% { background: transparent; }
-    50%      { background: color-mix(in oklab, #16a34a 14%, transparent); }
-}
+/* The "Publish to Codabench" footer form was removed (not maintained for
+ * now); its styles lived here. */
 
 /* Reserve room on the right of the page so chat content isn't
  * underneath the panel. Keep this in sync with #ac-side-panel
