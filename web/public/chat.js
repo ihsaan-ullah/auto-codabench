@@ -1,21 +1,10 @@
 /* AutoCodabench chat UI tweaks (loaded as custom_js in chainlit config).
  *
- * Four responsibilities, all DOM-side only:
+ * DOM-side helpers only — the agent's tool-call activity is rendered as an
+ * inline CLI-style log by the server (web/streaming.py:TurnView), so this file
+ * no longer touches tool chips at all. Responsibilities:
  *
- * 1. Inline help inside expanded tool-step panels.
- *    The agent emits each MCP call as a cl.Step. Chainlit renders it as a
- *    collapsible "chip" with the input/output JSON revealed on expand. We
- *    inject a compact `<div class="ac-help-inline">` *inside* every panel
- *    so the help is only visible when the panel is open. No corner widget.
- *
- * 2. Animated dots on "Running …" chips.
- *    app.py sets the step name to `Running <operation>` while the call is
- *    in flight and rewrites it to `<operation>` (dropping the prefix) once
- *    the result arrives. We watch all step-chip buttons; if the label
- *    starts with `Running `, we append three pulsing dots. When the prefix
- *    is gone, we remove them.
- *
- * 3. Init banner + input lock from the moment the page loads.
+ * 1. Init banner + input lock from the moment the page loads.
  *    on_chat_start can take 5–30s (MCP probe + SDK connect). To avoid the
  *    chat looking ready before the server actually is, we:
  *      - inject a top-of-page banner the moment chat.js runs;
@@ -25,6 +14,13 @@
  *        we remove the banner and re-enable input.
  *    The lock is opt-in for chat pages only — we gate on the textarea
  *    existing, so the banner won't appear on the login screen.
+ *
+ * 2. Attach-only composer mode, phase pills, and the persistent workspace
+ *    side panel (notebook / transcript / cost / downloads / publish).
+ *
+ * IMPORTANT: only ever mount/restyle OUR OWN injected elements (appended to
+ * document.body). Never hide or restyle Chainlit's React-managed message DOM —
+ * doing so crashes the frontend and drops the websocket.
  *
  * Chainlit re-renders aggressively, so everything below is idempotent —
  * safe to call from a MutationObserver on every DOM mutation.
@@ -37,19 +33,6 @@
     // the init lock. Option A uses the first; Option B (validate) the second.
     const READY_PHRASES = ["Tell me a competition idea", "Attach your bundle"];
 
-    // Short, tool-agnostic legend inserted into each expanded step. Kept
-    // compact on purpose: the user expands a tool to see the JSON, not to
-    // read a wall of prose.
-    const HELP_HTML = `
-      <div class="ac-help-title">What this chip is</div>
-      <p>One MCP call the agent made — input JSON above, output below.
-      The full audit trail (raw JSON of every call, plus stdout) lives on
-      disk under <code>.autocodabench/runs/&lt;your session&gt;/</code>.</p>
-      <p><b>autocodabench</b> tools write competition-bundle files and
-      structured run-events. <b>alex-mcp</b> tools look up papers in
-      OpenAlex / PubMed / ORCID.</p>
-    `;
-
     const INIT_BANNER_HTML = `
       <span class="ac-init-spinner" aria-hidden="true"></span>
       <span>
@@ -58,70 +41,6 @@
         up to 30s on first connect. Chat input is locked until ready.
       </span>
     `;
-
-    // ---------------------------------------------------------------
-    // (1) Tag step chips so CSS and inject logic have a stable hook.
-    // ---------------------------------------------------------------
-    function tagSteps() {
-        document.querySelectorAll("button, [role='button']").forEach((el) => {
-            const txt = (el.textContent || "").trim();
-            if (!el.dataset.acStepBtn) {
-                if (/^Running /.test(txt)) {
-                    el.dataset.acStepBtn = "1";
-                    const host = el.closest("[data-step-id]")
-                        || el.parentElement?.parentElement
-                        || el.parentElement;
-                    if (host) host.setAttribute("data-ac-step", "1");
-                }
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------
-    // (2) Pulsing dots while the chip label starts with "Running ".
-    // ---------------------------------------------------------------
-    function syncRunningDots() {
-        document.querySelectorAll("[data-ac-step-btn='1']").forEach((btn) => {
-            const txt = (btn.textContent || "").trim();
-            const isRunning = /^Running /.test(txt);
-            const existing = btn.querySelector(".ac-dots");
-            if (isRunning && !existing) {
-                const dots = document.createElement("span");
-                dots.className = "ac-dots";
-                dots.setAttribute("aria-hidden", "true");
-                dots.innerHTML = "<span>.</span><span>.</span><span>.</span>";
-                btn.appendChild(dots);
-            } else if (!isRunning && existing) {
-                existing.remove();
-            }
-        });
-    }
-
-    // ---------------------------------------------------------------
-    // (3) Inline help inside each expanded step panel.
-    // ---------------------------------------------------------------
-    function injectInlineHelp() {
-        document.querySelectorAll("[data-ac-step-btn='1']").forEach((btn) => {
-            if (btn.dataset.acHelpDone) return;
-            const controlsId = btn.getAttribute("aria-controls");
-            let panel = controlsId ? document.getElementById(controlsId) : null;
-            if (!panel) {
-                panel = btn.closest("[data-step-id]")?.querySelector(
-                    "[data-state='open'], [data-state='closed']"
-                );
-            }
-            if (!panel) {
-                panel = btn.parentElement?.nextElementSibling
-                    || btn.nextElementSibling;
-            }
-            if (!panel || panel.querySelector(":scope > .ac-help-inline")) return;
-            const help = document.createElement("div");
-            help.className = "ac-help-inline";
-            help.innerHTML = HELP_HTML;
-            panel.appendChild(help);
-            btn.dataset.acHelpDone = "1";
-        });
-    }
 
     // ---------------------------------------------------------------
     // (4) Init banner + input lock, applied from the *very first*
@@ -892,9 +811,6 @@
         syncInputMode();  // apply the attach-only / locked composer mode
         _injectSidePanel();      // sci-space-style persistent workspace panel
         _ensurePhasePills();     // header-row phase pills (slim, no chips)
-        tagSteps();
-        syncRunningDots();
-        injectInlineHelp();
         // syncFilesToggle is now redundant — the persistent panel is
         // the primary file viewer. Keep the function around for the
         // edge case where the panel can't materialise (no session id).
@@ -909,6 +825,7 @@
     // Poll the phase state JSON on its own ~2 s timer so pill updates
     // feel snappy without re-fetching the full workspace manifest.
     setInterval(_refreshPhasePillsFromState, 2000);
+
 
     // Apply the lock as soon as possible — ideally before React mounts
     // the chat input. We call tick() once synchronously here, then again

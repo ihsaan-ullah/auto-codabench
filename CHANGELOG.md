@@ -44,6 +44,25 @@ All notable changes to autocodabench. Format follows
   consulted — so a reviewer sees how much of the design rests on their input
   versus planner inference. The CLI renderer colours the glyphs (green/yellow/
   red). Phase-1 hand-off text is now written in measured scientific prose.
+- **Web UI agent output is now an inline, CLI-style activity log**
+  (`web/streaming.py:TurnView`): the terminal renderer ported to the browser,
+  rendered in the bot's own response bubble. Each tool call is a short, static
+  action line (`⏺ Write scoring program · +84 lines`) that gains a `✓` (or `✗`)
+  when it returns; the agent's milestones/deviations are inline `📍` / `⚠️`
+  notes; its narration (markdown tables included) renders as prose; and a single
+  trailing `Composing… ●○○…` line (blob + elapsed + current action) shows the
+  turn is still working and disappears when it ends. This replaces the old
+  collapsible tool "chips" — which double-animated (Chainlit's shimmer plus an
+  injected pulsing-dots overlay) and could leave dots pulsing forever after a
+  turn finished. Implemented with the official Chainlit message API only (no
+  DOM/CSS injection); `chat.js`/`login.css` no longer touch tool chips. Full
+  tool input/output remains in the on-disk audit trail and workspace panel.
+- **Agent progress logs surfaced in the Web UI**: the same milestone/deviation
+  lines the CLI prints (the agent's `autocodabench_log_event` calls) now appear
+  as visible chat notes (📍 progress, ⚠️ deviation) instead of being buried in
+  opaque tool chips, and the status bar tracks the current tool action /
+  narration — bringing the browser's progress feedback to parity with the
+  terminal.
 
 ### Changed
 - **`create` renamed to `plan-build-validate`** — the all-three-phases command

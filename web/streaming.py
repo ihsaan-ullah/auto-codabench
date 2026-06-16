@@ -1,13 +1,15 @@
 """Shared agent response streaming for the AutoCodabench web UI.
 
 Both the regular on_message handler and the synthetic phase-kickoff prompt
-need the same streaming loop. This module provides a single implementation
-used by both call sites, eliminating the duplication that existed in the
-original app.py.
+use the same streaming loop. Each turn renders as an inline, CLI-style activity
+log inside the bot's own response bubble (see :class:`TurnView`): tool actions,
+milestones/deviations, narration, and a cost footer — plus a transcript write.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from pathlib import Path
 
 import chainlit as cl
@@ -26,55 +28,214 @@ from claude_agent_sdk import (
 from artifacts import CostLog, Transcript
 from config import CONTEXT_WINDOW_TOKENS, DEFAULT_MODEL, MAX_USD_PER_SESSION
 
+# Reuse the CLI's renderer helpers verbatim so the web activity log reads exactly
+# like the terminal the user liked. These are pure, side-effect-free, stdlib-only.
+from autocodabench.cli.progress import (
+    _friendly_action,
+    _is_parallel_cancellation,
+    _short_tool_name,
+)
+
 log = logging.getLogger("autocodabench.web.streaming")
 
-# Tools we don't surface as chips in the UI — they're agent machinery that
-# only adds clutter for the end user.
+# Tools we don't surface as their own log line — pure agent machinery that
+# would only add clutter (file reads, searches, tool loading, skills).
 _HIDDEN_TOOLS = {"Skill", "ToolSearch", "Read", "Grep", "Glob"}
 
-# Human-readable verb phrase per MCP tool, used in the running-step chip label.
-_OP_LABELS: dict[str, str] = {
-    "mcp__alex-mcp__search_works":               "OpenAlex search",
-    "mcp__alex-mcp__search_authors":             "OpenAlex author search",
-    "mcp__alex-mcp__autocomplete_authors":       "OpenAlex author autocomplete",
-    "mcp__alex-mcp__retrieve_author_works":      "OpenAlex retrieve works",
-    "mcp__alex-mcp__search_pubmed":              "PubMed search",
-    "mcp__alex-mcp__pubmed_author_sample":       "PubMed author sample",
-    "mcp__alex-mcp__search_orcid_authors":       "ORCID author search",
-    "mcp__alex-mcp__get_orcid_publications":     "ORCID retrieve works",
-    "mcp__autocodabench__autocodabench_open_run":               "opening session",
-    "mcp__autocodabench__autocodabench_current_run":            "verifying session",
-    "mcp__autocodabench__autocodabench_log_event":              "logging event",
-    "mcp__autocodabench__autocodabench_snapshot_spec":          "saving spec",
-    "mcp__autocodabench__autocodabench_init_bundle":            "creating bundle",
-    "mcp__autocodabench__autocodabench_write_competition_yaml": "writing competition.yaml",
-    "mcp__autocodabench__autocodabench_write_page":             "writing page",
-    "mcp__autocodabench__autocodabench_write_scoring_program":  "writing scoring program",
-    "mcp__autocodabench__autocodabench_write_ingestion_program":"writing ingestion program",
-    "mcp__autocodabench__autocodabench_write_solution":         "writing solution",
-    "mcp__autocodabench__autocodabench_attach_data":            "attaching data",
-    "mcp__autocodabench__autocodabench_validate_bundle":        "validating bundle",
-    "mcp__autocodabench__autocodabench_zip_bundle":             "zipping bundle",
-    "mcp__autocodabench__autocodabench_upload_bundle":          "uploading to Codabench",
-}
+# The agent addresses the user directly via autocodabench_log_event. These are
+# the kinds we surface as visible log lines — mirrors the CLI progress renderer
+# (src/autocodabench/cli/progress.py:_USER_MESSAGE_KINDS). "deviation" reports a
+# departure from the locked plan and is highlighted.
+_USER_MESSAGE_KINDS = {"progress", "milestone", "status", "deviation"}
+_LOG_EVENT_TOOL = "mcp__autocodabench__autocodabench_log_event"
+
+# Knight-rider blob for the "Composing…" tail: one lit circle bouncing across a
+# dim track. Equal-width glyphs so it reads cleanly in the proportional chat font.
+_BLOB_WIDTH = 9
+_BLOB_LIT = "●"
+_BLOB_DIM = "○"
 
 
-def operation_label(tool_name: str, tool_input: dict | None) -> str:
-    """Return a friendly verb phrase for the step chip.
+def _result_text(content) -> str:
+    """Flatten a ToolResultBlock's content into plain text."""
+    if isinstance(content, list):
+        parts = []
+        for c in content:
+            if hasattr(c, "text"):
+                parts.append(c.text)
+            elif isinstance(c, dict) and "text" in c:
+                parts.append(c["text"])
+            else:
+                parts.append(str(c))
+        return "\n".join(parts)
+    return str(content or "")
 
-    For search tools we also append a truncated query string so the user can
-    see what's being looked up at a glance.
+
+class TurnView:
+    """Renders one agent turn as an inline, CLI-style activity log.
+
+    This is the terminal renderer (src/autocodabench/cli/progress.py) ported to
+    the browser, in the bot's OWN response bubble — no tool chips, no perpetual
+    animations:
+
+      - each tool call is a short, STATIC action line — ``⏺ Write scoring
+        program · +84 lines`` — gaining a ``✓`` (or ``✗``) when it returns;
+      - the agent's milestones/deviations are ``📍`` / ``⚠️`` notes;
+      - its narration (markdown tables included) renders as prose;
+      - a single trailing ``Composing… ●○○…`` line (blob + elapsed + current
+        action) shows the turn is still working, and is dropped when it ends.
+
+    All items render in arrival order into one message. Implementation is the
+    official Chainlit message API only: an ordered item list is rewritten into
+    the message content. A background ticker (~0.45 s) advances the blob and
+    flushes streamed narration — bounding re-renders to a steady cadence rather
+    than one per token — while tool/milestone events render immediately.
     """
-    base = _OP_LABELS.get(tool_name)
-    if base is None:
-        last = tool_name.split("__")[-1]
-        base = last.removeprefix("autocodabench_").replace("_", " ")
-    if isinstance(tool_input, dict) and "search" in tool_name.lower():
-        q = tool_input.get("query") or tool_input.get("q") or ""
-        q = str(q).strip()
-        if q:
-            return f"{base}: '{q[:40]}'"
-    return base
+
+    def __init__(self, msg: cl.Message) -> None:
+        self._msg = msg
+        self._items: list[dict] = []          # ordered {kind: "log"|"text", text, ...}
+        self._tool_pos: dict[str, int] = {}   # tool_use_id -> index in _items
+        self._status = ""
+        self._t0 = time.monotonic()
+        self._frame = 0
+        self._working = True
+        self._task: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
+
+    # -- content assembly ---------------------------------------------------
+    def _blob(self) -> str:
+        period = 2 * (_BLOB_WIDTH - 1)
+        pos = self._frame % period
+        if pos >= _BLOB_WIDTH:
+            pos = period - pos
+        return "".join(_BLOB_LIT if i == pos else _BLOB_DIM
+                       for i in range(_BLOB_WIDTH))
+
+    def _tail(self) -> str:
+        if not self._working:
+            return ""
+        elapsed = int(time.monotonic() - self._t0)
+        extra = f" · {self._status}" if self._status else ""
+        return f"_Composing… {self._blob()} · {elapsed}s{extra}_"
+
+    def _content(self) -> str:
+        # Consecutive log lines pack into one tight block (markdown hard breaks);
+        # narration/footer blocks stand alone so prose and tables render right.
+        blocks: list[str] = []
+        run: list[str] = []
+        for it in self._items:
+            if it["kind"] == "log":
+                run.append(it["text"])
+            else:
+                if run:
+                    blocks.append("  \n".join(run)); run = []
+                blocks.append(it["text"])
+        if run:
+            blocks.append("  \n".join(run))
+        tail = self._tail()
+        if tail:
+            blocks.append(tail)
+        return "\n\n".join(b for b in blocks if b)
+
+    async def _render(self) -> None:
+        async with self._lock:
+            self._msg.content = self._content()
+            try:
+                await self._msg.update()
+            except Exception:
+                log.debug("[turn] render failed", exc_info=True)
+
+    async def _animate(self) -> None:
+        try:
+            while self._working:
+                await asyncio.sleep(0.45)
+                self._frame += 1
+                await self._render()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("[turn] animator failed", exc_info=True)
+
+    # -- lifecycle / events -------------------------------------------------
+    def start(self) -> None:
+        # Inherits the Chainlit context (contextvars are copied into the task).
+        self._task = asyncio.create_task(self._animate())
+
+    def set_status(self, text: str | None) -> None:
+        self._status = " ".join((text or "").split())[:70]
+
+    async def add_tool(self, tool_id: str, action: str, detail: str | None) -> None:
+        text = f"⏺ {action}" + (f"  ·  {detail}" if detail else "")
+        self._items.append({"kind": "log", "text": text, "done": False})
+        self._tool_pos[tool_id] = len(self._items) - 1
+        self.set_status(action)
+        await self._render()
+
+    async def mark_tool(self, tool_id: str, ok: bool) -> None:
+        pos = self._tool_pos.get(tool_id)
+        if pos is None:
+            return
+        it = self._items[pos]
+        if it.get("done"):
+            return
+        it["done"] = True
+        it["text"] = f"{it['text']}  {'✓' if ok else '✗'}"
+        await self._render()
+
+    async def add_note(self, glyph: str, message: str) -> None:
+        self._items.append({"kind": "log", "text": f"{glyph} _{message}_"})
+        self.set_status(message)
+        await self._render()
+
+    def add_text(self, text: str) -> None:
+        # Accumulate narration into one prose block; the ticker flushes it to the
+        # screen (so a token-level stream doesn't trigger a render per token).
+        if not text:
+            return
+        if self._items and self._items[-1]["kind"] == "text":
+            self._items[-1]["text"] += text
+        else:
+            self._items.append({"kind": "text", "text": text})
+
+    async def add_block(self, text: str) -> None:
+        self._items.append({"kind": "text", "text": text})
+        await self._render()
+
+    async def finish(self) -> None:
+        if not self._working and self._task is None:
+            return
+        self._working = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except Exception:
+                pass
+            self._task = None
+        await self._render()  # final paint with no "Composing…" tail
+
+
+async def _surface_log_event(
+    tool_input: dict | None,
+    view: "TurnView",
+    turn_parts: list[dict],
+) -> None:
+    """Render an autocodabench_log_event call as an inline note, like the CLI.
+
+    progress/milestone/status → a "📍" note; deviation → a highlighted "⚠️"
+    note, both inline in the activity log. The line is also recorded in the
+    transcript so the on-disk record matches the screen. Machinery-only events
+    (no message / non-user kind) are dropped — the tool_calls/ audit has them.
+    """
+    inp = tool_input if isinstance(tool_input, dict) else {}
+    kind = str(inp.get("kind") or "").lower()
+    message = str(inp.get("message") or "").strip()
+    if not message or kind not in _USER_MESSAGE_KINDS:
+        return
+    glyph = "⚠️" if kind == "deviation" else "📍"
+    await view.add_note(glyph, message)
+    turn_parts.append({"kind": "text", "text": f"\n\n> {glyph} {message}\n"})
 
 
 async def run_agent_turn(
@@ -85,19 +246,19 @@ async def run_agent_turn(
 ) -> None:
     """Stream one agent turn to the UI and append the result to the transcript.
 
-    Handles the full receive_response() loop: text streaming, tool-use chips,
-    tool-result chips, cost/context footer, and transcript writing.
-
-    Used by both on_message (user-initiated turns) and _stream_one_turn
-    (synthetic phase-kickoff prompts injected by the server).
+    Renders the turn as an inline CLI-style activity log (see TurnView): tool
+    actions, milestones/deviations, narration, and a cost footer, plus the
+    transcript write. Used by both on_message (user-initiated turns) and the
+    phase-kickoff prompts injected by the server.
     """
-    open_steps: dict[str, tuple[cl.Step, str]] = {}
     turn_parts: list[dict] = []
     tool_idx_by_id: dict[str, int] = {}
     msg_count = 0
+    view = TurnView(response_msg)
 
     log.info("[turn] START — prompt %.80r", prompt)
     try:
+        view.start()  # show the "Composing…" line immediately, before any wait
         log.info("[turn] calling client.query()")
         await client.query(prompt)
         log.info("[turn] client.query() returned — entering receive_response() loop")
@@ -112,31 +273,32 @@ async def run_agent_turn(
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         log.debug("[turn] TextBlock len=%d", len(block.text))
-                        await response_msg.stream_token(block.text)
+                        view.add_text(block.text)
                         turn_parts.append({"kind": "text", "text": block.text})
 
                     elif isinstance(block, ToolUseBlock):
                         log.info("[turn] ToolUseBlock name=%r id=%s", block.name, block.id)
-                        if block.name in _HIDDEN_TOOLS:
-                            log.debug("[turn] hidden tool %r — skipping chip", block.name)
+                        # The agent's direct-to-user log lines: surface as inline
+                        # notes (like the CLI), not as opaque tool chips.
+                        if block.name == _LOG_EVENT_TOOL:
+                            await _surface_log_event(block.input, view, turn_parts)
                             continue
-                        op   = operation_label(block.name, block.input)
-                        step = cl.Step(
-                            name=f"Running {op}",
-                            type="tool",
-                            show_input="json",
-                            parent_id=response_msg.id,
-                        )
-                        step.input = block.input
-                        log.info("[turn] sending step chip for tool=%r op=%r", block.name, op)
-                        await step.send()
-                        log.info("[turn] step chip sent for tool=%r", block.name)
-                        open_steps[block.id] = (step, op)
+                        action, detail = _friendly_action(
+                            _short_tool_name(block.name), block.input or {})
+                        # Housekeeping tools (open_run/current_run/TodoWrite) get
+                        # no line of their own — _friendly_action returns None.
+                        if action is None:
+                            continue
+                        view.set_status(action)
+                        if block.name in _HIDDEN_TOOLS:
+                            log.debug("[turn] hidden tool %r — no log line", block.name)
+                            continue
+                        await view.add_tool(block.id, action, detail)
                         turn_parts.append({
                             "kind":     "tool",
                             "id":       block.id,
                             "raw_name": block.name,
-                            "op":       op,
+                            "op":       action,
                             "input":    block.input,
                             "output":   "",
                             "is_error": False,
@@ -154,38 +316,15 @@ async def run_agent_turn(
                     if not isinstance(block, ToolResultBlock):
                         continue
                     is_error = bool(getattr(block, "is_error", False))
+                    out_text = _result_text(block.content)
                     log.info(
                         "[turn] ToolResultBlock tool_use_id=%s is_error=%s content_len=%d",
-                        block.tool_use_id,
-                        is_error,
-                        len(str(block.content or "")),
+                        block.tool_use_id, is_error, len(out_text),
                     )
-                    record = open_steps.pop(block.tool_use_id, None)
-                    if record is None:
-                        log.warning("[turn] ToolResultBlock for unknown id=%s — skipping", block.tool_use_id)
-                        continue
-                    step, op = record
-                    step.name = op
-
-                    if isinstance(block.content, list):
-                        parts = []
-                        for c in block.content:
-                            if hasattr(c, "text"):
-                                parts.append(c.text)
-                            elif isinstance(c, dict) and "text" in c:
-                                parts.append(c["text"])
-                            else:
-                                parts.append(str(c))
-                        out_text = "\n".join(parts)
-                    else:
-                        out_text = str(block.content or "")
-
-                    if is_error:
-                        step.is_error = True
-                    step.output = out_text
-                    log.info("[turn] updating step chip op=%r is_error=%s out_len=%d", op, is_error, len(out_text))
-                    await step.update()
-                    log.info("[turn] step chip updated op=%r", op)
+                    # A cancelled sibling of a parallel batch is benign, not a
+                    # failure — mark it done (✓), same as the CLI.
+                    benign = _is_parallel_cancellation(out_text)
+                    await view.mark_tool(block.tool_use_id, ok=(not is_error) or benign)
 
                     idx = tool_idx_by_id.get(block.tool_use_id)
                     if idx is not None:
@@ -212,8 +351,8 @@ async def run_agent_turn(
 
                 if cost or in_tok:
                     ctx_pct = 100.0 * in_tok / CONTEXT_WINDOW_TOKENS if in_tok else 0.0
-                    await response_msg.stream_token(
-                        f"\n\n_turn ≈ ${cost:.3f} · session "
+                    await view.add_block(
+                        f"_turn ≈ ${cost:.3f} · session "
                         f"${cum:.2f} / ${MAX_USD_PER_SESSION:.2f} · "
                         f"ctx {ctx_pct:.1f}% ({in_tok:,} tok)_"
                     )
@@ -271,13 +410,21 @@ async def run_agent_turn(
 
     except Exception as e:
         log.exception("[turn] EXCEPTION in run_agent_turn: %s: %s", type(e).__name__, e)
-        await cl.Message(
-            content=f"**Error:** `{type(e).__name__}: {e}`",
-            author="autocodabench",
-        ).send()
+        # If the client disconnected mid-turn (e.g. ClosedResourceError once the
+        # browser tab closes), the error message itself can't be delivered —
+        # don't let that second failure escape and take down the handler.
+        try:
+            await cl.Message(
+                content=f"**Error:** `{type(e).__name__}: {e}`",
+                author="autocodabench",
+            ).send()
+        except Exception:
+            log.warning("[turn] could not deliver error message (connection closed?)")
+    finally:
+        # Stop the animation and paint the final log (no "Composing…" tail),
+        # whether the turn succeeded or failed.
+        await view.finish()
 
-    log.info("[turn] calling response_msg.update()")
-    await response_msg.update()
     log.info("[turn] END — %d messages processed, %d turn_parts", msg_count, len(turn_parts))
 
     # Write completed turn to transcript.
