@@ -80,10 +80,16 @@ The authoring pipeline requires an LLM backend and is invoked as follows.
 
 ```bash
 autocodabench auth status     # which Claude auth path is active, if any
+
+# Default model is Claude Sonnet 4.6.
 autocodabench plan-build-validate "Plankton image classification, balanced accuracy, \
     two phases" --data ./plankton_sample/
 
-# The model is a slot, not a hard binding — same tools, same audit trail:
+# Change the model with --model — e.g. Claude Opus 4.8 for harder builds:
+autocodabench plan-build-validate "..." --model claude-opus-4-8
+#   (equivalently: --backend claude:claude-opus-4-8)
+
+# The backend is a slot too, not a hard binding — same tools, same audit trail:
 autocodabench plan-build-validate "..." --backend ollama:llama3.1      # local, keyless
 autocodabench plan-build-validate "..." --backend openai:gpt-4o
 autocodabench validate bundle.zip --judged --backend ollama:llama3.1
