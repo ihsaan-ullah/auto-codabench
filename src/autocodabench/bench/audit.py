@@ -15,6 +15,7 @@ structurally blind to the target.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Verdicts. ``pass``/``fail`` are score comparisons; the other two are
@@ -34,6 +35,53 @@ def metric_key_for(expected: dict[str, Any]) -> str | None:
     return expected.get("primary_score_key") or expected.get("metric")
 
 
+def _normalize_metric(name: Any) -> str:
+    """Canonicalize a metric name for tolerant matching.
+
+    Lowercase, drop every non-alphanumeric character, and strip a trailing
+    ``metric`` token — so ``geometric_mean_accuracy_metric`` (a ground-truth
+    name) and ``geometric_mean_accuracy`` (what a freshly generated bundle
+    tends to emit) collapse to the same key.
+    """
+    s = re.sub(r"[^a-z0-9]+", "", str(name).lower())
+    if s.endswith("metric") and len(s) > len("metric"):
+        s = s[: -len("metric")]
+    return s
+
+
+def resolve_score(scores: dict[str, Any], expected: dict[str, Any]
+                  ) -> tuple[str | None, Any, str | None]:
+    """Find the produced score to compare against the expected metric.
+
+    Measuring score *fidelity* means asking whether the bundle reproduced the
+    number — not whether it happened to name its leaderboard column exactly the
+    way the reference bundle did (a freshly generated bundle almost never will).
+    So matching is tiered, most-specific first, and the chosen tier is reported:
+
+    1. ``exact`` — the ``primary_score_key`` or ``metric`` name is a key as-is.
+    2. ``normalized`` — a produced key matches the expected ``metric`` after
+       :func:`_normalize_metric` (suffix/punctuation/case-insensitive).
+    3. ``sole`` — the bundle reported exactly one numeric score; use it.
+
+    Returns ``(key, value, match)``; ``(None, None, None)`` if nothing matched.
+    """
+    if not isinstance(scores, dict) or not scores:
+        return None, None, None
+    for cand in (expected.get("primary_score_key"), expected.get("metric")):
+        if cand and cand in scores:
+            return cand, scores[cand], "exact"
+    want = _normalize_metric(expected.get("metric") or expected.get("primary_score_key") or "")
+    if want:
+        for k, v in scores.items():
+            if _normalize_metric(k) == want:
+                return k, v, "normalized"
+    numeric = {k: v for k, v in scores.items() if _maybe_float(v) is not None}
+    if len(numeric) == 1:
+        (k, v), = numeric.items()
+        return k, v, "sole"
+    return None, None, None
+
+
 def audit_submission(final: dict[str, Any], expected: dict[str, Any],
                      *, sub_label: str = "") -> dict[str, Any]:
     """Verdict one submission's reformat-and-run output against its target.
@@ -46,13 +94,13 @@ def audit_submission(final: dict[str, Any], expected: dict[str, Any],
     """
     scores = final.get("scores")
     status = final.get("status")
-    key = metric_key_for(expected)
 
     verdict = {
         "sub": sub_label,
         "verdict": None,
         "within_tolerance": None,
-        "metric_key": key,
+        "metric_key": metric_key_for(expected),
+        "metric_match": None,         # exact | normalized | sole — how the key was resolved
         "actual_score": None,
         "expected_score": _maybe_float(expected.get("score")),
         "tolerance": _maybe_float(expected.get("tolerance")) or 0.0,
@@ -73,17 +121,21 @@ def audit_submission(final: dict[str, Any], expected: dict[str, Any],
                f"{final.get('stage_failed')})")
         return verdict
 
-    # 2b. Metric mismatch — the expected key isn't in what the bundle reported.
-    if not key or key not in scores:
+    # 2b. Metric mismatch — no produced score maps to the expected metric
+    # (after exact → normalized-name → sole-numeric matching).
+    key, raw_actual, match = resolve_score(scores, expected)
+    if key is None:
         verdict["verdict"] = METRIC_MISMATCH
         verdict["within_tolerance"] = False
         verdict["error_summary"] = (
             f"bundle produced scores={sorted(scores.keys())}, "
-            f"expected metric={key!r}")
+            f"expected metric={metric_key_for(expected)!r}")
         return verdict
+    verdict["metric_key"] = key
+    verdict["metric_match"] = match
 
     # 2c. Score available — compare within tolerance.
-    actual = _maybe_float(scores.get(key))
+    actual = _maybe_float(raw_actual)
     expected_score = verdict["expected_score"]
     tol = verdict["tolerance"]
     verdict["actual_score"] = actual
