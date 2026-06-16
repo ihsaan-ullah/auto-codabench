@@ -19,13 +19,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from ..instance import mcp
 from ...run_log import logged_tool
 
 log = logging.getLogger("autocodabench.research")
+
+# Hard ceiling on any single blocking Kaggle call. Without it, a slow or blocked
+# outbound connection to kaggle.com (as seen on the hosted Space) makes the SDK
+# hang indefinitely — surfacing in the UI as a turn frozen for minutes. We would
+# rather skip the source with a clear error than freeze.
+_KAGGLE_TIMEOUT_S = 30
 
 
 def _slug(competition: str) -> str:
@@ -35,11 +43,45 @@ def _slug(competition: str) -> str:
     return m.group(1) if m else s.split("/")[-1]
 
 
+def _ensure_kaggle_token() -> None:
+    """Guarantee a Kaggle credential is present before ``authenticate()``.
+
+    The CLI's research pipeline injects ``KAGGLE_API_TOKEN`` via
+    ``agent.research.resolve()``, but other callers (notably the web UI's MCP
+    subprocess) do not. With NO credential, the modern Kaggle SDK can drop into
+    an interactive OAuth/login path that blocks a headless server — so we seed
+    the shared public throw-away token when nothing else is configured.
+    """
+    if (os.environ.get("KAGGLE_API_TOKEN")
+            or os.environ.get("KAGGLE_KEY")
+            or (Path.home() / ".kaggle" / "kaggle.json").is_file()
+            or (Path.home() / ".kaggle" / "access_token").is_file()):
+        return
+    try:
+        from ...agent.research import kaggle_token
+        tok, _ = kaggle_token()
+        if tok:
+            os.environ["KAGGLE_API_TOKEN"] = tok
+    except Exception:  # never let credential seeding break the tool
+        log.debug("kaggle token seeding skipped", exc_info=True)
+
+
 def _authed_api():
     """Return an authenticated Kaggle API client (lazy import)."""
+    _ensure_kaggle_token()
     from kaggle import api  # raises ImportError if the extra isn't installed
     api.authenticate()
     return api
+
+
+async def _run_kaggle(work) -> dict[str, Any]:
+    """Run a blocking Kaggle ``_work`` thunk off-loop under a hard timeout."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(work), timeout=_KAGGLE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("Kaggle call timed out after %ss", _KAGGLE_TIMEOUT_S)
+        return {"error": f"Kaggle request timed out after {_KAGGLE_TIMEOUT_S}s "
+                         "(network blocked or Kaggle unavailable) — skipping this source."}
 
 
 def _competition_record(c: Any) -> dict[str, Any]:
@@ -107,7 +149,7 @@ async def autocodabench_search_kaggle_competitions(
         except Exception as e:
             return {"error": f"Kaggle search failed: {type(e).__name__}: {e}"}
 
-    return await asyncio.to_thread(_work)
+    return await _run_kaggle(_work)
 
 
 @mcp.tool()
@@ -151,4 +193,4 @@ async def autocodabench_get_kaggle_competition(
             return {"error": f"Kaggle page fetch failed for {slug!r}: "
                              f"{type(e).__name__}: {e}"}
 
-    return await asyncio.to_thread(_work)
+    return await _run_kaggle(_work)
