@@ -1,9 +1,9 @@
-# The `autocodabench create` pipeline and per-phase testing
+# The `autocodabench plan-build-validate` pipeline and per-phase testing
 
 This document describes the execution of
 
 ```bash
-autocodabench create "<competition idea>" [--data <sample-data>]
+autocodabench plan-build-validate "<competition idea>" [--data <sample-data>]   # alias: create
 ```
 
 in full: the phases it comprises, **which part of each phase is an LLM session

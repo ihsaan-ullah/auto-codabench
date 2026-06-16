@@ -6,6 +6,51 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Phase-1 research capability** (`autocodabench.agent.research`): the plan
+  phase can now consult external knowledge instead of the backbone's training
+  data alone, across three sources with deliberate diversity (web search is
+  demoted to a last resort because it is single-source and easily biased):
+  - **OpenAlex** — recent related competition/benchmark papers (NeurIPS
+    Competition / Datasets & Benchmarks tracks), via the external
+    [`openalex-research-mcp`](https://github.com/oksure/openalex-research-mcp)
+    server (topic/keyword works search, related-works, `top_ai_conferences`
+    venue preset). Launched with `npx`; keyless (a courtesy email is polite).
+  - **Kaggle** — how similar competitions are actually hosted (metric,
+    submission caps, team-size limits, phase deadlines, full description/rules
+    pages), via **first-party** tools in the autocodabench MCP server
+    (`autocodabench_search_kaggle_competitions` / `..._get_kaggle_competition`,
+    wrapping the Kaggle SDK). Public competitions only — no private key required
+    (a shared throw-away token is used unless you set `KAGGLE_API_TOKEN` or have
+    `~/.kaggle/`). Needs the `kaggle` package: `pip install autocodabench[research]`.
+  - **Web search** (`WebSearch`/`WebFetch`) — last resort, for narrow factual
+    lookups the structured sources can't answer.
+
+  On by default; the CLI shows each source's status in the pre-run config banner
+  and exposes `--no-research` (all off) plus `--no-openalex` / `--no-kaggle` /
+  `--no-web-search`. The OpenAlex launcher is overridable via
+  `AUTOCODABENCH_OPENALEX_MCP_CMD`; a missing launcher/package degrades
+  gracefully (source marked unavailable, the plan still runs). **Benchmark
+  fairness:** only the Claude backend can host external MCP / web tools, so
+  create-bench records, per run, which sources the backbone could actually use
+  (`research.backend_supported` / `research.effective`) — the asymmetry is
+  recorded, not hidden. The network tools (`WebSearch`/`WebFetch`) are gated
+  past the filesystem sandbox only for a research-granted plan phase;
+  shells/`Task` stay denied.
+- **Provenance & coverage table at end of Phase 1**: the plan hand-off now
+  leads with a table that, for each of the seven design dimensions, marks
+  whether the decision was specified by the source material (**✓**), partially
+  specified (**⚠**), or inferred by the planner (**✗**), naming the evidence
+  consulted — so a reviewer sees how much of the design rests on their input
+  versus planner inference. The CLI renderer colours the glyphs (green/yellow/
+  red). Phase-1 hand-off text is now written in measured scientific prose.
+
+### Changed
+- **`create` renamed to `plan-build-validate`** — the all-three-phases command
+  now has an intuitive name that says what it does (plan → build → validate).
+  `create` remains as a backwards-compatible alias, but all docs and new
+  development target `plan-build-validate`.
+
 ### Fixed
 - **Phase read boundary is now code-enforced** (`backends.sandbox.FsSandbox`):
   the Claude backend runs under `bypassPermissions`, so the per-phase tool
@@ -32,6 +77,10 @@ All notable changes to autocodabench. Format follows
   output (logs, pipes) falls back to plain, ANSI-free scrollable lines.
   `--debug` keeps the full developer trace (raw tool errors, raw tool ids,
   gutter-ruled narration); `--quiet` keeps the final-summary-only mode.
+  Markdown **tables** in the agent's narration (e.g. the Phase-1 plan summary)
+  are now drawn as aligned, box-bordered terminal tables with per-cell wrapping
+  instead of mangled raw `| … |` rows — a display-only fix in the CLI renderer;
+  the stored markdown (and the web UI's rendering of it) is unchanged.
 - **validate-bench** (`benchmark/autocodabench_validate_bench/`): the second
   end-to-end benchmark — seeds known authoring defects into a clean bundle and
   measures the validator's catch rate per tier (precision/recall/F1), with a

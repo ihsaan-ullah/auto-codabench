@@ -24,6 +24,20 @@ def test_shell_and_network_tools_denied(tmp_path):
     assert sb.check("Task", {"prompt": "go"}) is not None
 
 
+def test_web_tools_allowed_with_research_grant(tmp_path):
+    """A phase granted a research capability may use WebSearch/WebFetch,
+    but shells and Task stay denied."""
+    allowed = tmp_path / "run"; allowed.mkdir()
+    sb = FsSandbox([str(allowed)], allow_web=True)
+    assert sb.check("WebFetch", {"url": "https://example.com"}) is None
+    assert sb.check("WebSearch", {"query": "neurips benchmark"}) is None
+    # Escapes are never lifted, research grant or not.
+    assert sb.check("Bash", {"command": "ls"}) is not None
+    assert sb.check("Task", {"prompt": "go"}) is not None
+    # File confinement still applies.
+    assert sb.check("Read", {"file_path": str(tmp_path / "outside.csv")}) is not None
+
+
 def test_read_inside_root_allowed(tmp_path):
     sb, allowed = _sb(tmp_path)
     assert sb.check("Read", {"file_path": str(allowed / "specs" / "plan.md")}) is None

@@ -5,7 +5,7 @@ Entry points are tiered by their authentication demands, keyless first:
   autocodabench plan "IDEA" [--data PATH]                      # Phase 1 — design → implementation_plan.md
   autocodabench build [plan.md | --run-dir DIR]                # Phase 2 — plan → bundle
   autocodabench validate BUNDLE [--facts F] [--judged]         # Phase 3 / standalone — keyless (unless --judged)
-  autocodabench create "IDEA" [--pdf P] [--data PATH]          # all three phases end to end
+  autocodabench plan-build-validate "IDEA" [--pdf P] [--data PATH]   # all three phases end to end (alias: create)
   autocodabench demo [--out DIR]                               # keyless replay demo
   autocodabench auth status [--no-probe]   # report, pick, and verify via a live turn
   autocodabench checks list
@@ -85,6 +85,51 @@ def _add_validate_args(p: argparse.ArgumentParser) -> None:
                         "report. Auto-discovered from the bundle dir if omitted.")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="emit the machine-readable report instead of markdown")
+
+
+def _add_research_args(p: argparse.ArgumentParser) -> None:
+    """Phase-1 research toggles — external knowledge sources for the planner.
+
+    On by default (the whole point is to beat the bare LLM); the user sees their
+    status in the config banner and can turn the whole capability, or any single
+    source, off before the run starts.
+    """
+    p.add_argument("--no-research", action="store_true",
+                   help="disable ALL Phase-1 research sources (OpenAlex, Kaggle, "
+                        "web search); plan from the model's own knowledge only")
+    p.add_argument("--no-openalex", action="store_true",
+                   help="disable the OpenAlex MCP (related competition/benchmark "
+                        "papers)")
+    p.add_argument("--no-kaggle", action="store_true",
+                   help="disable the Kaggle MCP (how similar competitions are hosted)")
+    p.add_argument("--no-web-search", action="store_true",
+                   help="disable the planner's internet search (WebSearch/WebFetch)")
+
+
+def _research_from_args(args: argparse.Namespace):
+    """Build a ResearchConfig from the CLI flags (default: everything on)."""
+    from ..agent.research import ResearchConfig
+    if getattr(args, "no_research", False):
+        return ResearchConfig.off()
+    return ResearchConfig(
+        enabled=True,
+        openalex=not getattr(args, "no_openalex", False),
+        kaggle=not getattr(args, "no_kaggle", False),
+        web_search=not getattr(args, "no_web_search", False),
+    )
+
+
+def _print_research_status(config, backend) -> None:
+    """Render the resolved research sources in the pre-run config banner."""
+    from ..agent.research import resolve as _resolve, describe
+    resolved = _resolve(config, backend=backend)
+    print("  research:    Phase 1 may consult (toggle with --no-research / "
+          "--no-openalex / --no-kaggle / --no-web-search):")
+    for line in describe(resolved):
+        print(f"               • {line}")
+    if not resolved.backend_supported:
+        print("               note: this backbone cannot use external MCP/web "
+              "tools — research is Claude-only.")
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -281,7 +326,7 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
     architecture versus the host (native vs slow QEMU emulation), and whether
     Docker is installed and running.
 
-    `required=True` (the run phases — `create`) makes a missing daemon a loud
+    `required=True` (the run phases — `plan-build-validate`) makes a missing daemon a loud
     prerequisite warning; `required=False` (static `validate`) keeps it
     informational. Returns the underlying preflight dict.
     """
@@ -349,7 +394,7 @@ def _print_create_config(*, idea, pdf, backend_name, auth_label, model, run_dir,
     """Show the full effective configuration before spending anything, so the
     run is never an opaque idle."""
     budget = f"${max_budget_usd:.2f} per phase" if max_budget_usd else "no cap"
-    print("autocodabench create — configuration")
+    print("autocodabench plan-build-validate — configuration")
     print(f"  idea:        {textwrap.shorten(idea, width=72) if idea else '(none)'}")
     print(f"  proposal:    {pdf or '(none)'}")
     print(f"  backend:     {backend_name}  ({auth_label})")
@@ -370,8 +415,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
     from ..run_log import open_session
 
     if not args.idea and not args.pdf:
-        print("create needs a competition source: pass an idea argument or "
-              "--pdf <proposal.pdf> (or both).", file=sys.stderr)
+        print("plan-build-validate needs a competition source: pass an idea "
+              "argument or --pdf <proposal.pdf> (or both).", file=sys.stderr)
         return 2
     if args.pdf and not Path(args.pdf).expanduser().is_file():
         print(f"--pdf: not a file: {args.pdf}", file=sys.stderr)
@@ -431,14 +476,17 @@ def _cmd_create(args: argparse.Namespace) -> int:
     session = open_session()
     run_dir = session.path
 
+    research = _research_from_args(args)
+
     print()
     _print_create_config(
         idea=args.idea, pdf=args.pdf, backend_name=backend.name,
         auth_label=auth_label, model=model_shown, run_dir=run_dir, data=args.data,
         max_budget_usd=args.max_budget_usd, validate=not args.no_validate,
         verbosity=verbosity)
+    _print_research_status(research, backend)
 
-    # Docker runtime preflight — a hard prerequisite for `create`: the build
+    # Docker runtime preflight — a hard prerequisite for `plan-build-validate`: the build
     # phase self-validates the bundle by running its baseline and starting-kit
     # notebook inside Docker. Show the starting image (the build may change it;
     # the final image is reported at the end), its arch fit, and daemon status.
@@ -481,6 +529,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
             on_event=on_event,
             validate=not args.no_validate,
             session=session,
+            research=research,
         ),
         debug=debug, quiet=args.quiet)
 
@@ -571,11 +620,14 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     # Pre-create the run dir so the config banner can show it.
     run_dir = open_run(slug="plan").path
 
+    research = _research_from_args(args)
+
     print()
     _print_plan_config(
         idea=args.idea, pdf=args.pdf, backend_name=backend.name, auth_label=auth_label,
         model=model_shown, run_dir=run_dir, data=args.data,
         max_budget_usd=args.max_budget_usd, verbosity=verbosity)
+    _print_research_status(research, backend)
 
     if sys.stdin.isatty() and not args.yes:
         def _abort() -> int:
@@ -600,6 +652,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             model=args.model,
             max_budget_usd=args.max_budget_usd,
             on_event=on_event,
+            research=research,
         ),
         debug=debug, quiet=args.quiet)
 
@@ -885,14 +938,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Agentic authoring and pre-launch validation of Codabench "
             "competition bundles.\n\n"
             "Authoring runs in three phases — plan → build → validate — each "
-            "runnable\non its own, or all at once with `create`."
+            "runnable\non its own, or all at once with `plan-build-validate`."
         ),
         epilog=(
-            "pipeline phases (run a phase on its own, or chain all three with `create`):\n"
-            "  plan       Phase 1 · idea/PDF → specs/implementation_plan.md   (needs an LLM backend)\n"
-            "  build      Phase 2 · a plan → competition bundle + .zip        (needs an LLM backend)\n"
-            "  validate   Phase 3 · run a bundle's pre-launch checks          (keyless; --judged adds an LLM)\n"
-            "  create     all three phases end to end                         (needs an LLM backend)\n"
+            "pipeline phases (run a phase on its own, or chain all three with `plan-build-validate`):\n"
+            "  plan                 Phase 1 · idea/PDF → specs/implementation_plan.md   (needs an LLM backend)\n"
+            "  build                Phase 2 · a plan → competition bundle + .zip        (needs an LLM backend)\n"
+            "  validate             Phase 3 · run a bundle's pre-launch checks          (keyless; --judged adds an LLM)\n"
+            "  plan-build-validate  all three phases end to end (alias: create)         (needs an LLM backend)\n"
             "\n"
             "utilities:\n"
             "  demo       rebuild + validate the shipped demo bundle, no keys  (keyless)\n"
@@ -903,7 +956,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "          ollama:<model>, openai:<model>, or an OpenAI-compatible URL with '#<model>'.\n"
             "\n"
             "getting started:\n"
-            "  autocodabench create \"<idea>\" [--pdf proposal.pdf] [--data DIR]   # the whole pipeline\n"
+            "  autocodabench plan-build-validate \"<idea>\" [--pdf proposal.pdf] [--data DIR]   # the whole pipeline\n"
             "  autocodabench plan \"<idea>\"  →  autocodabench build --run-dir <dir>  →  autocodabench validate <bundle>\n"
             "\n"
             "docs: docs/INSTRUCTION_FOR_USER.md   ·   per-phase walkthrough: docs/post-create-pipeline.md"
@@ -927,6 +980,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="model override for the agent session")
     p.add_argument("--max-budget-usd", type=float, default=None,
                    help="cost cap for this phase")
+    _add_research_args(p)
     p.add_argument("--yes", "-y", action="store_true",
                    help="do not prompt to confirm before starting")
     p.add_argument("--debug", action="store_true",
@@ -965,7 +1019,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_validate_args(p)
     p.set_defaults(func=_cmd_validate)
 
-    p = sub.add_parser("create",
+    p = sub.add_parser("plan-build-validate", aliases=["create"],
                        help="all 3 phases: plan → build → validate (needs an LLM backend)")
     p.add_argument("idea", nargs="?", default=None,
                    help="one-line competition idea or proposal text "
@@ -986,6 +1040,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="cumulative cost cap per phase")
     p.add_argument("--no-validate", action="store_true",
                    help="skip the post-build validation pass")
+    _add_research_args(p)
     p.add_argument("--yes", "-y", action="store_true",
                    help="do not prompt to confirm before starting")
     p.add_argument("--debug", action="store_true",

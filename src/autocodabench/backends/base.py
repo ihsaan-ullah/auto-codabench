@@ -72,6 +72,10 @@ class AgentTask:
     # denied — a code-enforced read boundary so a phase only ever touches the
     # inputs it was given (see backends.sandbox). MCP tools are unaffected.
     fs_roots: list[str] | None = None
+    # Permit the network research tools (WebSearch/WebFetch) past the sandbox's
+    # default deny. Set only for phases granted a research capability (Phase 1
+    # plan with research enabled); shells/Task stay denied regardless.
+    allow_web_tools: bool = False
 
 
 @runtime_checkable

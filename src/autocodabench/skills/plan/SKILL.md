@@ -266,25 +266,63 @@ specified but with caveats/assumptions; `"missing"` = unresolved / deferred.
 
 ## 3. Hand-off message
 
-After saving the plan, send ONE short message. Cover these points; for
-the closing call-to-action, use the exact mechanism your runtime note
-specifies (do not invent UI elements):
+After saving the plan, send ONE message written in **measured,
+scientific prose** — the register of a methods section, not marketing
+copy. Avoid exclamations, emoji as decoration, and punchy one-word
+verdicts. The message MUST contain, in this order, two tables followed
+by a short closing paragraph.
+
+### 3.1 Provenance & coverage table (FIRST)
+
+Before the design summary, present a **provenance table** that makes the
+division of labour explicit: for each of the seven design dimensions,
+state whether the decision was *specified by the source material* (the
+user's prompt / proposal PDF), *partially specified*, or *inferred by
+the planner*, and name the evidence used (proposal section, an OpenAlex
+/ Kaggle finding, or a stated assumption). Its purpose is to show the
+reviewer how much of the design rests on their input versus on the
+planner's inference, and therefore how much warrants their scrutiny.
+
+Use exactly these status glyphs in the Status column (the terminal
+renderer colours them): **✓** = specified in the source material; **⚠**
+= partially specified / specified with a planner assumption; **✗** =
+absent from the source and inferred by the planner.
 
 ```
-✅ **Plan ready** — saved as `specs/implementation_plan.md`.
+**Provenance and coverage of design decisions.** The following table
+records, for each design dimension, the origin of the decision and the
+evidence consulted. Dimensions marked ✗ or ⚠ rest substantially on
+planner inference and merit the closest review.
 
-Next step is **Phase 2 — Competition Creation**, where a fresh agent
-reads this plan and produces the Codabench `.zip` directly:
-`competition.yaml`, `scoring_program/score.py`,
-`solution/sample_code_submission/model.py`, pages — all from the plan.
+| # | Design dimension          | Status | Origin & evidence consulted |
+|---|---------------------------|--------|-----------------------------|
+| 1 | Task formulation          | ✓/⚠/✗ | <proposal §… / inferred; note> |
+| 2 | Data & splits             | ✓/⚠/✗ | <…> |
+| 3 | Metric                    | ✓/⚠/✗ | <proposal / OpenAlex [oa:…] / Kaggle comp …> |
+| 4 | Baseline                  | ✓/⚠/✗ | <…> |
+| 5 | Rules & submission limits | ✓/⚠/✗ | <Kaggle comp … daily cap; or inferred> |
+| 6 | Ethics & dual-use         | ✓/⚠/✗ | <…> |
+| 7 | Schedule & sustainability | ✓/⚠/✗ | <Pavão Ch.5 / inferred> |
 
-To keep cost predictable, **Phase 2 starts with no memory of this
-conversation** — it only sees the plan file. So if there's anything
-important we discussed but I didn't write into the plan, tell me now
-and I'll revise it.
-
-<closing call-to-action — per your runtime note>
+<one or two sentences summarising how many dimensions were specified
+versus inferred, and which inferred decisions most affect correctness.>
 ```
+
+### 3.2 Design-decision summary table (SECOND)
+
+Then a concise table of the decisions themselves (one row per
+dimension, the concrete choice made — metric function, baseline class,
+caps, etc.), so the reviewer sees the substance at a glance.
+
+### 3.3 Closing paragraph
+
+Close with a brief paragraph, in the same scientific register, stating:
+that the plan is saved at `specs/implementation_plan.md`; that Phase 2
+(Competition Creation) reads only this file — it retains no memory of
+this conversation — so any consequential point discussed but not written
+into the plan should be raised now for revision; and the
+call-to-action exactly as your runtime note specifies (do not invent UI
+elements).
 
 Then STOP and follow your runtime note: in an interactive surface,
 wait for the user to revise or advance; in a non-interactive run,
@@ -300,10 +338,53 @@ From `autocodabench`:
 - `autocodabench_log_event(kind, payload?)`.
 - `autocodabench_snapshot_spec(name, body)` — save / revise the plan.
 
-From `alex-mcp` (citations):
-- `search_works`, `search_authors`, etc. — 1-3 searches total is
-  plenty for Phase 1. Over-citing slows the plan without changing
-  Phase 2's bundle.
+**Research tools — ground the design in the existing literature and in
+hosting practice, not in your prior alone.** Two *structured* sources
+are provided and you are expected to consult BOTH before drafting,
+whenever they are available. They return verifiable, multi-source
+evidence; web search returns a single, easily biased ranking and is a
+last resort. Keep the total to a handful of calls — a B+ plan that
+ships beats an A+ plan that burns cost.
+
+Some of these tools are surfaced as *deferred* tools: load them once
+with `ToolSearch` before first use (e.g.
+`ToolSearch("select:mcp__openalex__search_works,mcp__openalex__search_by_topic")`,
+`ToolSearch("mcp__autocodabench__ kaggle competitions")`), then call them.
+
+1. **Related work — OpenAlex** (`mcp__openalex__*`). Use it to find
+   **recent related competitions and benchmark papers** (e.g. from the
+   NeurIPS Competition or Datasets & Benchmarks tracks), to corroborate
+   the task framing and metric, and to populate §Citations. Useful
+   tools: `search_works` (Boolean topic/keyword search with
+   year/venue/citation filters), `search_by_topic`, `get_related_works`,
+   `find_seminal_papers`, and `search_in_journal_list(query=...,
+   journal_list="top_ai_conferences")` to restrict to top venues. Aim
+   for 2-3 targeted queries.
+
+2. **Hosting practice — Kaggle** (first-party tools on the
+   `autocodabench` server). Use them for **state-of-the-art evidence on
+   how comparable competitions are actually hosted** — evaluation
+   metric, submission caps, team-size limits, phase deadlines, full
+   rules text — to inform §3 Metric, §5 Rules, and §7 Schedule:
+   - `autocodabench_search_kaggle_competitions(query, limit)` — search
+     PUBLIC competitions; returns metric, daily-submission cap,
+     team-size limit, deadlines, reward, short description.
+   - `autocodabench_get_kaggle_competition(competition, page_name?)` —
+     fetch a competition's full overview / data / rules / evaluation
+     pages. Public competitions only; no private data.
+   Aim for 1-2 searches plus, where helpful, one detail fetch.
+
+3. **Web search** (`WebSearch` / `WebFetch`) — a LAST RESORT. Use it
+   ONLY for a narrow factual lookup the two structured sources cannot
+   answer (a dataset's license URL, a metric's reference
+   implementation). Do NOT use it as your primary means of discovering
+   related work or competitions: prefer OpenAlex and Kaggle, which give
+   source diversity and reduce single-ranking bias.
+
+If a source is unavailable (disabled, launcher/package missing, or a
+non-Claude backbone that cannot host it), proceed from your own
+knowledge and record in §Citations and the provenance table (§3) that
+the source was not consulted — do NOT fail or stall waiting for it.
 
 **Do NOT call**: any `nb_*` tool (notebook flow is removed),
 any bundle-write tool (Phase 2's territory).

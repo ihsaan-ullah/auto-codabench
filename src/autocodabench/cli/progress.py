@@ -19,13 +19,14 @@ and restore the cursor (even on Ctrl-C). Its :meth:`on_event` is the
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 import textwrap
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # --- ANSI ------------------------------------------------------------------
 _ORANGE = "\033[38;5;208m"
@@ -89,6 +90,117 @@ def _edit_detail(inp: dict) -> str | None:
 def _one_line(text: Any, width: int) -> str:
     s = " ".join(str(text or "").split())
     return s if len(s) <= width else s[: width - 1] + "…"
+
+
+# --- markdown-table rendering (CLI-only) -----------------------------------
+# The agent's plan-summary text is markdown (the web UI renders it as such).
+# In the terminal the raw `| … |` rows get mangled by paragraph wrapping, so the
+# CLI renderer detects markdown tables and draws them as aligned boxes instead.
+# This touches DISPLAY only — the stored markdown is unchanged.
+
+_MD_EMPH = re.compile(r"\*\*|__|`")
+
+# Status glyphs the planner emits in the provenance/coverage table, coloured in
+# the terminal: ✓ green (specified), ⚠ yellow (partial/assumption), ✗ red
+# (inferred). Variation selectors (e.g. ⚠️) are tolerated. Colouring wraps the
+# glyph in zero-width ANSI, so column alignment (computed on the plain text) is
+# preserved.
+_GLYPH_COLORS = {"✓": _GREEN, "✔": _GREEN, "⚠": _YELLOW, "✗": _RED, "✘": _RED, "❌": _RED}
+_GLYPH_RE = re.compile("([" + "".join(_GLYPH_COLORS) + "]️?)")
+
+
+def _strip_md(cell: str) -> str:
+    """Drop the inline emphasis markers a terminal cell can't render."""
+    return _MD_EMPH.sub("", cell or "").strip()
+
+
+def _colorize_glyphs(text: str) -> str:
+    """Wrap ✓/⚠/✗ status glyphs in their colour (TTY only — caller-gated)."""
+    return _GLYPH_RE.sub(
+        lambda m: f"{_GLYPH_COLORS[m.group(1)[0]]}{m.group(1)}{_RESET}", text)
+
+
+def _table_cells(line: str) -> list[str] | None:
+    """Cells of a markdown table row, or ``None`` if the line isn't one."""
+    s = (line or "").strip()
+    if "|" not in s:
+        return None
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_table_separator(line: str) -> bool:
+    """True for a `|---|:--:|` style row that delimits header from body."""
+    cells = _table_cells(line)
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-+:?", c.strip() or "") for c in cells)
+
+
+def _has_md_table(text: str) -> bool:
+    lines = (text or "").split("\n")
+    return any(_table_cells(lines[i]) is not None and _is_table_separator(lines[i + 1])
+               for i in range(len(lines) - 1))
+
+
+def _fit_widths(natural: list[int], avail: int, min_w: int = 6) -> list[int]:
+    """Shrink the widest columns until the row fits the available width."""
+    widths = [max(1, w) for w in natural]
+    while sum(widths) > avail and any(w > min_w for w in widths):
+        idx = max(range(len(widths)), key=lambda k: widths[k])
+        if widths[idx] <= min_w:
+            break
+        widths[idx] -= 1
+    return widths
+
+
+def _render_md_table(header: list[str], rows: list[list[str]], max_width: int,
+                     color: Callable[[str, str], str], bold: bool) -> list[str]:
+    """Draw an aligned, box-bordered table with per-cell wrapping."""
+    all_rows = [header] + rows
+    ncols = max(len(r) for r in all_rows)
+    norm = [[_strip_md(r[c]) if c < len(r) else "" for c in range(ncols)]
+            for r in all_rows]
+    natural = [max((len(norm[r][c]) for r in range(len(norm))), default=1)
+               for c in range(ncols)]
+    indent = "  "
+    overhead = 3 * ncols + 1          # borders + one space of padding each side
+    avail = max(ncols * 6, max_width - len(indent) - overhead)
+    widths = _fit_widths(natural, avail)
+
+    def rule(left: str, mid: str, right: str) -> str:
+        segs = mid.join("─" * (w + 2) for w in widths)
+        return indent + color(left + segs + right, _DIM)
+
+    bar = color("│", _DIM)
+
+    def row_lines(cells: list[str], head: bool) -> list[str]:
+        wrapped = [textwrap.wrap(cells[c], width=widths[c]) or [""]
+                   for c in range(ncols)]
+        height = max(len(w) for w in wrapped)
+        out = []
+        for li in range(height):
+            parts = []
+            for c in range(ncols):
+                seg = (wrapped[c][li] if li < len(wrapped[c]) else "").ljust(widths[c])
+                if head and bold:
+                    seg = f"{_BOLD}{seg}{_RESET}"
+                elif bold:  # body cell on a TTY — colour any status glyphs
+                    seg = _colorize_glyphs(seg)
+                parts.append(f" {seg} ")
+            out.append(indent + bar + bar.join(parts) + bar)
+        return out
+
+    lines = [rule("┌", "┬", "┐")]
+    lines += row_lines(norm[0], head=True)
+    lines.append(rule("├", "┼", "┤"))
+    for r in norm[1:]:
+        lines += row_lines(r, head=False)
+    lines.append(rule("└", "┴", "┘"))
+    return lines
 
 
 def _tool_arg_summary(inp: dict) -> str:
@@ -346,8 +458,30 @@ class ProgressUI:
         self.set_status(_one_line(text, 80))
         # The agent's running narration — shown in both views (it is the
         # user-friendly story of what is happening); debug adds a gutter rule.
-        body = text if len(text) <= 1200 else text[:1200].rstrip() + " …"
+        # Markdown tables (the plan summary) are worth showing whole, so the
+        # length clamp is relaxed when one is present.
+        has_table = _has_md_table(text)
+        limit = 6000 if has_table else 1200
+        body = text if len(text) <= limit else text[:limit].rstrip() + " …"
         prefix = self._c("  │ ", _DIM) if self.debug else "  "
-        for para in body.split("\n"):
-            for chunk in (textwrap.wrap(para, width=84) or [""]):
-                self.line(f"{prefix}{chunk}")
+        width = max(60, shutil.get_terminal_size((80, 20)).columns)
+
+        lines = body.split("\n")
+        i, n = 0, len(lines)
+        while i < n:
+            # A markdown table starts with a header row + a `|---|` separator —
+            # render it as an aligned box rather than wrapping the raw pipes.
+            if (i + 1 < n and _table_cells(lines[i]) is not None
+                    and _is_table_separator(lines[i + 1])):
+                header = _table_cells(lines[i]) or []
+                rows, j = [], i + 2
+                while j < n and lines[j].strip() and _table_cells(lines[j]) is not None:
+                    rows.append(_table_cells(lines[j]) or [])
+                    j += 1
+                for tline in _render_md_table(header, rows, width, self._c, self.animate):
+                    self.line(tline)
+                i = j
+            else:
+                for chunk in (textwrap.wrap(lines[i], width=84) or [""]):
+                    self.line(f"{prefix}{chunk}")
+                i += 1

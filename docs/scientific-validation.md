@@ -115,7 +115,7 @@ choices; the latter are the subject of §3.3–§3.5.
 
 ### 3.3 Execution oracles: the bundle must run itself **[implemented]**
 
-These oracles are used by `autocodabench create` (and by the experiment
+These oracles are used by `autocodabench plan-build-validate` (and by the experiment
 harness) as the runtime definition of a working bundle. Structural
 validity (§3.1) is necessary but not sufficient: a bundle can be
 schema-perfect and still fail on its first real submission.
@@ -231,7 +231,7 @@ while the configuration enforces 5), the judge flagged exactly that
 contradiction with the correct locator and both quotes. Systematic
 sensitivity/specificity measurement is the E3 protocol (§4.3), now
 implemented as a runnable instrument
-(`experiments/backbone_bench/run_judge_bench.py`).
+(`benchmark/autocodabench_validate_bench/run.py`).
 
 Judged checks run through the same backend seam as everything else, so
 the judging backbone is a measured variable: the same rubric, the same
@@ -320,7 +320,7 @@ negative cells, including our own (Codabench-only scope; LLM cost).
 ### 4.3 E3 — Validation effectiveness (seeded defects) **[implemented; campaign pending]**
 
 E3 is the validator's sensitivity/specificity study, implemented as
-`experiments/backbone_bench/run_judge_bench.py`. Protocol: 12 defect
+`benchmark/autocodabench_validate_bench/run.py`. Protocol: 12 defect
 types drawn from real authoring failures are programmatically seeded
 into otherwise-clean bundles (the replay fixture provides the
 deterministic clean base) — 9 targeting the deterministic tier (missing
@@ -337,7 +337,7 @@ at least 3 runs per condition are required).
 seeded defects, as required. Because this tier is code, anything below
 9/9 constitutes a bug, and the study doubles as a regression test for
 the check registry. Per-backbone results for the judged tier accumulate
-under `experiments/backbone_bench/results/`.
+under `benchmark/autocodabench_validate_bench/results/`.
 
 ### 4.4 E4 — Authoring-effort study **[designed, optional]**
 
@@ -352,7 +352,7 @@ Because every backbone runs behind the same seam — an identical tool
 surface, an identical audit-trail format, and identical oracles — the
 LLM itself becomes a measured variable rather than a confound. The
 benchmark has two axes (full protocol:
-`experiments/backbone_bench/README.md`):
+`benchmark/README.md`):
 
 - **Axis A — validation/judging quality:** E3's seeded-defect catch
   rate and clean-bundle false-positive rate, per backbone (Claude,
@@ -447,10 +447,10 @@ authentication requirement.
 | Core smoke | `python -m autocodabench.core.bundle_io` | no |
 | Offline E2E + validation | `autocodabench demo --out /tmp/d && autocodabench validate /tmp/d/demo-ai-text-detection.zip` | no |
 | Check inventory | `autocodabench checks list` | no |
-| E3 deterministic baseline | `python experiments/backbone_bench/run_judge_bench.py` | no |
+| E3 deterministic baseline | `python benchmark/autocodabench_validate_bench/run.py` | no |
 | Judged tier | `autocodabench validate <bundle> --judged [--backend ollama:<model>]` | Claude auth, or none with a local Ollama model |
-| Judge bench per backbone | `python experiments/backbone_bench/run_judge_bench.py --backend <spec> --runs 3` | per backbone |
-| Full live pipeline | `autocodabench create "<idea>" [--backend <spec>] --verbose` | per backbone |
+| Judge bench per backbone | `python benchmark/autocodabench_validate_bench/run.py --backend <spec> --runs 3` | per backbone |
+| Full live pipeline | `autocodabench plan-build-validate "<idea>" [--backend <spec>] --verbose` | per backbone |
 | Ground-truth harness | see `benchmark/README.md` | yes |
 
 Authentication means a Claude subscription login or an

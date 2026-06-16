@@ -63,16 +63,17 @@ The authoring pipeline requires an LLM backend and is invoked as follows.
 
 ```bash
 autocodabench auth status     # which Claude auth path is active, if any
-autocodabench create "Plankton image classification, balanced accuracy, \
+autocodabench plan-build-validate "Plankton image classification, balanced accuracy, \
     two phases" --data ./plankton_sample/
 
 # The model is a slot, not a hard binding — same tools, same audit trail:
-autocodabench create "..." --backend ollama:llama3.1      # local, keyless
-autocodabench create "..." --backend openai:gpt-4o
+autocodabench plan-build-validate "..." --backend ollama:llama3.1      # local, keyless
+autocodabench plan-build-validate "..." --backend openai:gpt-4o
 autocodabench validate bundle.zip --judged --backend ollama:llama3.1
 ```
 
-`create` runs two isolated agent sessions — plan, then build — joined only
+`plan-build-validate` (the `create` alias still works) runs two isolated agent
+sessions — plan, then build, then a validation pass — joined only
 by a locked, human-editable `implementation_plan.md`. The build agent acts
 exclusively through a typed MCP tool surface, so every authoring action is
 logged and the finished run is replayable.
@@ -124,8 +125,7 @@ The table below summarizes the top-level structure of the repository.
 |------|----------|
 | `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI. |
 | `web/` | Chainlit chat UI — a consumer of the library, deployed by this Space. |
-| `benchmark/` | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
-| `experiments/` | Research scripts not yet ported to `benchmark/` (e.g. `backbone_bench`, the validate-bench prototype). |
+| `benchmark/` | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle) and validate-bench (seeded-defect detection), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
 | `tests/` | Unit suite — fast and fully keyless. |
 | `Dockerfile` | Used by HF Spaces to build the image. |
 

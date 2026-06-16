@@ -120,8 +120,8 @@ class ClaudeAgentBackend:
         hooks = None
         disallowed = None
         if task.fs_roots:
-            from .sandbox import FsSandbox, _DENY_TOOLS
-            sandbox = FsSandbox(task.fs_roots)
+            from .sandbox import FsSandbox
+            sandbox = FsSandbox(task.fs_roots, allow_web=task.allow_web_tools)
 
             async def _pre_tool_use(input_data, tool_use_id, context):
                 reason = sandbox.check(
@@ -143,7 +143,9 @@ class ClaudeAgentBackend:
             except ImportError:  # pragma: no cover - very old SDK
                 log.warning("SDK lacks HookMatcher; FS sandbox relies on "
                             "disallowed_tools only")
-            disallowed = sorted(_DENY_TOOLS)
+            # Backstop only the tools this phase actually denies (web tools are
+            # absent from sandbox.deny when a research capability is granted).
+            disallowed = sorted(sandbox.deny)
 
         options = ClaudeAgentOptions(
             model=task.model or self.model,
