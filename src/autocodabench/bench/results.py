@@ -71,8 +71,15 @@ def new_result(*, benchmark: str, competition: str, backend: dict[str, Any],
                turns: int | None = None, hardware_tag: str | None = None,
                instrument_version: dict | None = None,
                git_sha: str | None = None,
-               generated_at: str | None = None) -> dict[str, Any]:
-    """Assemble a complete, schema-stamped result record."""
+               generated_at: str | None = None,
+               research: dict | None = None) -> dict[str, Any]:
+    """Assemble a complete, schema-stamped result record.
+
+    ``research`` records the Phase-1 external-knowledge capability for this run
+    (requested config, whether the backbone could use it, and which sources were
+    effectively active) — load-bearing for fair cross-backbone comparison, since
+    only the Claude backend can reach external MCP / web tools.
+    """
     if git_sha is None:
         try:
             from ..run_log import _git_sha
@@ -91,6 +98,7 @@ def new_result(*, benchmark: str, competition: str, backend: dict[str, Any],
         "instrument_version": instrument_version or {},
         "competition": competition,
         "metrics": metrics,
+        "research": research,
         "cost_usd": cost_usd,
         "tokens": tokens,
         "turns": turns,

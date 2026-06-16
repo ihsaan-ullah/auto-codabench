@@ -16,7 +16,7 @@ Shipped backends:
 Everything above this seam (phases, judged checks, CLI, web UI) talks
 only to :class:`~autocodabench.backends.base.AgentBackend`, which is what
 makes cross-backbone benchmarking possible
-(see ``experiments/backbone_bench/``).
+(see ``benchmark/autocodabench_validate_bench/``).
 """
 from __future__ import annotations
 

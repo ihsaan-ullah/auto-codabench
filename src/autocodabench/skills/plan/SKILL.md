@@ -300,10 +300,32 @@ From `autocodabench`:
 - `autocodabench_log_event(kind, payload?)`.
 - `autocodabench_snapshot_spec(name, body)` — save / revise the plan.
 
-From `alex-mcp` (citations):
-- `search_works`, `search_authors`, etc. — 1-3 searches total is
-  plenty for Phase 1. Over-citing slows the plan without changing
-  Phase 2's bundle.
+**Research tools — ground the design in what already exists.** These
+are *optional* and may be absent (the run can disable them, or a
+non-Claude backbone cannot host them); when present, prefer them over
+relying on your training data, but keep it to a handful of calls — a
+B+ plan that ships beats an A+ plan that burns cost.
+
+From the `openalex` server (related papers — `mcp__openalex__*`):
+- Search for **recent related competitions / benchmark papers** (e.g.
+  from the NeurIPS Competition track or the Datasets & Benchmarks
+  track) to validate the task framing and metric choice and to source
+  the §Citations. Tools such as `search_works` / `search_authors` /
+  `retrieve_author_works`. 1-3 searches is plenty.
+
+From the `kaggle` server (hosting practice — `mcp__kaggle__*`):
+- Look up **how similar competitions are actually hosted** — metric
+  choices, phase structure, submission caps, anti-leakage rules — for
+  state-of-the-art suggestions on §3 Metric, §5 Rules, and §7
+  Schedule. Public competitions only; no private data. 1-2 lookups.
+
+Web search (`WebSearch` / `WebFetch`), when available:
+- For anything the two structured sources miss (a dataset license, a
+  metric's reference implementation). Use sparingly.
+
+If a research tool is unavailable, proceed from your own knowledge and
+note in §Citations that the source was not consulted — do NOT fail or
+stall waiting for it.
 
 **Do NOT call**: any `nb_*` tool (notebook flow is removed),
 any bundle-write tool (Phase 2's territory).

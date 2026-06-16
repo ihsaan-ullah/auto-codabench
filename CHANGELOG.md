@@ -6,6 +6,34 @@ All notable changes to autocodabench. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Phase-1 research capability** (`autocodabench.agent.research`): the plan
+  phase can now consult external knowledge instead of the backbone's training
+  data alone — the **OpenAlex** MCP (`alex-mcp`) for recent related
+  competition/benchmark papers (NeurIPS Competition / Datasets & Benchmarks
+  tracks), the official **Kaggle** MCP (`kaggle-mcp`) for how similar
+  competitions are hosted, and the agent's **web search**. On by default; the
+  CLI shows each source's status in the pre-run config banner and exposes
+  `--no-research` (all off) plus `--no-openalex` / `--no-kaggle` /
+  `--no-web-search`. Servers launch via `uvx` by default, overridable per
+  source with `AUTOCODABENCH_OPENALEX_MCP_CMD` / `AUTOCODABENCH_KAGGLE_MCP_CMD`;
+  a missing launcher degrades gracefully (source marked unavailable, the plan
+  still runs). Kaggle reads **public** competitions only — no private key
+  required (a shared throw-away token is used unless you set `KAGGLE_API_TOKEN`
+  or `~/.kaggle/access_token`); OpenAlex needs only a courtesy contact email.
+  **Benchmark fairness:** only the Claude backend can host external MCP / web
+  tools, so create-bench records, per run, which sources the backbone could
+  actually use (`research.backend_supported` / `research.effective`) — the
+  asymmetry is recorded, not hidden. The network tools (`WebSearch`/`WebFetch`)
+  are gated past the filesystem sandbox only for a research-granted plan phase;
+  shells/`Task` stay denied.
+
+### Changed
+- **`create` renamed to `plan-build-validate`** — the all-three-phases command
+  now has an intuitive name that says what it does (plan → build → validate).
+  `create` remains as a backwards-compatible alias, but all docs and new
+  development target `plan-build-validate`.
+
 ### Fixed
 - **Phase read boundary is now code-enforced** (`backends.sandbox.FsSandbox`):
   the Claude backend runs under `bypassPermissions`, so the per-phase tool
@@ -32,6 +60,10 @@ All notable changes to autocodabench. Format follows
   output (logs, pipes) falls back to plain, ANSI-free scrollable lines.
   `--debug` keeps the full developer trace (raw tool errors, raw tool ids,
   gutter-ruled narration); `--quiet` keeps the final-summary-only mode.
+  Markdown **tables** in the agent's narration (e.g. the Phase-1 plan summary)
+  are now drawn as aligned, box-bordered terminal tables with per-cell wrapping
+  instead of mangled raw `| … |` rows — a display-only fix in the CLI renderer;
+  the stored markdown (and the web UI's rendering of it) is unchanged.
 - **validate-bench** (`benchmark/autocodabench_validate_bench/`): the second
   end-to-end benchmark — seeds known authoring defects into a clean bundle and
   measures the validator's catch rate per tier (precision/recall/F1), with a

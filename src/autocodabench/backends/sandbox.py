@@ -32,6 +32,10 @@ _DENY_TOOLS = {
     "Task",
     "WebFetch", "WebSearch",
 }
+# The subset of deny tools that are network research tools, lifted from the deny
+# set when a phase is explicitly granted a research capability (see
+# ``FsSandbox(..., allow_web=True)``). Shells/Task are never lifted.
+_WEB_TOOLS = {"WebFetch", "WebSearch"}
 
 # Filesystem tools, mapped to the argument that carries the path they touch.
 _PATH_TOOLS = {
@@ -64,12 +68,15 @@ def _resolve(p: Any) -> Path | None:
 class FsSandbox:
     """Confine an agent's filesystem reach to a set of roots."""
 
-    def __init__(self, roots: list[str | Path] | None):
+    def __init__(self, roots: list[str | Path] | None, *, allow_web: bool = False):
         self.roots: list[Path] = []
         for r in roots or []:
             rp = _resolve(r)
             if rp is not None:
                 self.roots.append(rp)
+        # Deny set for this phase: web tools are lifted only when explicitly
+        # granted a research capability; shells/Task stay denied either way.
+        self.deny = _DENY_TOOLS - _WEB_TOOLS if allow_web else set(_DENY_TOOLS)
 
     def _within(self, target: Path) -> bool:
         for root in self.roots:
@@ -83,7 +90,7 @@ class FsSandbox:
         if name.startswith("mcp__"):
             return None  # MCP surface is scoped to the run dir by construction
         base = name.split("__")[-1]
-        if base in _DENY_TOOLS:
+        if base in self.deny:
             return (
                 f"{base} is disabled in this phase — it can reach files outside "
                 "the inputs you were given. Use Read/Glob/Grep within the "

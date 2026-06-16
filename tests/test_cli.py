@@ -62,6 +62,45 @@ def test_debug_renderer_shows_full_trace_and_softens_cancellations():
     assert "retried" in out                        # …as a benign retry
 
 
+# --- markdown-table rendering in narration (CLI-only) ----------------------
+
+_TABLE_TEXT = (
+    "Plan ready. Summary:\n\n"
+    "| Section | Decision |\n"
+    "|---|---|\n"
+    "| **Task** | 3-class image classification; **result-submission** |\n"
+    "| **Metric** | `scipy.stats.gmean(per_group_accuracies)` |\n\n"
+    "Phase 2 will now run."
+)
+
+
+def test_narration_table_is_rendered_as_aligned_box():
+    out = _render([{"kind": "text", "text": _TABLE_TEXT}], debug=False)
+    # Drawn as a box with aligned borders…
+    assert "┌" in out and "┴" in out and "│" in out
+    # …header and cell content preserved, emphasis/backtick markers stripped…
+    assert "Section" in out and "Decision" in out
+    assert "scipy.stats.gmean(per_group_accuracies)" in out
+    assert "**Task**" not in out and "`scipy" not in out
+    # …and the markdown separator row is not echoed as raw pipes.
+    assert "|---|" not in out
+    # Surrounding prose is still shown.
+    assert "Plan ready. Summary:" in out
+    assert "Phase 2 will now run." in out
+
+
+def test_table_detection_helpers():
+    from autocodabench.cli.progress import (
+        _has_md_table, _is_table_separator, _table_cells, _strip_md)
+    assert _has_md_table(_TABLE_TEXT)
+    assert not _has_md_table("just prose | with a stray pipe")
+    assert _is_table_separator("|---|:--:|")
+    assert not _is_table_separator("| a | b |")
+    assert _table_cells("| a | b |") == ["a", "b"]
+    assert _table_cells("no pipes here") is None
+    assert _strip_md("**bold** and `code`") == "bold and code"
+
+
 def test_checks_list(capsys):
     assert main(["checks", "list"]) == 0
     out = capsys.readouterr().out

@@ -7,7 +7,7 @@ functions, and crucially the **same audit trail**: every execution is
 recorded through :mod:`autocodabench.run_log` (``tool_calls/NNNN_*.json``
 + ``events.jsonl``), so runs are replayable and comparable across
 backbones. That parity is what makes cross-model benchmarking
-(``experiments/backbone_bench``) commensurable by construction: every
+(``benchmark/autocodabench_validate_bench/``) commensurable by construction: every
 backbone acts through the identical tool surface and leaves identical
 evidence.
 

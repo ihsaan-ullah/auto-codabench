@@ -99,7 +99,7 @@ autocodabench validate /tmp/demo/demo-ai-text-detection --judged
 #   edit pages/overview.md to claim "max 20 submissions/day"
 #   (the config enforces 5) — the judge should flag exactly that line.
 
-autocodabench create "Iris species classification from tabular \
+autocodabench plan-build-validate "Iris species classification from tabular \
     measurements, balanced accuracy, result submission" --verbose
 # → the full live pipeline (~10–20 min, ~$2–4): plan → build →
 #   self-validation (the bundle's own baseline + notebook must execute)

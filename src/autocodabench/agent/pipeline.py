@@ -22,9 +22,12 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..backends.base import AgentBackend, AgentRunResult, AgentTask
+
+if TYPE_CHECKING:
+    from .research import ResearchConfig
 from ..run_log import SessionInfo, open_run, open_session, record_session_phase
 from . import prompts
 
@@ -172,6 +175,7 @@ async def create_async(
     on_event: Callable[[dict], None] | None = None,
     validate: bool = True,
     session: SessionInfo | None = None,
+    research: "ResearchConfig | None" = None,
 ) -> CreateResult:
     """Idea (or proposal text/PDF) → validated Codabench bundle, in two phases.
 
@@ -214,12 +218,17 @@ async def create_async(
                 _mcp_servers(phase_dir))
 
     # ---- Phase 1: plan -----------------------------------------------------
+    from .research import ResearchConfig, resolve as _resolve_research
+    rc = research if research is not None else ResearchConfig()
+    research_resolved = _resolve_research(rc, backend=backend)
     p1 = open_run(slug="create", phase="phase1_plan", **sid_kw)
     env, mcp_servers = _phase_env(p1.path)
+    mcp_servers = {**mcp_servers, **research_resolved.servers}
     emit({"kind": "phase", "phase": "plan", "index": 1, "total": 3,
           "title": "Planning the competition design",
           "detail": "drafting specs/implementation_plan.md (task, data, metric, "
-                    "baseline, rules, ethics, schedule)"})
+                    "baseline, rules, ethics, schedule)",
+          "research": research_resolved.sources})
     plan_prompt = (
         "Open the run with autocodabench_open_run, then produce the "
         "implementation plan for this competition.\n"
@@ -243,7 +252,7 @@ async def create_async(
     plan_result = await backend.run(AgentTask(
         prompt=plan_prompt,
         system_prompt=prompts.plan_system_prompt(),
-        allowed_tools=PLAN_TOOLS,
+        allowed_tools=PLAN_TOOLS + research_resolved.tools,
         mcp_servers=mcp_servers,
         env=env,
         model=model,
@@ -252,6 +261,7 @@ async def create_async(
         on_text=on_text,
         on_event=on_event,
         fs_roots=_fs_roots(run_dir, data),
+        allow_web_tools=research_resolved.web_search,
     ))
     emit({"kind": "phase_done", "phase": "plan", "ok": plan_result.ok,
           "num_turns": plan_result.num_turns,
@@ -358,6 +368,7 @@ async def plan_async(
     max_budget_usd: float | None = None,
     on_text: Callable[[str], None] | None = None,
     on_event: Callable[[dict], None] | None = None,
+    research: "ResearchConfig | None" = None,
 ) -> PlanResult:
     """Run Phase 1 only: produce specs/implementation_plan.md.
 
@@ -376,9 +387,13 @@ async def plan_async(
         from ..core.proposal import pdf_to_text
         proposal_text = pdf_to_text(pdf)
 
+    from .research import ResearchConfig, resolve as _resolve_research
+    rc = research if research is not None else ResearchConfig()
+    research_resolved = _resolve_research(rc, backend=backend)
+
     info = open_run(slug="plan")
     run_dir = info.path
-    mcp_servers = _mcp_servers(run_dir)
+    mcp_servers = {**_mcp_servers(run_dir), **research_resolved.servers}
     env = {**os.environ, "AUTOCODABENCH_RUN_DIR": str(run_dir)}
 
     plan_prompt = (
@@ -405,7 +420,7 @@ async def plan_async(
     plan_result = await backend.run(AgentTask(
         prompt=plan_prompt,
         system_prompt=prompts.plan_system_prompt(),
-        allowed_tools=PLAN_TOOLS,
+        allowed_tools=PLAN_TOOLS + research_resolved.tools,
         mcp_servers=mcp_servers,
         env=env,
         model=model,
@@ -414,6 +429,7 @@ async def plan_async(
         on_text=on_text,
         on_event=on_event,
         fs_roots=_fs_roots(run_dir, data),
+        allow_web_tools=research_resolved.web_search,
     ))
 
     plan_path = run_dir / "specs" / "implementation_plan.md"

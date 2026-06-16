@@ -30,10 +30,10 @@ To verify the installation:
 autocodabench executes every bundle program — scoring, ingestion, and the
 starting-kit notebook — inside the competition's Docker image, exactly as the
 Codabench compute worker does. **Docker must be installed and running** for the
-run phases: `create`'s build self-validation, and any direct call to the
+run phases: `plan-build-validate`'s build self-validation, and any direct call to the
 runner. Static `validate` and `demo` do not need it.
 
-Both `create` and `validate` open with a **Docker preflight banner** that
+Both `plan-build-validate` and `validate` open with a **Docker preflight banner** that
 reports the image that will run, its CPU architecture versus your host (native
 vs. slow QEMU emulation), and whether the daemon is up — so the runtime is never
 a surprise. On Apple silicon, prefer the multi-arch `codalab/codalab-legacy:py312`
@@ -116,7 +116,7 @@ You do not have to edit that file by hand: `autocodabench auth use api_key`
 (and the `auth status` picker) prompt for a key with hidden input and offer
 to save it to `./.env` (file mode 600) for you.
 
-The commands `autocodabench create` and `autocodabench validate --judged`
+The commands `autocodabench plan-build-validate` and `autocodabench validate --judged`
 perform an authentication preflight before starting a session. When no
 credentials are found and the command is running on an interactive
 terminal, the preflight offers the same two options — signing in to the
@@ -191,15 +191,31 @@ to a skipped result, never to a silent pass.
 ## 4. Creating a competition agentically (authentication required)
 
 ```bash
-autocodabench create "AI-generated-text detection, balanced accuracy, \
+autocodabench plan-build-validate "AI-generated-text detection, balanced accuracy, \
     two phases, result submission" \
-    --data ./sample_data/
+    --data ./sample_data/      # `create` remains as a shorter alias
 ```
 
-Before any tokens are spent, `create` prints its full effective configuration
+Before any tokens are spent, `plan-build-validate` prints its full effective configuration
 — backend and auth path, model, the exact output directory, sample data, cost
 cap, output mode, and the three pipeline stages — then (on a terminal) asks
 where the output should go and confirms before starting.
+
+**Phase-1 research.** The banner also shows which external knowledge sources
+the planner may consult so the design is grounded in what already exists rather
+than the model's training data alone: **OpenAlex** (recent related competition /
+benchmark papers), **Kaggle** (how similar competitions are hosted), and **web
+search**. All on by default; turn them off with `--no-research` (all) or
+`--no-openalex` / `--no-kaggle` / `--no-web-search` (individually). These are a
+**Claude-only** capability — OpenAI-compatible / Ollama backbones cannot host the
+external MCP servers or web tools, and the banner says so. Kaggle reads **public**
+competitions only and needs no key from you (a shared throw-away token is used
+unless you set `KAGGLE_API_TOKEN` or save your own to `~/.kaggle/access_token`,
+generated at <https://www.kaggle.com/settings/api>); OpenAlex needs only a
+courtesy email. The servers launch via `uvx` (install [`uv`](https://docs.astral.sh/uv/)),
+overridable per source with `AUTOCODABENCH_OPENALEX_MCP_CMD` /
+`AUTOCODABENCH_KAGGLE_MCP_CMD`; if the launcher is missing the source is marked
+unavailable and the plan proceeds without it.
 
 The run reports progress at one of three levels of detail:
 
@@ -263,7 +279,7 @@ print(report.ok, report.counts)
 
 ## 5. Choosing an LLM backend
 
-`autocodabench create` (and the benchmarks under `benchmark/`) drive the model
+`autocodabench plan-build-validate` (and the benchmarks under `benchmark/`) drive the model
 **hermetically through the backend seam** (`autocodabench.backends`): the
 autocodabench MCP tool surface is registered *programmatically* for each agent
 session, so there is **no `claude mcp add` and no `.mcp.json` to maintain** —
@@ -285,7 +301,7 @@ cross-backbone benchmarking commensurable.
 
 The same tool surface is still available as a standalone MCP stdio server
 (`python -m autocodabench.mcp.server`) for embedding in a custom MCP host, but
-it is **not** required for `create`, `validate`, or the benchmarks.
+it is **not** required for `plan-build-validate`, `validate`, or the benchmarks.
 
 ---
 
@@ -330,7 +346,7 @@ poll) is documented in
 
 | Symptom | Likely cause and resolution |
 |---|---|
-| `create` or `--judged` fails to start a session | Run `autocodabench auth status` — it verifies the agent SDK can actually sign in and reports the failure if it cannot. If no authentication is configured, log in through Claude Code or export `ANTHROPIC_API_KEY` (or place it in `./.env`); on an interactive terminal, the preflight described in section 2 offers these options directly. |
+| `plan-build-validate` or `--judged` fails to start a session | Run `autocodabench auth status` — it verifies the agent SDK can actually sign in and reports the failure if it cannot. If no authentication is configured, log in through Claude Code or export `ANTHROPIC_API_KEY` (or place it in `./.env`); on an interactive terminal, the preflight described in section 2 offers these options directly. |
 | Usage is billed to the API instead of the subscription plan | A stale `ANTHROPIC_API_KEY` is exported; `auth status` warns about precisely this condition. Unset the variable. |
 | Bundle validates locally but is rejected by Codabench | Confirm that the uploaded archive is the zip produced by `zip_bundle` or by the pipeline — `competition.yaml` must reside at the zip root, not inside a subdirectory. |
 | Checks report `skipped … requires facts` | Add the named keys to `competition_facts.yaml` (section 3). |

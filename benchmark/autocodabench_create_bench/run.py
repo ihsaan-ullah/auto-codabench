@@ -125,10 +125,22 @@ async def run_once(*, comp: str, comp_dir: Path, sample_data: Path,
     session = open_session(kind="create-bench")
     print(f"  session: {session.path}")
 
+    # Phase-1 research capability (OpenAlex + Kaggle MCP + web search). Default
+    # on; resolved against the backbone so the record states which sources this
+    # LLM could actually reach — only the Claude backend can use external MCP /
+    # web tools, and that asymmetry must be recorded for fair cross-backbone
+    # comparison, not hidden.
+    from autocodabench.agent.research import ResearchConfig, resolve as resolve_research
+    research_cfg = ResearchConfig()
+    research_resolved = resolve_research(research_cfg, backend=backend)
+    print(f"  research: backend_supported={research_resolved.backend_supported} "
+          f"effective={research_resolved.effective()}")
+
     # Phase 1-3: plan + build + self-validate, straight from the library.
     create = await create_async(
         idea=None, pdf=pdf, data=str(sample_data),
-        backend=backend, model=model, validate=True, session=session)
+        backend=backend, model=model, validate=True, session=session,
+        research=research_cfg)
 
     rep = create.validation
     metrics: dict = {
@@ -182,7 +194,13 @@ async def run_once(*, comp: str, comp_dir: Path, sample_data: Path,
         backend=results.backend_descriptor(backend, spec=backend_spec, model=model),
         metrics=metrics, run_id=session.session_id,
         cost_usd=create.total_cost_usd, hardware_tag=hardware_tag,
-        instrument_version=INSTRUMENT_VERSION, git_sha=session.git_sha)
+        instrument_version=INSTRUMENT_VERSION, git_sha=session.git_sha,
+        research={
+            "requested": research_cfg.to_dict(),
+            "backend_supported": research_resolved.backend_supported,
+            "effective": research_resolved.effective(),
+            "sources": research_resolved.sources,
+        })
 
     # Write into the session dir AND the contributable results partition.
     results.dump(record, session.path / "results.json")

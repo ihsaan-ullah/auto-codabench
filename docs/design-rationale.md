@@ -110,7 +110,7 @@ One further choice deserves a sentence: the runner provides *one-shot* functions
 
 ## 6. Decision 4 — the validator accepts *any* bundle, not only ones we generated
 
-**Naive design** — and a genuinely debated one. The validator exists to check the agent's output, so wire it into the generation pipeline: `create` produces a bundle and validates it, end of story. This is simpler (one entry point, no zip handling, no tolerance for unfamiliar layouts) and was effectively the shape of an early version.
+**Naive design** — and a genuinely debated one. The validator exists to check the agent's output, so wire it into the generation pipeline: `plan-build-validate` produces a bundle and validates it, end of story. This is simpler (one entry point, no zip handling, no tolerance for unfamiliar layouts) and was effectively the shape of an early version.
 
 **Failure mode.** Three arguments eventually overturned it.
 
@@ -156,7 +156,7 @@ The design consequence is stated as an invariant in `architecture.md` and is wor
 
 **Decision.** Everything above the seam talks to an abstract `AgentBackend` (`run(task) -> AgentRunResult`). Three implementations exist: `claude.py` (live, the Claude Agent SDK, imported lazily so the package functions without it), `openai_compat.py` (a self-contained tool-calling loop over any OpenAI-compatible endpoint — a local Ollama model, OpenAI, vLLM — exposing the same tool names and writing the same audit trail through an in-process registry, `local_tools.py`), and `replay.py` (Section 8).
 
-The payoff is scientific rather than merely practical: because the backbone is a slot, it is an experimental variable, and `experiments/backbone_bench/` measures backbones against each other on a fixed protocol — including a deterministic no-LLM baseline that the judged tier must beat to justify its existence. A hard-wired SDK admits no such experiment.
+The payoff is scientific rather than merely practical: because the backbone is a slot, it is an experimental variable, and `benchmark/autocodabench_validate_bench/` measures backbones against each other on a fixed protocol — including a deterministic no-LLM baseline that the judged tier must beat to justify its existence. A hard-wired SDK admits no such experiment.
 
 Authentication lives beside the seam (`auth.py`) for one Claude-specific reason that costs users real money when misunderstood: the SDK gives an exported `ANTHROPIC_API_KEY` precedence over a stored subscription login, silently. Rather than make the user delete a key to use their plan, autocodabench stores an explicit preference (`auto`/`subscription`/`api_key`) and realizes it — choosing `subscription` hides the key from the SDK for the process, so no manual unsetting is required. `autocodabench auth status` reports and lets the user pick the path; every live command prints an `INFO:` banner naming the auth in use and runs an interactive preflight rather than failing opaquely mid-run.
 
@@ -179,7 +179,7 @@ Four arguments, in the order they accumulated:
 
 **What the decision costs.** The builder occasionally lacks a nuance the planner knew but did not write down. We treat this as a feature with a sharp edge: an unwritten nuance is exactly the kind of implicit state the design is meant to flush out, and the experiment harness measures it directly — both phases emit a *missing-information inventory*, and the per-run report ranks the inferences that would have blocked correct scoring. The mitigation is to improve the plan skill's required sections, never to open a side channel between the sessions.
 
-The same artifact-only principle, applied with adversarial rather than economic motivation, governs the create-bench harness: in `benchmark/autocodabench_create_bench/` the implementer is *blinded* from the ground truth and the proposal PDF, the submission-adapter is blinded from expected scores, and the orchestrator never paraphrases one phase's content into another's prompt — each phase is handed only the file paths it is allowed to see (the isolation is a code invariant of the SDK orchestrator, not prompt discipline). The benchmark README (`benchmark/README.md`) documents the full blinding table; the point here is that "sessions communicate only through on-disk artifacts" is one principle serving two purposes: efficiency inside `create`, and experimental validity inside the harness.
+The same artifact-only principle, applied with adversarial rather than economic motivation, governs the create-bench harness: in `benchmark/autocodabench_create_bench/` the implementer is *blinded* from the ground truth and the proposal PDF, the submission-adapter is blinded from expected scores, and the orchestrator never paraphrases one phase's content into another's prompt — each phase is handed only the file paths it is allowed to see (the isolation is a code invariant of the SDK orchestrator, not prompt discipline). The benchmark README (`benchmark/README.md`) documents the full blinding table; the point here is that "sessions communicate only through on-disk artifacts" is one principle serving two purposes: efficiency inside `plan-build-validate`, and experimental validity inside the harness.
 
 Behavioral contracts complete the picture: each phase's instructions are a versioned `SKILL.md` under `skills/` (frontmatter stripped, a per-surface runtime footer appended at load time). Prompts therefore diff like code across releases, rather than living as strings scattered through Python.
 
@@ -197,7 +197,7 @@ Behavioral contracts complete the picture: each phase's instructions are a versi
 |---|---|---|---|
 | Unit suite | `tests/` | Keyless, deterministic, sub-second; replay covers the agent path | The deterministic layers are correct |
 | Live smoke | manual (`autocodabench validate --judged`, `auth status --probe`) | Requires auth; run by a human before release | The live wiring works |
-| Experiments | `experiments/` | Full pipeline, blinded phases, recorded artifacts, written reports | *How well* the system performs, quantitatively |
+| Benchmarks | `benchmark/` | Full pipeline, blinded phases, recorded artifacts, written reports | *How well* the system performs, quantitatively |
 
 The rule "nothing in `tests/` may require a key or the network" is enforced socially and stated as an invariant, because it is the property the other two regimes lean on: when an experiment fails, the unit suite's keylessness is what licenses the inference that the failure is agentic, not infrastructural. The experiment harness, conversely, is held to standards the unit suite is not — blinding rules, a no-retry rule at the orchestrator level (a failed phase is a defect to record, not to paper over), and a prohibition on synthetic stand-in data — because its outputs are evidence in [`scientific-validation.md`](./scientific-validation.md), not green checkmarks.
 
@@ -207,7 +207,7 @@ The rule "nothing in `tests/` may require a key or the network" is enforced soci
 
 The directories not yet derived follow from the decisions above rather than adding new ones:
 
-- **`cli/`** — argument parsing over the library. The single `autocodabench` console script and its subcommands (`validate`, `create`, …) call the same functions importable as `autocodabench.validate()` / `.create()`; the CLI adds `.env` loading and the auth preflight (Section 9) and contains no logic of its own.
+- **`cli/`** — argument parsing over the library. The single `autocodabench` console script and its subcommands (`validate`, `plan-build-validate`, …) call the same functions importable as `autocodabench.validate()` / `.create()`; the CLI adds `.env` loading and the auth preflight (Section 9) and contains no logic of its own.
 - **`upload/`** — the four-step Codabench REST flow (token → placeholder dataset → upload → poll), shared verbatim by the CLI, the MCP tool, and the web UI so that there is exactly one implementation of "publish."
 - **`run_log_hook.py`** — mirrors Claude Code session transcripts into the run directory, extending the Section-8 audit trail to the conversation layer.
 - **`web/`** (outside the package) — a Chainlit chat front-end that consumes the installed library. Its existence is itself a small design assertion: if the web UI ever needed code the library does not export, the library's public surface would be wrong.
@@ -229,7 +229,7 @@ The table below restates the document in one pass: each directory, the simpler d
 | `run_log.py` + `backends/replay.py` | Free-text logging | No replay, so CI and reviewers cannot exercise real code paths keylessly |
 | `backends/` | Hard-wired Claude SDK | Excludes keyless users and other models; backbone quality unmeasurable |
 | `agent/` | One long plan-and-build session | Token cost and degraded focus; no human review gate; plan/implementation blame unanswerable; no independent rerun |
-| `tests/` vs `experiments/` | One suite with live-LLM tests | Flaky, expensive, and a category error — experiments have measurements, tests have oracles |
+| `tests/` vs `benchmark/` | One suite with live-LLM tests | Flaky, expensive, and a category error — benchmarks have measurements, tests have oracles |
 
 Two threads run through every row. First, **epistemic honesty about who established what**: code gates, LLMs advise, humans attest, citations anchor, skipped checks announce themselves. Second, **artifacts over conversations**: every boundary in the system — between phases, between layers, between live and replay, between run and audit — is a file on disk that a human can read, diff, and replay. A reader who retains only those two principles can re-derive most of the table.
 
