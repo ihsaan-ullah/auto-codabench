@@ -63,6 +63,12 @@ All notable changes to autocodabench. Format follows
   opaque tool chips, and the status bar tracks the current tool action /
   narration — bringing the browser's progress feedback to parity with the
   terminal.
+- **Phase 3 (validation) shows a live "Running checks…" indicator**
+  (`web/streaming.py:RunningIndicator`): validation runs the deterministic
+  checks + Docker baseline off the event loop, which can take minutes; it now
+  animates the same moving-blob + elapsed-seconds feedback the agent phases give
+  ("Composing…"), so the UI no longer looks frozen. The LLM-judged pass shows
+  one too. Removed when the step completes.
 - **Provenance & coverage table uses colour-emoji status glyphs** — `✅`
   (specified) / `⚠️` (partial) / `❌` (inferred) instead of the monochrome
   `✓`/`⚠`/`✗`, so the table reads in colour in the web UI (where it renders as

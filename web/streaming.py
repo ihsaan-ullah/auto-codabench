@@ -49,11 +49,88 @@ _HIDDEN_TOOLS = {"Skill", "ToolSearch", "Read", "Grep", "Glob"}
 _USER_MESSAGE_KINDS = {"progress", "milestone", "status", "deviation"}
 _LOG_EVENT_TOOL = "mcp__autocodabench__autocodabench_log_event"
 
-# Knight-rider blob for the "Composing…" tail: one lit circle bouncing across a
+# Knight-rider blob for the "working" tail: one lit circle bouncing across a
 # dim track. Equal-width glyphs so it reads cleanly in the proportional chat font.
 _BLOB_WIDTH = 9
 _BLOB_LIT = "●"
 _BLOB_DIM = "○"
+
+
+def _blob(frame: int) -> str:
+    """One lit circle bouncing left↔right across a dim track (CLI knight-rider)."""
+    period = 2 * (_BLOB_WIDTH - 1)
+    pos = frame % period
+    if pos >= _BLOB_WIDTH:
+        pos = period - pos
+    return "".join(_BLOB_LIT if i == pos else _BLOB_DIM for i in range(_BLOB_WIDTH))
+
+
+class RunningIndicator:
+    """A standalone animated "<verb>… ●○○ · Ns" line in its own message.
+
+    The web counterpart of the CLI's live status line, for NON-agent work that
+    runs off the event loop (e.g. Phase 3 validation, which executes the check
+    framework + Docker baseline in a worker thread). It animates a Chainlit
+    message via a background ticker so the UI never looks frozen; stop() removes
+    it. Same blob/elapsed vocabulary as the agent turns' "Composing…" tail, with
+    a configurable verb ("Running checks", "Running LLM-judged checks", …).
+    """
+
+    def __init__(self, verb: str = "Working", *, status: str = "",
+                 author: str = "autocodabench") -> None:
+        self._verb = verb
+        self._status = status
+        self._author = author
+        self._msg: cl.Message | None = None
+        self._t0 = time.monotonic()
+        self._task: asyncio.Task | None = None
+        self._stopped = False
+
+    def _frame_text(self, frame: int) -> str:
+        elapsed = int(time.monotonic() - self._t0)
+        extra = f" · {self._status}" if self._status else ""
+        return f"_{self._verb}… {_blob(frame)} · {elapsed}s{extra}_"
+
+    async def _run(self) -> None:
+        frame = 0
+        try:
+            while not self._stopped:
+                frame += 1
+                if self._msg is not None:
+                    self._msg.content = self._frame_text(frame)
+                    await self._msg.update()
+                await asyncio.sleep(0.45)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.debug("[run] running indicator update failed", exc_info=True)
+
+    def set_status(self, text: str | None) -> None:
+        self._status = " ".join((text or "").split())[:70]
+
+    async def start(self) -> None:
+        self._msg = cl.Message(content=self._frame_text(0), author=self._author)
+        await self._msg.send()
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        """Stop animating and remove the indicator message. Idempotent."""
+        if self._stopped:
+            return
+        self._stopped = True
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except Exception:
+                pass
+            self._task = None
+        if self._msg is not None:
+            try:
+                await self._msg.remove()
+            except Exception:
+                pass
+            self._msg = None
 
 
 def _result_text(content) -> str:
@@ -104,20 +181,12 @@ class TurnView:
         self._lock = asyncio.Lock()
 
     # -- content assembly ---------------------------------------------------
-    def _blob(self) -> str:
-        period = 2 * (_BLOB_WIDTH - 1)
-        pos = self._frame % period
-        if pos >= _BLOB_WIDTH:
-            pos = period - pos
-        return "".join(_BLOB_LIT if i == pos else _BLOB_DIM
-                       for i in range(_BLOB_WIDTH))
-
     def _tail(self) -> str:
         if not self._working:
             return ""
         elapsed = int(time.monotonic() - self._t0)
         extra = f" · {self._status}" if self._status else ""
-        return f"_Composing… {self._blob()} · {elapsed}s{extra}_"
+        return f"_Composing… {_blob(self._frame)} · {elapsed}s{extra}_"
 
     def _content(self) -> str:
         # Consecutive log lines pack into one tight block (markdown hard breaks);

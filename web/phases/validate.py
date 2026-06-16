@@ -82,6 +82,13 @@ class Validate:
         ).send()
 
         # --- deterministic + execution pass (off the event loop) ---
+        # Animated "Running checks…" indicator so the UI doesn't look frozen
+        # during the (potentially multi-minute) Docker baseline run — the same
+        # moving-blob feedback Phases 1/2 give while the agent works.
+        from streaming import RunningIndicator
+        indicator = RunningIndicator(
+            "Running checks", status="executing the baseline in Docker")
+        await indicator.start()
         try:
             report = await asyncio.to_thread(_run_validation_sync, bundle_path, True)
             log.info("[validate] done: ok=%s counts=%s", report.ok, report.counts)
@@ -96,6 +103,8 @@ class Validate:
                 ),
             ).send()
             return
+        finally:
+            await indicator.stop()
 
         # --- design scorecard (Phase-1 artifact; absent for Option B) ---
         from autocodabench.checks import load_design_assessment, render_report_markdown
@@ -145,8 +154,10 @@ class Validate:
                              content="_Skipped LLM-judged validation._").send()
             return
 
-        await cl.Message(author="autocodabench",
-                         content="Running LLM-judged checks…").send()
+        from streaming import RunningIndicator
+        indicator = RunningIndicator(
+            "Running LLM-judged checks", status="reading pages vs competition.yaml")
+        await indicator.start()
         try:
             from autocodabench.checks import (
                 validate_bundle_path_async, render_judged_section,
@@ -164,6 +175,8 @@ class Validate:
                 ),
             ).send()
             return
+        finally:
+            await indicator.stop()
 
         section = render_judged_section(jreport)
         _append_to_report(run_dir, "\n\n---\n\n" + section + "\n")
