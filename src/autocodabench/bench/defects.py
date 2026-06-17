@@ -117,6 +117,56 @@ def _shrink_dev_phase(comp: dict) -> None:
     phase["end"] = (parsed + timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _edit_facts(bundle: Path, mutate: Callable[[dict], None]) -> None:
+    """Edit (or create) the bundle's competition_facts.yaml. Used to seed
+    fact-gated defects (e.g. prizes=true with no documented structure)."""
+    p = bundle / "competition_facts.yaml"
+    facts = yaml.safe_load(p.read_text()) if p.is_file() else {}
+    facts = facts if isinstance(facts, dict) else {}
+    mutate(facts)
+    p.write_text(yaml.safe_dump(facts, sort_keys=False, allow_unicode=True))
+
+
+def _strip_submission_language(bundle: Path) -> None:
+    """Remove every submission/upload cue from the pages, so no page tells a
+    participant what to submit — what ``submission-mode-declared`` catches."""
+    import re
+    pat = re.compile(r"submissions?|submit|upload|prediction file|result file", re.I)
+    pages = bundle / "pages"
+    changed = False
+    for p in (sorted(pages.glob("*.md")) if pages.is_dir() else []):
+        text = p.read_text(encoding="utf-8")
+        new = pat.sub("entry", text)
+        if new != text:
+            p.write_text(new, encoding="utf-8")
+            changed = True
+    if not changed:
+        raise ValueError("defect seed failed: no submission language to strip")
+
+
+def _strip_submission_format(bundle: Path) -> None:
+    """Remove the overview's submission-format section AND the starting kit, so a
+    participant has nothing telling them what to submit — a genuine gap for
+    ``judged-submission-instructions`` (which reads both pages and the kit)."""
+    _overwrite(bundle, "pages/overview.md",
+               "# AI-Generated Text Detection (demo)\n\nClassify whether a text "
+               "was written by a human or a language model.\n\n## Phases\n\n"
+               "1. **Development** — max 5 submissions/day.\n"
+               "2. **Final** — max 3 submissions total.")
+    kit = bundle / "starting_kit"
+    if kit.is_dir():
+        shutil.rmtree(kit)
+
+
+def _invert_phase_order(comp: dict) -> None:
+    """Make the final phase start before the development phase — phases out of
+    chronological order, which ``phase-dates-monotonic`` flags."""
+    phases = comp.get("phases") or []
+    if len(phases) < 2:
+        raise ValueError("need ≥2 phases to invert order")
+    phases[1]["start"] = "2020-01-01 00:00:00"
+
+
 @dataclass(frozen=True)
 class Defect:
     """One known authoring defect and the check expected to catch it."""
@@ -176,6 +226,25 @@ DEFECTS: list[Defect] = [
            "reference-data-not-participant-visible",
            _leak_reference_into_input,
            "a ground-truth file is copied into the participant-visible input_data/"),
+    # New proposal-template deterministic checks (docs §11).
+    Defect("phase-dates-inverted", "deterministic", "phase-dates-monotonic",
+           lambda b: _edit_yaml(b, _invert_phase_order),
+           "the final phase starts before the development phase (out of order)"),
+    Defect("final-phase-open-ended", "deterministic", "review-window-present",
+           lambda b: _edit_yaml(b, lambda c: c["phases"][-1].pop("end")),
+           "the final phase has no end date (never closes — no review window)"),
+    Defect("data-license-stripped", "deterministic", "data-license-declared",
+           lambda b: _edit_text(b, "pages/data.md", "CC0-licensed", "freely available"),
+           "the only data-licence cue is removed from the data page"),
+    Defect("prizes-undocumented", "deterministic", "prize-structure-declared",
+           lambda b: _edit_facts(b, lambda f: f.__setitem__("prizes", True)),
+           "facts declare prizes=true but no page describes a prize structure"),
+    Defect("submission-mode-unstated", "deterministic", "submission-mode-declared",
+           _strip_submission_language,
+           "all submission/upload language is removed from the pages"),
+    Defect("challenge-type-invalid", "deterministic", "challenge-type-declared",
+           lambda b: _edit_facts(b, lambda f: f.__setitem__("challenge_type", "contest")),
+           "challenge_type declared as an unrecognised value"),
     # --- judged tier (the backbone-sensitive measurement) --------------------
     Defect("caps-contradiction", "judged", "judged-docs-config-consistency",
            lambda b: _edit_text(b, "pages/overview.md",
@@ -205,12 +274,9 @@ DEFECTS: list[Defect] = [
                "2. **Final** — max 3 submissions total."),
            "overview guts the scientific question and motivation (vague task)"),
     Defect("no-submission-format", "judged", "judged-submission-instructions",
-           lambda b: _overwrite(b, "pages/overview.md",
-               "# AI-Generated Text Detection (demo)\n\nClassify whether a text "
-               "was written by a human or a language model.\n\n## Phases\n\n"
-               "1. **Development** — max 5 submissions/day.\n"
-               "2. **Final** — max 3 submissions total."),
-           "overview removes the submission-format section entirely"),
+           _strip_submission_format,
+           "submission-format section removed from the overview AND the starting "
+           "kit deleted — a participant has nothing telling them what to submit"),
     Defect("unexplained-metric", "judged", "judged-evaluation-explained",
            lambda b: _overwrite(b, "pages/evaluation.md",
                "# Evaluation\n\nThe primary metric is balanced accuracy.\n"),
@@ -224,6 +290,31 @@ DEFECTS: list[Defect] = [
            lambda b: _overwrite(b, "pages/terms.md",
                "# Terms\n\nBe nice and have fun.\n"),
            "terms page drops eligibility, tie-break, IP, and anti-fraud clauses"),
+    # New proposal-template judged checks (docs §11) — each gutting one page so
+    # the target check has an unambiguous regression to catch.
+    Defect("gutted-abstract", "judged", "judged-abstract-structure",
+           lambda b: _overwrite(b, "pages/overview.md",
+               "# Demo\n\nUpload predictions.csv with one label per line.\n"),
+           "overview gutted of motivation, novelty, baselines, and scientific questions"),
+    Defect("gutted-background", "judged", "judged-background-impact",
+           lambda b: _overwrite(b, "pages/overview.md",
+               "# AI Text Detection\n\nClassify each text as human or AI. Submit "
+               "predictions.csv (one label per line).\n"),
+           "overview states the bare task with no background, impact, audience, or scenario"),
+    Defect("unjustified-metric", "judged", "judged-metric-justified",
+           lambda b: _overwrite(b, "pages/evaluation.md",
+               "# Evaluation\n\nThe metric is balanced accuracy. Higher is better; "
+               "ties are broken by earliest submission.\n"),
+           "evaluation names the metric but never justifies why it fits the task"),
+    Defect("gutted-protocol", "judged", "judged-protocol-described",
+           lambda b: _overwrite(b, "pages/overview.md",
+               "# AI Text Detection\n\nDetecting AI-generated text matters because "
+               "misinformation is a growing societal problem.\n"),
+           "overview gives motivation but not what is submitted, the procedure, or phases"),
+    Defect("sparse-data-quantity", "judged", "judged-data-quantity-justified",
+           lambda b: _overwrite(b, "pages/data.md",
+               "# Data\n\nThe dataset contains text samples labelled human or AI.\n"),
+           "data page omits size adequacy, post-contest availability, and GT confidentiality"),
 ]
 
 

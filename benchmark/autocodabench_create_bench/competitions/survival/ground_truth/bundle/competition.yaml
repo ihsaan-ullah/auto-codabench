@@ -1,0 +1,82 @@
+version: 2
+title: Survival
+description: Sample competition M2AIC 2018-2019 — survival analysis on the NHANES
+  mortality dataset, scored by a custom concordance index.
+docker_image: nnour/codalab-legacy-survival
+image: logo.png
+terms: pages/terms.md
+enable_detailed_results: true
+pages:
+- title: Overview
+  file: pages/overview.md
+- title: Data
+  file: pages/data.md
+- title: Evaluation
+  file: pages/evaluation.md
+- title: Terms
+  file: pages/terms.md
+tasks:
+- index: 0
+  name: Survival (development)
+  description: Development-phase scoring against the validation reference labels.
+  scoring_program: scoring_program/
+  ingestion_program: ingestion_program/
+  input_data: input_data/
+  reference_data: reference_data_dev/
+- index: 1
+  name: Survival (final)
+  description: Final-phase scoring against the held-out test reference labels.
+  scoring_program: scoring_program/
+  ingestion_program: ingestion_program/
+  input_data: input_data/
+  reference_data: reference_data_final/
+phases:
+- index: 0
+  name: Development Phase
+  description: 'Development phase: tune your models and submit prediction results,
+    a trained model, or an untrained model.'
+  start: '2018-11-15'
+  end: '2019-04-30'
+  max_submissions_per_day: 5
+  max_submissions: 100
+  execution_time_limit: 600
+  auto_migrate_to_this_phase: false
+  tasks:
+  - 0
+- index: 1
+  name: Final Phase
+  description: Final phase — no new submission; your last development-phase submission
+    is automatically forwarded and scored on the test reference data.
+  start: '2019-04-30'
+  end: '2019-12-01'
+  max_submissions_per_day: 1
+  max_submissions: 1
+  execution_time_limit: 600
+  auto_migrate_to_this_phase: true
+  tasks:
+  - 1
+leaderboards:
+- index: 0
+  title: RESULTS
+  key: main
+  hidden: false
+  columns:
+  - title: Custom Concordance Index
+    key: set1_score
+    index: 0
+    sorting: desc
+  - title: Duration
+    key: Duration
+    index: 1
+    sorting: desc
+solutions:
+- index: 0
+  path: solutions/coxph_baseline/
+  tasks:
+  - 0
+  - 1
+- index: 1
+  path: solutions/constant_baseline/
+  tasks:
+  - 0
+  - 1

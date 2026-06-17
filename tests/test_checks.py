@@ -198,14 +198,19 @@ def test_all_judged_checks_registered():
 def test_judged_findings_are_advisory_not_gates(demo_bundle):
     results = _run_judged(demo_bundle, '{"findings":[{"where":"terms.md","message":"x"}]}')
     assert len(results) >= 6
-    # Judged checks emit FINDINGs only — never FAIL, so they never gate.
-    assert all(r.status == Status.FINDING for r in results)
+    # Judged checks emit FINDINGs only — never FAIL, so they never gate. Some
+    # judged checks are fact-gated (e.g. the human-judging protocol) and SKIP
+    # when the fact is undeclared — information, not a gate.
     assert Status.FAIL not in {r.status for r in results}
+    ran = [r for r in results if r.status != Status.SKIPPED]
+    assert ran and all(r.status == Status.FINDING for r in ran)
 
 
 def test_judged_empty_findings_pass(demo_bundle):
     results = _run_judged(demo_bundle, '{"findings":[]}')
-    assert results and all(r.status == Status.PASS for r in results)
+    # Checks that actually ran pass; fact-gated checks SKIP (never silently pass).
+    ran = [r for r in results if r.status != Status.SKIPPED]
+    assert ran and all(r.status == Status.PASS for r in ran)
 
 
 def test_attestations_get_llm_tailored_detail(demo_bundle):

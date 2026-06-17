@@ -111,6 +111,7 @@ async def run_attestation_assessments(ctx: CheckContext, backend,
 @register
 class ExternalReviewAttestation(_Attestation):
     id = "attest-external-review"
+    template_section = "T8"
     llm_guidance = "Whether the bundle is reviewable end-to-end (a runnable baseline, starting kit, clear task) so a reviewer could attempt it; note that ≥1 external reviewer must still actually solve it."
     how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can suggest what to verify."
     title = "External proposal review"
@@ -123,6 +124,7 @@ class ExternalReviewAttestation(_Attestation):
 @register
 class LeakageProbeAttestation(_Attestation):
     id = "attest-leakage-probe"
+    template_section = "T3"
     llm_guidance = "From the data/feature descriptions, which columns or signals look most leak-prone, and remind that each must be probed with a single-feature model."
     how = "Requires a training run — surfaced for human confirmation; an LLM can suggest likely leak sources."
     title = "Per-feature leakage probe"
@@ -136,6 +138,7 @@ class LeakageProbeAttestation(_Attestation):
 @register
 class DatasheetAttestation(_Attestation):
     id = "attest-datasheet"
+    template_section = "T3"
     llm_guidance = "What provenance, license, consent, and known-bias information the pages already give, and what a published datasheet should still add."
     how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can draft a datasheet checklist."
     title = "Datasheet / data nutrition label"
@@ -147,6 +150,7 @@ class DatasheetAttestation(_Attestation):
 @register
 class DataPersistenceAttestation(_Attestation):
     id = "attest-data-persistence"
+    template_section = "T3"
     llm_guidance = "Whether the pages state a data license, a persistent URL/DOI, and a post-competition home — flag which are present and which are missing."
     how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can flag missing license/DOI cues."
     title = "Dataset license and post-competition home"
@@ -159,6 +163,7 @@ class DataPersistenceAttestation(_Attestation):
 @register
 class GameOfSkillAttestation(_Attestation):
     id = "attest-game-of-skill"
+    template_section = "T13"
     llm_guidance = "If prizes are offered, what skill-vs-chance and jurisdiction considerations apply, and remind to obtain legal confirmation."
     how = "Auto-passes when prizes=false; otherwise surfaced for legal confirmation, LLM-assisted."
     title = "Prize legality (game of skill)"
@@ -170,4 +175,103 @@ class GameOfSkillAttestation(_Attestation):
     def run(self, ctx: CheckContext) -> list[CheckResult]:
         if ctx.facts.prizes is False:
             return [self.passed("facts declare prizes=false — no prize-law exposure")]
+        return [self.attestation(self.statement)]
+
+
+# ---------------------------------------------------------------------------
+# Proposal-template attestations (Pavão et al. roadmap) — proposal-only /
+# off-platform criteria the bundle cannot prove. See
+# docs/validation-checklist-proposal.md §11.
+# ---------------------------------------------------------------------------
+
+
+@register
+class DeprecatedDatasetAttestation(_Attestation):
+    id = "attest-deprecated-dataset"
+    template_section = "T3"
+    dimension = Dimension.DATA
+    llm_guidance = ("From the dataset name and description, note any known recall/"
+                    "deprecation risk and remind the organizer to search "
+                    "'<dataset name> deprecated' and check the venue's deprecated-"
+                    "dataset list before reusing it.")
+    how = ("Cannot be read from the bundle — surfaced for human confirmation; needs the "
+           "dataset_name fact, and an LLM drafts the due-diligence note.")
+    title = "Dataset is not deprecated / recalled"
+    citation = "Pavão et al. (Ch. 3)"
+    requires_facts = ("dataset_name",)
+    statement = ("The dataset has been confirmed not deprecated or recalled — recycled "
+                 "datasets are sometimes withdrawn for bias or ethical reasons; search "
+                 "'<dataset> deprecated' and the venue's deprecated-dataset list.")
+
+
+@register
+class PiiConsentAttestation(_Attestation):
+    id = "attest-pii-consent"
+    template_section = "T3"
+    dimension = Dimension.GOVERNANCE
+    llm_guidance = ("Whether the pages suggest the data involves human subjects or PII, "
+                    "and what consent / ethics-committee / minimisation evidence the "
+                    "organizer should hold.")
+    how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can flag PII risk."
+    title = "PII minimised and consent / ethics approval obtained"
+    citation = "Pavão et al. (Ch. 3)"
+    statement = ("Personally identifiable information is minimised and, where real human-"
+                 "subject data is used, informed consent (and ethics-committee approval "
+                 "where applicable) has been obtained.")
+
+
+@register
+class PromotionPlanAttestation(_Attestation):
+    id = "attest-promotion-plan"
+    template_section = "T11"
+    dimension = Dimension.GOVERNANCE
+    llm_guidance = ("What audience the pages imply, and concrete promotion channels "
+                    "(mailing lists, talks) plus under-represented-group outreach the "
+                    "organizer should plan.")
+    how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can draft a promotion checklist."
+    title = "Promotion plan, including under-represented outreach"
+    citation = "Pavão et al. (Ch. 2)"
+    statement = ("A plan exists to promote participation (mailing lists, invited talks, "
+                 "etc.) and to attract participants from groups under-represented in "
+                 "challenge programs.")
+
+
+@register
+class OrganizingTeamAttestation(_Attestation):
+    id = "attest-organizing-team"
+    template_section = "T12"
+    dimension = Dimension.GOVERNANCE
+    llm_guidance = ("Which organizing roles the bundle/pages already evidence, and which "
+                    "of the required roles (coordinators, data providers, platform admins, "
+                    "baseline providers, beta testers, evaluators) plus diversity the "
+                    "organizer should still confirm.")
+    how = "Cannot be read from the bundle — surfaced for human confirmation; an LLM can list the roles to staff."
+    title = "Organizing team covers the required roles"
+    citation = "Pavão et al. (Ch. 2)"
+    statement = ("The organizing team covers the required roles — coordinators, data "
+                 "providers, platform administrators, baseline-method providers, beta "
+                 "testers, and evaluators — with relevant competence and a diversity note.")
+
+
+@register
+class LiveLogisticsAttestation(_Attestation):
+    id = "attest-live-logistics"
+    template_section = "T10"
+    dimension = Dimension.GOVERNANCE
+    llm_guidance = ("For a live/on-site challenge, what on-site schedule, organizer-vs-"
+                    "participant-provided resources, registration, and connectivity the "
+                    "organizer must arrange.")
+    how = "Auto-passes unless challenge_type=live; otherwise surfaced for human confirmation, LLM-assisted."
+    title = "Live-challenge on-site logistics arranged"
+    citation = "Pavão et al. (Ch. 2)"
+    requires_facts = ("challenge_type",)
+    statement = ("For this live/on-site challenge, the on-site schedule, the split of "
+                 "organizer- vs participant-provided resources, registration, and "
+                 "connectivity have been arranged.")
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        if str(ctx.facts.challenge_type).strip().lower() != "live":
+            return [self.passed(
+                f"challenge_type='{ctx.facts.challenge_type}' is not live — "
+                "on-site logistics N/A")]
         return [self.attestation(self.statement)]

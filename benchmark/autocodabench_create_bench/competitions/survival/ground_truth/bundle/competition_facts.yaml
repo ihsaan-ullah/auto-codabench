@@ -1,0 +1,10 @@
+# Declared competition facts (declare-then-verify side channel for checks that
+# cannot be decided from the bundle alone). Values marked (default) were chosen
+# by the maintainer when reformatting this legacy bundle into ground truth and
+# should be confirmed against the original competition.
+data_license: Public domain (U.S. CDC/NCHS NHANES; U.S. Government work)
+challenge_type: regular
+prizes: false
+task_type: survival_regression
+dataset_name: NHANES Survival (M2AIC 2018-2019)
+unit_of_generalization: patient

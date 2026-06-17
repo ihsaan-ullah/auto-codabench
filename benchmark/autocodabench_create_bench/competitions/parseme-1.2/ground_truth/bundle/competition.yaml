@@ -1,0 +1,94 @@
+version: 2
+title: PARSEME shared task 1.2 on semi-supervised identification of verbal MWEs (results submission)
+description: The third edition of the PARSEME shared task on automatic identification of verbal multiword
+  expressions (VMWEs) aims at identifying verbal MWEs in running texts. Verbal MWEs include, among others,
+  verbal idioms (to let the cat out of the bag), light-verb constructions (to make a decision), verb-particle
+  constructions (to give up), multi-verb constructions (to make do) and inherently reflexive verbs (s'évanouir
+  'to faint' in French). Their identification is a well-known challenge for NLP applications, due to their
+  complex characteristics including discontinuity, overlaps, non-compositionality, heterogeneity and syntactic
+  variability.
+image: parseme.jpg
+terms: pages/terms.md
+enable_detailed_results: true
+pages:
+- title: Overview
+  file: pages/overview.md
+- title: Participate
+  file: pages/participate.md
+- title: Terms
+  file: pages/terms.md
+tasks:
+- index: 0
+  name: Main Task
+  description: Verbal MWE identification across all languages (results submission).
+  input_data: input_data/
+  reference_data: reference_data/
+  scoring_program: scoring_program/
+  ingestion_program: ingestion_program/
+phases:
+- index: 0
+  name: Single Phase
+  description: Single-phase shared task — submit per-language system predictions for scoring.
+  start: '2024-02-05'
+  end: '2024-04-15'
+  tasks:
+  - 0
+  max_submissions_per_day: 10
+fact_sheet:
+  model_name:
+    key: model_name
+    type: text
+    title: 'Model name:'
+    selection: ''
+    is_required: 'true'
+    is_on_leaderboard: 'true'
+leaderboards:
+- index: 0
+  title: Results
+  key: main
+  columns:
+  - title: Unseen MWE-based Precision
+    key: Unseen MWE-based P
+    index: 0
+    precision: 2
+    sorting: desc
+  - title: Unseen MWE-based Recall
+    key: Unseen MWE-based R
+    index: 1
+    precision: 2
+    sorting: desc
+  - title: Unseen MWE-based F-score
+    key: Unseen MWE-based F
+    index: 2
+    precision: 2
+    sorting: desc
+  - title: Global MWE-based Precision
+    key: Global MWE-based P
+    index: 3
+    precision: 2
+    sorting: desc
+  - title: Global MWE-based Recall
+    key: Global MWE-based R
+    index: 4
+    precision: 2
+    sorting: desc
+  - title: Global MWE-based F-score
+    key: Global MWE-based F
+    index: 5
+    precision: 2
+    sorting: desc
+  - title: Global Token-based Precision
+    key: Global Token-based P
+    index: 6
+    precision: 2
+    sorting: desc
+  - title: Global Token-based Recall
+    key: Global Token-based R
+    index: 7
+    precision: 2
+    sorting: desc
+  - title: Global Token-based F-score
+    key: Global Token-based F
+    index: 8
+    precision: 2
+    sorting: desc

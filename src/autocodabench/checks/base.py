@@ -158,6 +158,14 @@ class Check:
     # code looks at / runs). Surfaced in the `autocodabench checks` table so an
     # organizer understands the mechanism, not just the intent.
     how: str = ""
+    # The section of the published challenge-proposal template (Pavão et al.,
+    # "Challenge design roadmap") this check covers, e.g. "T3" (Data) or "T5"
+    # (Metrics & evaluation). Documentation-only traceability: surfaced in
+    # ``checks --json`` / ``checklist_coverage()`` so coverage can be audited
+    # against that external standard, but NOT rendered as a table column. Empty
+    # for platform-integrity checks with no proposal-template counterpart. See
+    # ``docs/validation-checklist-proposal.md`` (§11).
+    template_section: str = ""
     # Fact names that must be present in CompetitionFacts; otherwise the
     # check reports SKIPPED with an actionable message instead of guessing.
     requires_facts: tuple[str, ...] = ()

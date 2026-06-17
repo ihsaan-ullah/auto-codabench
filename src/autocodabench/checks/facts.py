@@ -17,6 +17,11 @@ Example ``competition_facts.yaml``::
     external_data_allowed: false
     prizes: true                      # money/credits awarded?
     task_type: binary_classification_imbalanced
+    challenge_type: regular           # regular | hackathon | live
+    human_judging: false              # are submissions scored by human judges?
+    special_hardware: false           # does entering need special hardware/compute?
+    dataset_name: "ChaLearn LAP 2024" # for the "<name> deprecated" due-diligence screen
+    data_license: CC-BY-4.0           # the dataset's declared licence
 """
 from __future__ import annotations
 
@@ -37,6 +42,11 @@ class CompetitionFacts:
     external_data_allowed: bool | None = None
     prizes: bool | None = None
     task_type: str | None = None
+    challenge_type: str | None = None       # regular | hackathon | live
+    human_judging: bool | None = None
+    special_hardware: bool | None = None
+    dataset_name: str | None = None
+    data_license: str | None = None
 
     @classmethod
     def field_names(cls) -> list[str]:

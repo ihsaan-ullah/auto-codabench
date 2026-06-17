@@ -30,6 +30,18 @@ from .base import (
 _DATE_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
 
 
+def _pages_text(ctx: CheckContext) -> str:
+    """Concatenated lower-cased text of the participant-facing pages. Falls back
+    to bundle-root markdown when there is no ``pages/`` directory."""
+    parts: list[str] = []
+    pages_dir = ctx.bundle_dir / "pages"
+    sources = sorted(pages_dir.glob("*.md")) if pages_dir.is_dir() else \
+        sorted(ctx.bundle_dir.glob("*.md"))
+    for p in sources:
+        parts.append(p.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(parts).lower()
+
+
 def _parse_date(value) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -79,6 +91,7 @@ class TwoPhaseStructure(Check):
     how = "Counts the phases declared in competition.yaml."
     title = "Development + final phase structure"
     dimension = Dimension.METHODOLOGICAL
+    template_section = "T8"
     citation = "Pavão et al. (Ch. 5, Ch. 11)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -101,6 +114,7 @@ class DevPhaseDuration(Check):
     how = "Parses the first phase's start/end dates and computes the span in days."
     title = "Development phase ≥ 40 days"
     dimension = Dimension.METHODOLOGICAL
+    template_section = "T10"
     citation = "Pavão et al. (Ch. 13)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -130,6 +144,7 @@ class DailySubmissionCap(Check):
     how = "Reads max_submissions_per_day on each development phase."
     title = "Daily submission cap on development phases"
     dimension = Dimension.METHODOLOGICAL
+    template_section = "T9"
     citation = "Pavão et al. (Ch. 5)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -164,6 +179,7 @@ class FinalPhaseSubmissionLimit(Check):
     how = "Reads max_submissions on the final phase."
     title = "Final phase total-submission limit ≤ 3"
     dimension = Dimension.METHODOLOGICAL
+    template_section = "T9"
     citation = "Pavão et al. (Ch. 5)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -193,6 +209,7 @@ class LeaderboardSortingDeclared(Check):
     how = "Checks each ranked leaderboard column declares a sorting direction."
     title = "Leaderboard columns declare sorting direction"
     dimension = Dimension.DOCUMENTATION
+    template_section = "T5"
     citation = "Pavão et al. (Ch. 4); Codabench Yaml-Structure.md"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -225,6 +242,7 @@ class StartingKitPresent(Check):
     how = "Looks for files shipped under starting_kit/."
     title = "Runnable starting kit shipped"
     dimension = Dimension.DOCUMENTATION
+    template_section = "T6"
     citation = "Pavão et al. (Ch. 5, Ch. 13)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -246,6 +264,7 @@ class BaselineSolutionsPresent(Check):
     how = "Counts solution folders and checks they are declared in competition.yaml."
     title = "Baseline solutions shipped (trivial + competent)"
     dimension = Dimension.EXECUTABLE
+    template_section = "T6"
     citation = "Pavão et al. (Ch. 5)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -310,6 +329,7 @@ class TestSetSize(Check):
     how = "Compares the reference/test row count against 100 / anticipated-error-rate."
     title = "Test set sized for the anticipated error rate (100/E)"
     dimension = Dimension.METHODOLOGICAL
+    template_section = "T5"
     citation = "Pavão et al. (Ch. 4)"
     requires_facts = ("anticipated_error_rate",)
 
@@ -359,6 +379,7 @@ class ExternalDataRuleStated(Check):
     how = "Scans the pages for an external-data / pre-training policy and cross-checks the declared fact."
     title = "External-data rule declared and documented"
     dimension = Dimension.DOCUMENTATION
+    template_section = "T9"
     citation = "Pavão et al. (Ch. 5)"
     requires_facts = ("external_data_allowed",)
 
@@ -423,6 +444,7 @@ class MetricDirectionSemantics(Check):
     how = "Looks up the metric name's known ranking direction and compares it to the column's sorting."
     title = "Sort direction matches the named metric's semantics"
     dimension = Dimension.DOCUMENTATION
+    template_section = "T5"
     citation = "Pavão et al. (Ch. 4)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -546,6 +568,7 @@ class ReferenceDataNotParticipantVisible(Check):
     how = "Hashes reference_data files and checks none appear byte-for-byte under public_data/ or input_data/."
     title = "Reference (ground-truth) data is not exposed in a participant role"
     dimension = Dimension.DATA
+    template_section = "T3"
     citation = "Pavão et al. (Ch. 11, Ch. 3)"
 
     def run(self, ctx: CheckContext) -> list[CheckResult]:
@@ -567,3 +590,225 @@ class ReferenceDataNotParticipantVisible(Check):
         return [self.passed(
             f"none of the {len(ref)} reference_data file(s) appear in public_data/ "
             "or input_data/")]
+
+
+# ---------------------------------------------------------------------------
+# Proposal-template checks (deterministic) — derived from the published
+# challenge-design roadmap (Pavão et al.). See docs/validation-checklist-
+# proposal.md §11. These are narrow, code-computable sub-points; the prose-level
+# template sections are covered by the judged tier.
+# ---------------------------------------------------------------------------
+
+
+@register
+class ChallengeTypeDeclared(Check):
+    """The proposal abstract must state the challenge cadence — a regular
+    challenge (months), a hackathon (a day or two), or a live/on-site
+    challenge — because it sets participant expectations and gates the
+    on-site-logistics readiness criteria. Declared as a fact and validated."""
+
+    id = "challenge-type-declared"
+    how = "Reads the declared challenge_type fact and checks it is one of regular/hackathon/live."
+    title = "Challenge type declared (regular / hackathon / live)"
+    dimension = Dimension.DOCUMENTATION
+    template_section = "T0"
+    severity = Severity.INFO
+    citation = "Pavão et al. (Ch. 2)"
+    requires_facts = ("challenge_type",)
+
+    _KNOWN = ("regular", "hackathon", "live")
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        kind = str(ctx.facts.challenge_type).strip().lower()
+        if kind in self._KNOWN:
+            return [self.passed(f"challenge type declared as '{kind}'")]
+        return [self.finding(
+            f"challenge_type='{ctx.facts.challenge_type}' is not one of "
+            f"{', '.join(self._KNOWN)} — declare the cadence the abstract should state")]
+
+
+@register
+class DataLicenseDeclared(Check):
+    """The dataset must carry an explicit licence so participants know their
+    usage rights and the data can outlive the leaderboard. Declared as a fact,
+    or detected as a licence token in the pages / competition.yaml."""
+
+    id = "data-license-declared"
+    how = "Checks the data_license fact, else scans pages + competition.yaml for an explicit licence token."
+    title = "Dataset licence declared"
+    dimension = Dimension.GOVERNANCE
+    template_section = "T3"
+    severity = Severity.WARNING
+    citation = "Pavão et al. (Ch. 3, Ch. 13)"
+
+    # Whole-token licence cues; matched case-insensitively as substrings of the
+    # combined pages + yaml text.
+    _CUES = (
+        "license", "licence", "licensed under", "creative commons", "cc-by",
+        "cc by", "cc0", "public domain", "mit license", "apache-2", "apache 2",
+        "apache license", "bsd-3", "bsd 3", "gpl", "lgpl", "odbl", "odc-by",
+        "spdx", "all rights reserved",
+    )
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        if ctx.facts.data_license:
+            return [self.passed(
+                f"dataset licence declared in facts: {ctx.facts.data_license}")]
+        yaml_text = ""
+        yp = ctx.bundle_dir / "competition.yaml"
+        if yp.is_file():
+            yaml_text = yp.read_text(encoding="utf-8", errors="replace").lower()
+        text = _pages_text(ctx) + "\n" + yaml_text
+        hit = next((c for c in self._CUES if c in text), None)
+        if hit:
+            return [self.passed(
+                f"an explicit data-licence cue ('{hit}') appears in the pages/config")]
+        return [self.finding(
+            "no data licence is declared (no data_license fact, and no licence "
+            "cue in the pages or competition.yaml) — participants cannot tell "
+            "their usage rights and the dataset has no stated terms for reuse")]
+
+
+@register
+class SubmissionModeDeclared(Check):
+    """Participants must know whether they submit *results* (a prediction file)
+    or *code* (run in a sandbox). The mode is implied by whether the bundle
+    ships an ingestion program; the pages must also say so explicitly."""
+
+    id = "submission-mode-declared"
+    how = "Detects result- vs code-submission from the ingestion program, and checks the pages state the mode."
+    title = "Submission mode (result vs code) declared"
+    dimension = Dimension.DOCUMENTATION
+    template_section = "T8"
+    severity = Severity.INFO
+    citation = "Pavão et al. (Ch. 2, Ch. 11); Codabench Yaml-Structure.md"
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        yaml_text = ""
+        yp = ctx.bundle_dir / "competition.yaml"
+        if yp.is_file():
+            yaml_text = yp.read_text(encoding="utf-8", errors="replace").lower()
+        has_ingestion = "ingestion" in yaml_text or \
+            (ctx.bundle_dir / "ingestion_program").exists()
+        mode = "code" if has_ingestion else "result"
+        pages = _pages_text(ctx)
+        # Does the participant-facing text state how submission works at all?
+        stated = any(tok in pages for tok in (
+            "submit", "submission", "upload", "prediction file", "result file"))
+        if not stated:
+            return [self.finding(
+                f"the bundle implies a {mode}-submission competition but no page "
+                "explains what participants submit (a results file vs runnable "
+                "code) or how — state the submission mode explicitly")]
+        return [self.passed(
+            f"{mode}-submission competition (from the "
+            f"{'ingestion program' if has_ingestion else 'absence of an ingestion program'}), "
+            "and the pages describe how to submit")]
+
+
+@register
+class PhaseDatesMonotonic(Check):
+    """Phase dates must be internally coherent: each phase ends after it starts,
+    and phases run in chronological order. Scrambled or inverted phase dates
+    silently break the competition timeline on the platform."""
+
+    id = "phase-dates-monotonic"
+    how = "Parses every phase's start/end and checks each end ≥ start and phase starts are non-decreasing."
+    title = "Phase dates are coherent and ordered"
+    dimension = Dimension.METHODOLOGICAL
+    template_section = "T10"
+    severity = Severity.BLOCKER
+    citation = "Pavão et al. (Ch. 11); Codabench Yaml-Structure.md"
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        phases = ctx.phases()
+        if len(phases) < 1:
+            return [self.skipped("no phases declared")]
+        out: list[CheckResult] = []
+        prev_start: datetime | None = None
+        parsed = 0
+        for i, p in enumerate(phases):
+            where = f"phases[{i}]"
+            start, end = _parse_date(p.get("start")), _parse_date(p.get("end"))
+            if start is None:
+                continue  # a phase may legitimately omit dates; nothing to order
+            parsed += 1
+            if end is not None and end < start:
+                out.append(self.failed(
+                    f"phase '{p.get('name', i)}' ends ({p.get('end')}) before it "
+                    f"starts ({p.get('start')})", where=where, severity=Severity.BLOCKER))
+            if prev_start is not None and start < prev_start:
+                out.append(self.failed(
+                    f"phase '{p.get('name', i)}' starts ({p.get('start')}) before the "
+                    "previous phase — phases are out of chronological order",
+                    where=where, severity=Severity.BLOCKER))
+            prev_start = start
+        if parsed == 0:
+            return [self.skipped("no phase carries parseable start dates")]
+        return out or [self.passed(
+            f"{parsed} phase(s) carry coherent, chronologically ordered dates")]
+
+
+@register
+class ReviewWindowPresent(Check):
+    """The final phase must have an explicit end date: an open-ended final phase
+    never closes, so there is no defined point at which organizers begin
+    reviewing winners and analysing results."""
+
+    id = "review-window-present"
+    how = "Checks the final phase declares an end date (a defined close after which organizer review can begin)."
+    title = "Final phase closes (review window exists)"
+    dimension = Dimension.METHODOLOGICAL
+    template_section = "T10"
+    severity = Severity.WARNING
+    citation = "Pavão et al. (Ch. 5)"
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        phases = ctx.phases()
+        if len(phases) < 1:
+            return [self.skipped("no phases declared")]
+        final = phases[-1]
+        where = f"phases[{len(phases) - 1}]"
+        if _parse_date(final.get("end")) is not None:
+            return [self.passed(
+                f"final phase '{final.get('name', '?')}' has a close date "
+                f"({final.get('end')}) — a defined start for organizer review",
+                where=where)]
+        return [self.finding(
+            f"final phase '{final.get('name', '?')}' declares no end date — an "
+            "open-ended final phase never closes, leaving no review/analysis "
+            "window before results are published", where=where)]
+
+
+@register
+class PrizeStructureDeclared(Check):
+    """If the competition offers prizes, the pages must describe the prize
+    structure — what is awarded and to whom — or participants cannot judge the
+    stakes and disputes have no documented basis."""
+
+    id = "prize-structure-declared"
+    how = "When facts declare prizes=true, scans the pages for prize/award/winner prose."
+    title = "Prize structure described when prizes are offered"
+    dimension = Dimension.GOVERNANCE
+    template_section = "T13"
+    severity = Severity.WARNING
+    citation = "Pavão et al. (Ch. 13)"
+    requires_facts = ("prizes",)
+
+    # Whole-word cues only — bare "$" or the substring in "rewards" are too weak
+    # to count as a described prize structure (they would let an undocumented
+    # prize pass). A currency symbol counts only when it precedes a digit.
+    _CUE_RE = re.compile(
+        r"\b(prizes?|awards?|awarded|winners?|cash\s+prize|vouchers?|"
+        r"bount(?:y|ies)|travel\s+grants?)\b|[$€£]\s?\d", re.IGNORECASE)
+
+    def run(self, ctx: CheckContext) -> list[CheckResult]:
+        if ctx.facts.prizes is False:
+            return [self.passed("facts declare prizes=false — no prize structure to describe")]
+        pages = _pages_text(ctx)
+        if self._CUE_RE.search(pages):
+            return [self.passed("prizes are offered and the pages describe a prize structure")]
+        return [self.finding(
+            "facts declare prizes=true but no competition page describes the prize "
+            "structure (what is awarded, to whom, how decided) — participants "
+            "cannot gauge the stakes and award disputes have no documented basis")]

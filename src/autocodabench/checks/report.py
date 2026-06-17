@@ -156,6 +156,7 @@ def checklist_coverage() -> list[dict[str, Any]]:
             "llm_judged": tier_is_llm_judged(c.tier),
             "type_no": c.dimension.number,
             "type": c.dimension.label,
+            "template_section": c.template_section or "",
             "title": c.title,
             "description": _check_description(c),
             "how": c.how or "",

@@ -73,15 +73,22 @@ def _judged_fires(check: JudgedCheck, bundle_dir: Path, backend) -> bool:
     return any(r.status == Status.FINDING for r in results)
 
 
-def _judged_report(clean: Path, workdir: Path, backend, runs: int) -> dict:
+def _judged_clean_fp(clean: Path, backend, runs: int, label: str) -> dict:
+    """Per-check false-positive rate on an unmutated bundle (the precision
+    signal). Measured per instrument: a rich, well-formed bundle should show
+    ~0 FP — firing there is a true over-fire to fix in the rubric."""
     judged_checks = {c.id: c for c in REGISTRY.values() if isinstance(c, JudgedCheck)}
-    # Per-check false positives on the clean bundle (precision signal).
     clean_fp = {}
     for cid, check in judged_checks.items():
         fires = sum(1 for _ in range(runs) if _judged_fires(check, clean, backend))
         clean_fp[cid] = {"runs": runs, "false_positives": fires, "fp_rate": fires / runs}
-        print(f"  clean FP  {cid:<34} {fires}/{runs}")
-    # Per-defect recall over N runs (catch consistency).
+        print(f"  [{label}] clean FP  {cid:<34} {fires}/{runs}")
+    return clean_fp
+
+
+def _judged_recall(clean: Path, workdir: Path, backend, runs: int) -> list[dict]:
+    """Per-defect catch rate over N runs (recall + consistency) on the demo."""
+    judged_checks = {c.id: c for c in REGISTRY.values() if isinstance(c, JudgedCheck)}
     rows = []
     for d in defects.defects_for_tier("judged"):
         check = judged_checks.get(d.expect_check)
@@ -96,7 +103,7 @@ def _judged_report(clean: Path, workdir: Path, backend, runs: int) -> dict:
                      "runs": runs, "caught": caught, "catch_rate": caught / runs,
                      "description": d.description})
         print(f"  recall    {d.id:<34} {caught}/{runs}")
-    return {"runs": runs, "clean_fp": clean_fp, "rows": rows}
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -175,10 +182,23 @@ def _render(det_results: list[dict], judged: dict | None, *, backend_spec: str |
                      f"{r['caught']}/{r['runs']} = {r['catch_rate']:.2f} |")
         if judged["rows"]:
             L += ["", f"_Mean judged recall: {rec_sum/len(judged['rows']):.3f}._"]
-        L += ["", "**Per-check clean-bundle false-positive rate:**", "",
-              "| judged check | FP rate |", "|---|:--:|"]
-        for cid, fp in judged["clean_fp"].items():
-            L.append(f"| `{cid}` | {fp['false_positives']}/{fp['runs']} = {fp['fp_rate']:.2f} |")
+        # Per-check clean-bundle FP, one column per instrument. The rich GT
+        # instrument is the precision bar (should be ~0); the minimal demo may
+        # legitimately fire some completeness checks.
+        clean_fp_by = judged.get("clean_fp_by", {})
+        if clean_fp_by:
+            insts = list(clean_fp_by)
+            L += ["", "**Per-check clean-bundle false-positive rate (lower = better "
+                  "precision):**", "",
+                  "| judged check | " + " | ".join(insts) + " |",
+                  "|---|" + "|".join(":--:" for _ in insts) + "|"]
+            all_ids = sorted({cid for inst in insts for cid in clean_fp_by[inst]})
+            for cid in all_ids:
+                cells = []
+                for inst in insts:
+                    fp = clean_fp_by[inst].get(cid)
+                    cells.append(f"{fp['false_positives']}/{fp['runs']}" if fp else "—")
+                L.append(f"| `{cid}` | " + " | ".join(cells) + " |")
         L.append("")
     return "\n".join(L) + "\n"
 
@@ -212,18 +232,32 @@ def main(argv: list[str] | None = None) -> int:
         demo = defects.build_clean_bundle(wd / "demo-build")
         det_results.append(_deterministic_on(demo, wd / "demo", "demo"))
 
+        clean_gt = None
+        gt_label = None
         gt = Path(args.instrument)
         if (gt / "competition.yaml").is_file():
-            label = gt.resolve().parent.parent.name or gt.name
-            print(f"deterministic · {label} instrument")
+            gt_label = gt.resolve().parent.parent.name or gt.name
+            print(f"deterministic · {gt_label} instrument")
             clean_gt = defects.build_clean_bundle_from_dir(gt, wd / "gt-build")
-            det_results.append(_deterministic_on(clean_gt, wd / "gt", label))
+            det_results.append(_deterministic_on(clean_gt, wd / "gt", gt_label))
         else:
             print(f"(skipping second instrument — not a bundle: {gt})")
 
         if backend is not None:
-            print(f"judged · demo instrument · {args.judged_runs} run(s) each")
-            judged = _judged_report(demo, wd / "demo-judged", backend, args.judged_runs)
+            runs = args.judged_runs
+            # Precision: clean-bundle FP on every judged check, per instrument
+            # (the rich GT bundle is the truer signal — it should be ~0).
+            clean_fp_by: dict = {}
+            print(f"judged clean-FP · demo · {runs} run(s) each")
+            clean_fp_by["demo"] = _judged_clean_fp(demo, backend, runs, "demo")
+            if clean_gt is not None:
+                print(f"judged clean-FP · {gt_label} · {runs} run(s) each")
+                clean_fp_by[gt_label] = _judged_clean_fp(clean_gt, backend, runs, gt_label)
+            # Recall: seeded judged defects on the demo (its pages are what the
+            # gutting mutations target).
+            print(f"judged recall · demo · {runs} run(s) each")
+            rows = _judged_recall(demo, wd / "demo-judged", backend, runs)
+            judged = {"runs": runs, "clean_fp_by": clean_fp_by, "rows": rows}
 
     import datetime as _dt  # only for the report stamp (not used in logic)
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

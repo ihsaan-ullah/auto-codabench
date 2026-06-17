@@ -63,7 +63,10 @@ expansion. Section 4 presents the full proposed catalog, organised by dimension.
 Section 5 reports the projected coverage. Section 6 specifies the refactoring of
 existing checks. Section 7 proposes the structural changes to the framework.
 Section 8 delimits the non-goals. Sections 9 and 10 address validation of the
-framework and a suggested order of implementation.
+framework and a suggested order of implementation. Section 11 re-derives the
+coverage of Section 5 against an external standard — the published
+challenge-proposal template — and specifies the template-driven checks that
+expansion implies.
 
 ---
 
@@ -359,6 +362,11 @@ remain attestation-only — item 3 in part, and items 5, 12, 14, and 16 — are
 precisely those the limitations analysis identified as unobservable from the
 artefact. This residual is the intended end-state rather than a deficiency.
 
+Section 11 strengthens this projection by re-deriving coverage against an
+*external* standard — the published challenge-proposal template — rather than the
+internal (dimension × tier) matrix alone; the two agree on the end-state size
+(~53–55 checks) by independent routes.
+
 ---
 
 ## 6. Refactoring of existing checks
@@ -528,6 +536,165 @@ highest-value deterministic checks (marked N† in Section 4):
 The remaining P0–P3 items, the protocol-conditional families (Section 2, Axis C),
 and the execution-tier additions (notably `scorer-degenerate-input-robust`) are
 the subsequent increments.
+
+---
+
+## 11. Coverage against the published proposal template
+
+Sections 4–5 derive coverage from an *internal* construct — the
+(dimension × tier) matrix. This section strengthens the completeness argument by
+re-deriving it against an *external, published* standard: the challenge-proposal
+template of the "Challenge design roadmap" (Pavão et al., Ch. 2; with Ch. 3–5,
+11, 13 for individual sub-points). That template is the community's own answer to
+"what does a well-designed competition contain?" Treating each of its fifteen
+sections as a property that *should* be checkable converts "is the suite
+comprehensive?" from an assertion into a traceable matrix, and gives organisers a
+named standard against which our coverage can be audited.
+
+### 11.1 The bucket constraint
+
+`validate` inspects a *bundle*, not a *proposal*. Each template sub-point falls
+into exactly one bucket, and the bucket forces the only honest tier:
+
+| Bucket | Evidence lives in | Forced tier |
+|---|---|---|
+| **A — Machine-encoded** | `competition.yaml`, programs, leaderboard config | Deterministic (may gate) |
+| **B — Participant-facing prose** | `pages/*.md` | Judged (advisory FINDING) |
+| **C — Proposal-only / off-platform** | organiser team, promotion, conference support, live logistics | Attestation (surfaced, never gated) |
+
+Two limits follow and are stated rather than hidden: (i) Bucket-C sections are
+genuinely absent from most bundles — we surface them as attestation boxes, never
+implying the bundle proves them; (ii) judged checks verify that the pages *claim*
+a property, not that reality satisfies it. **Gating discipline is unchanged**
+(Section 3): only deterministic checks gate; the expansion is overwhelmingly
+advisory.
+
+A **proposal-aware mode** lifts limit (i) where possible: when `validate` runs
+inside the create pipeline, or is given `--proposal PATH` (reusing
+`core/proposal.py:pdf_to_text`), the Bucket-B/C checks additionally read the input
+proposal text. Standalone `validate <bundle>` reads only `pages/`; a check whose
+source text is absent returns SKIPPED-with-reason, never a silent pass.
+
+### 11.2 Before — current coverage of the template
+
+Legend ● full · ◐ partial · ○ none, over today's 27 checks (D = dimension/Type).
+
+| # | Template section | Bucket | Cov. | Current checks |
+|---|---|---|---|---|
+| T0 | Abstract & keywords | B | ○ | — |
+| T1 | Background & impact | B | ○ | — |
+| T2 | Novelty | B/C | ○ | — |
+| T3 | Data | A/B/C | ◐ | `judged-data-description`, `attest-datasheet`, `attest-data-persistence`, `attest-leakage-probe`, `reference-data-not-participant-visible` |
+| T4 | Tasks & application scenarios | B | ◐ | `judged-task-framing` |
+| T5 | Metrics & evaluation methods | A/B | ◐ | `judged-evaluation-explained`, `metric-direction-semantics`, `leaderboard-sorting`, `leaderboard-well-formed` |
+| T6 | Baselines, code & material | A/B | ● | `baseline-solutions`, `baseline-execution`, `starting-kit`, `starting-kit-execution` |
+| T7 | Tutorial & documentation | B | ○ | — |
+| T8 | Protocol | A/B | ◐ | `two-phase-structure`, `judged-submission-instructions` |
+| T9 | Rules | A/B | ◐ | `judged-rules-completeness`, `daily-submission-cap`, `final-phase-submission-limit`, `external-data-rule` |
+| T10 | Schedule & readiness | A/B | ◐ | `dev-phase-duration`, `two-phase-structure` |
+| T11 | Challenge promotion | C | ○ | — |
+| T12 | Organising team | C | ○ | — |
+| T13 | Resources & prizes | A/C | ◐ | `attest-game-of-skill` |
+| T14 | Support requested | C | ○ | — (out of scope, §11.5) |
+
+Six of fifteen sections are uncovered: the entire proposal-quality front half
+(T0–T2, T7) and the off-platform sections (T11, T12). The executable heart (T6)
+and the machine-config checks are strong; the prose front half is empty — which
+is the concrete sense in which the present suite "feels limited."
+
+### 11.3 After — the template-derived checks
+
+~26 new checks (≈9 deterministic, ≈13 judged, ≈4 attestation), each filed under
+an existing Type and carrying a chapter citation. **Bold** = new; `(det)` gates,
+`(judged)`/`(attest)` advise.
+
+- **T0 Abstract & keywords** → D5: **`judged-abstract-structure`** (five abstract
+  elements present), **`judged-keywords-present`**, **`challenge-type-declared`**
+  (det; fact `challenge_type`; gates the live-only conditionals).
+- **T1 Background & impact** → D5: **`judged-background-impact`** (motivation,
+  impact class, audience estimate, real-scenario hook).
+- **T2 Novelty** → D5: **`judged-novelty-positioning`** (new vs series vs recycled
+  data; differences from prior challenges).
+- **T3 Data** → D4/D6: existing five + **`judged-data-quantity-justified`**
+  (size adequacy, post-contest availability, GT confidentiality),
+  **`data-license-declared`** (det, advisory; explicit licence token),
+  **`attest-deprecated-dataset`** (fact `dataset_name`; LLM drafts the "<name>
+  deprecated" due-diligence note), **`attest-pii-consent`**.
+- **T4 Tasks** → D5/D3: existing + **`judged-task-scenario`**,
+  **`judged-task-difficulty`** (cross-referenced to the measured baseline gap).
+- **T5 Metrics & evaluation** → D3/D5: existing four + **`judged-metric-justified`**
+  (why this metric measures success), **`judged-error-bars`**,
+  **`judged-judging-protocol`** (fact `human_judging`: orthogonal criteria,
+  tie-break, judge qualifications).
+- **T6 Baselines** → D2/D5: existing four + **`judged-baseline-range`**
+  (trivial→SOTA spread + gap), **`judged-starting-kit-parity`** (kit mirrors eval
+  conditions), **`judged-equitable-resources`** (fact `special_hardware`).
+- **T7 Tutorial & documentation** → D5: **`judged-tutorial-material`** (white
+  paper / FAQ / notebooks referenced).
+- **T8 Protocol** → D5/D6: existing two + **`submission-mode-declared`** (det;
+  result vs code submission), **`judged-protocol-described`**,
+  **`judged-cheating-prevention`**.
+- **T9 Rules** → D5/D6: existing four + **`judged-account-policy`** (single/multiple
+  accounts, anonymity), **`judged-rules-immutability`**.
+- **T10 Schedule & readiness** → D3/D5: existing two + **`phase-dates-monotonic`**
+  (det; dates parse, ordered, non-overlapping), **`review-window-present`** (det,
+  advisory), **`judged-schedule-adequacy`** (~90 dev days + review window +
+  readiness statement).
+- **T11 Promotion** → D6: **`attest-promotion-plan`** (plan + under-represented
+  outreach; LLM-tailored guidance).
+- **T12 Organising team** → D6: **`attest-organizing-team`** (required roles, bios,
+  diversity).
+- **T13 Resources & prizes** → D6: existing + **`prize-structure-declared`** (det;
+  fact `prizes`).
+- **Live conditionals** (T1/T5/T10/T13, gated on `challenge_type=live`):
+  **`attest-live-logistics`**.
+
+This carries the suite from 27 to ~53 checks and lifts every section off ○ except
+T14. The deterministic gate grows by ~9 narrow checks; the rest is advisory, as
+the bucket constraint requires. The new attestations finally consume the
+`unit_of_generalization` / `task_type` fact entries flagged in the companion
+provenance document, and add facts `challenge_type`, `human_judging`,
+`special_hardware`, `dataset_name`, `data_license` under the same
+declare-then-verify contract (Section 7.2): absent fact ⇒ SKIPPED with
+instructions.
+
+### 11.4 Supporting changes
+
+1. **`CompetitionFacts`** gains the five facts above.
+2. **Proposal-aware text source** — `judged._bundle_texts` optionally includes the
+   input-proposal text; a `--proposal PATH` flag on `validate`.
+3. **Template traceability is documentation-only** (decided): `checklist_coverage()`
+   / `checks --json` gains a `template_section` field (T0–T13) and this section is
+   its narrative home, but the rendered `checks`/`validate` tables gain **no** new
+   column — the Type and LLM-as-a-judge columns stay as they are, tables stay
+   readable.
+
+### 11.5 Declared limits
+
+T14 (support requested) and the off-platform half of T11/T12 are not bundle
+properties; they remain attestations. Beta-testing, external review, ethics
+approval, and deprecation status are human acts the tool prompts for and drafts
+guidance on but cannot certify. No new check gates from prose: a thin-on-prose
+bundle still passes the gate, by design.
+
+### 11.6 Order of implementation and measurement
+
+Per the increment discipline of Section 10, and decided for this round, the
+**deterministic batch ships first** (`data-license-declared`,
+`phase-dates-monotonic`, `review-window-present`, `submission-mode-declared`,
+`prize-structure-declared`, `challenge-type-declared`, …): immediate gate value,
+keyless tests, low risk. The judged batch follows only after each new check's
+clean-bundle false-positive rate is calibrated ≤ 0.20 (the bar held to the
+existing five judged checks); the attestation batch and proposal-aware mode come
+last.
+
+Coverage is **measured, not asserted**: each new deterministic check gets a
+matching opaque defect in the validate-bench mutator (`bench/defects.py`) — e.g.
+scramble phase dates, strip the licence token, collapse the review window, remove
+the submission-mode statement — and each new judged check extends the existing
+content-gutting defects, reporting per-check recall and clean false-positive rate
+over N runs exactly as `benchmark/autocodabench_validate_bench/full_report.py`
+does today.
 
 ---
 

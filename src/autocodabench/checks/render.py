@@ -351,7 +351,7 @@ def render_report_markdown(report: ValidationReport, *,
         f"# Bundle validation — {verdict}",
         "",
         f"Bundle: `{report.bundle_dir}`",
-        "Results: " + ", ".join(f"{v} {k}" for k, v in sorted(report.counts.items())),
+        "Results: " + ", ".join(f"{v} {k} {STATUS_EMOJI[k]}" for k, v in sorted(report.counts.items())),
     ]
     fails = report.by_status(Status.FAIL)
     if fails:
@@ -391,7 +391,7 @@ def render_report_terminal(report: ValidationReport, *,
     out = [
         f"Bundle validation — {verdict}",
         f"Bundle: {report.bundle_dir}",
-        "Results: " + ", ".join(f"{v} {k}" for k, v in sorted(report.counts.items())),
+        "Results: " + ", ".join(f"{v} {k} {STATUS_EMOJI[k]}" for k, v in sorted(report.counts.items())),
         "",
     ]
     fails = report.by_status(Status.FAIL)
