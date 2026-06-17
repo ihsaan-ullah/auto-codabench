@@ -34,6 +34,11 @@ polish the bundle to `ok=True`. Changes:
   public domain), `challenge_type: regular`, `prizes: false`, and the unit of
   generalization — these satisfy the licence / challenge-type / prize checks.
 - The converted Markdown pages state the submission mode and licence explicitly.
+- Wired two baseline solutions under `solutions/` and declared them in
+  `competition.yaml`: `coxph_baseline/` (the real CoxPH sample submission — a
+  competent baseline) and `constant_baseline/` (a trivial constant-risk
+  predictor, c-index ≈ 0.5, that bounds the metric). Both implement the
+  fit/predict/save/load interface and are tracked (small text).
 
 **Chosen defaults to confirm:** the final-phase limits and the `competition_facts.yaml`
 values were set by the maintainer and should be checked against the original
@@ -42,8 +47,6 @@ competition.
 **Known residual findings (all advisory; bundle is `ok=True`):**
 - `docker-image-pinned` — `nnour/codalab-legacy-survival` has no published version
   tag we can pin; needs the real tag/digest.
-- `baseline-solutions` — no `solutions/` baseline is wired yet (a `sample_code_submission`
-  exists under `starting_kit/`).
 - `bundle-schema` leaderboard-key heuristic — `score.py` writes the column keys
   (`set1_score`, `Duration`) dynamically, so the static literal scan can't see
   them; a false positive, not a real gap.
@@ -59,6 +62,7 @@ ground_truth/
     ├── pages/                 # tracked (overview.md, data.md, evaluation.md, terms.md)
     ├── logo.png               # tracked
     ├── scoring_program/  ingestion_program/   # tracked (legacy `metadata` carries the command)
+    ├── solutions/             # tracked — coxph_baseline/ + constant_baseline/ (declared baselines)
     ├── reference_data_dev/  reference_data_final/   # tracked (tiny gold solutions)
     ├── input_data/            # NOT tracked — ~62 MB raw .data (keep-alive .gitignore)
     ├── public_data/           # NOT tracked — ~1.3 MB (keep-alive .gitignore)

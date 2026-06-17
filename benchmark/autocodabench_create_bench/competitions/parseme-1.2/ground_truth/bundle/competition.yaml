@@ -92,3 +92,12 @@ leaderboards:
     index: 8
     precision: 2
     sorting: desc
+solutions:
+- index: 0
+  path: solutions/no_mwe_baseline/
+  tasks:
+  - 0
+- index: 1
+  path: solutions/HMSid_open/
+  tasks:
+  - 0

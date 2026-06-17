@@ -30,6 +30,14 @@ The deterministic validator was run and its findings used to polish the bundle
 - Added `max_submissions_per_day: 10` to the phase (anti-probing cap).
 - Added `competition_facts.yaml` declaring `data_license`, `challenge_type:
   regular`, and `prizes: false`.
+- Wired two baseline solutions under `solutions/` and declared them in
+  `competition.yaml`: `no_mwe_baseline/` (a trivial "predict no verbal MWE"
+  baseline that bounds every MWE-based P/R/F at 0, generated for all 14
+  languages by the tracked `solutions/make_no_mwe_baseline.py`) and
+  `HMSid_open/` (a real system submission, FR). The prediction `.cupt` files are
+  heavy (~120 MB) and git-ignored — the generator script is tracked, so the
+  trivial baseline is reproducible; `HMSid_open/` is populated from the upstream
+  submission.
 
 **Chosen defaults to confirm:** the daily cap and the `competition_facts.yaml`
 values (notably `data_license`, which truly varies per language) were set by the
@@ -42,8 +50,6 @@ maintainer and should be confirmed against the upstream shared task.
 - `docker-image-pinned` — no published worker image to pin (the upstream
   `docker/Dockerfile` builds one from `nvidia/cuda:11.1.1-cudnn8…`); needs a real
   pushed tag/digest.
-- `baseline-solutions` — no `solutions/` baseline wired (a results-submission
-  baseline would be the per-language predicted `.cupt`).
 - `bundle-schema` leaderboard-key heuristic (9×) — the column keys are written
   dynamically by `evaluate.py`/`generate_files.py`, so the static literal scan
   can't see them; false positives, not real gaps.
@@ -66,6 +72,7 @@ ground_truth/
     ├── parseme.jpg            # tracked
     ├── pages/                 # tracked (overview.md, participate.md, terms.md)
     ├── scoring_program/  ingestion_program/   # tracked (metadata.yaml carries the command)
+    ├── solutions/             # make_no_mwe_baseline.py tracked; prediction .cupt git-ignored (~120 MB)
     ├── starting_kit/          # tracked (~0.9 MB)
     ├── input_data/            # NOT tracked — ~392 MB of .cupt (keep-alive .gitignore)
     └── reference_data/        # NOT tracked — ~392 MB of gold .cupt (keep-alive .gitignore)
