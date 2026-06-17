@@ -144,6 +144,18 @@ def _strip_submission_language(bundle: Path) -> None:
         raise ValueError("defect seed failed: no submission language to strip")
 
 
+def _gut_protocol(bundle: Path) -> None:
+    """Blank the overview AND the evaluation page so NO participant page states
+    what is submitted or how a submission is scored — a real gap for
+    ``judged-protocol-described`` (which reads every page, so gutting only the
+    overview leaves the procedure documented elsewhere)."""
+    _overwrite(bundle, "pages/overview.md",
+               "# AI Text Detection\n\nDetecting AI-generated text matters because "
+               "misinformation is a growing societal problem.\n")
+    _overwrite(bundle, "pages/evaluation.md",
+               "# Evaluation\n\nThe metric is balanced accuracy.\n")
+
+
 def _strip_submission_format(bundle: Path) -> None:
     """Remove the overview's submission-format section AND the starting kit, so a
     participant has nothing telling them what to submit — a genuine gap for
@@ -307,10 +319,9 @@ DEFECTS: list[Defect] = [
                "ties are broken by earliest submission.\n"),
            "evaluation names the metric but never justifies why it fits the task"),
     Defect("gutted-protocol", "judged", "judged-protocol-described",
-           lambda b: _overwrite(b, "pages/overview.md",
-               "# AI Text Detection\n\nDetecting AI-generated text matters because "
-               "misinformation is a growing societal problem.\n"),
-           "overview gives motivation but not what is submitted, the procedure, or phases"),
+           _gut_protocol,
+           "overview and evaluation pages gutted — no page states what is "
+           "submitted or how a submission is scored"),
     Defect("sparse-data-quantity", "judged", "judged-data-quantity-justified",
            lambda b: _overwrite(b, "pages/data.md",
                "# Data\n\nThe dataset contains text samples labelled human or AI.\n"),

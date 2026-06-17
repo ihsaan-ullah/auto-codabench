@@ -1,182 +1,163 @@
+# AutoCodabench
+
+**Author and pre-launch test [Codabench](https://www.codabench.org) competition bundles — the way you test software.**
+
+[![PyPI](https://img.shields.io/badge/pypi-autocodabench-blue)](https://pypi.org/project/autocodabench)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+
+</div>
+
 ---
-title: AutoCodabench
-emoji: 🧪
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
-short_description: Chat assistant for designing Codabench competitions.
----
-# autocodabench
 
-autocodabench is a library for agentic authoring and pre-launch validation of
-[Codabench](https://www.codabench.org) competition bundles.
+A Codabench competition is a comlicated set of YAML configs, scoring
+programs, and data splits. Small mistakes shipped can fail miserably for your live participants.
+AutoCodabench helps organizers in two ways:
 
-Organizing a machine-learning competition on Codabench requires hand-writing
-an interlocking set of YAML configurations, scoring programs, and data
-splits; a single inconsistency ships silently and fails on live
-participants. autocodabench addresses this problem in two ways. First, it
-turns a one-line idea (or a proposal PDF) into a validated, uploadable
-bundle. Second, it tests bundles — whether generated or hand-written — the
-way software is tested: against an executable checklist before launch.
-
-> **Note:** this `README.md` also serves as the Hugging Face Spaces metadata
-> file. The YAML header above configures the Space (Docker SDK, port 7860).
-> It must not be deleted on the HF side; the prose below it may be edited
-> freely.
-
-## Prerequisites
-
-`pip install -e .` installs all Python dependencies. Two phases also need
-**system tools pip cannot install**:
-
-- **Docker** (daemon running) — required for `build` and `validate --execute`,
-  which run a bundle inside its `docker_image` exactly as Codabench does.
-  Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-  (macOS/Windows) or [Docker Engine](https://docs.docker.com/engine/install/)
-  (Linux) and start it.
-- **Node / `npx`** (OpenAlex research) and **git** (Agent SDK) — optional but
-  recommended.
-
-Run `autocodabench doctor` to check all three at once. Phase-1 planning and the
-keyless static validator need none of this — so the quickstart below runs as-is,
-and `validate` will simply point you here if Docker is missing.
-
-## Quickstart (no API keys required)
-
-The following commands exercise the full pipeline without any LLM
-credentials.
+- **Validate** any bundle, generated or hand-written, against an executable
+  checklist *before* you launch.
+- **Plan and build** a validated, uploadable bundle from a one-line idea or a proposal
+  PDF, with an LLM agent guiding you.
 
 ```bash
-pip install -e .            # (PyPI release pending — install from a checkout)
+pip install autocodabench
 
-# Watch the full pipeline offline: a recorded agent run is replayed against
-# the real authoring layer, then validated and zipped.
-autocodabench demo --out ./demo
+# Catch the bugs & missing best practices a checklist can catch.
+autocodabench validate ./my-competition.zip
 
-# Validate any bundle — including one written by hand.
-autocodabench validate ./demo/demo-ai-text-detection.zip
+# Or go from idea to uploadable bundle (needs an LLM backend).
+autocodabench plan-build-validate "Plankton image classification, balanced \
+    accuracy, two phases" --data ./sample_data/
+```
 
-# List what is checked, by tier, with citations.
+<!-- > **Note:** this `README.md` is also the Hugging Face Spaces metadata file —
+> the YAML header above configures the Space (Docker SDK, port 7860). Don't
+> delete it; the prose below it is free to edit. -->
+
+## Requirements
+
+`pip install autocodabench` covers the Python side. Two phases also need tools
+pip can't install:
+
+- **Docker** (daemon running) — for `build` and `validate --execute`, which run
+  the bundle inside its `docker_image` exactly as Codabench does. Get
+  [Docker Desktop](https://www.docker.com/products/docker-desktop/) or
+  [Docker Engine](https://docs.docker.com/engine/install/).
+- **Node/`npx`** (OpenAlex research) and **git** (Agent SDK) — optional.
+
+Run `autocodabench doctor` to check all three. Phase-1 planning and the keyless
+validator need none of it.
+
+## Quick start
+### Validation
+```bash
+pip install autocodabench        # or: pip install -e . from a checkout
+
+# Validate any bundle — including one you wrote by hand.
+autocodabench validate /path/to/bundle.zip
+
+# See exactly what gets checked, by tier, with citations.
 autocodabench checks list
 ```
 
-The validator's checks are organized into three tiers with different
-epistemic standing: **deterministic** checks gate (code computes pass or
-fail), **LLM-judged** checks advise (findings with rationale, never gates),
-and **attestations** surface launch criteria that only a human can certify.
-Checks that need context the bundle cannot carry (for example, the
-anticipated error rate or the unit of generalization) read a declared
-`competition_facts.yaml`; when such facts are absent, the check reports
-that it was skipped, together with instructions for enabling it, rather
-than silently passing.
+We use a combination of deterministic and LLM-as-a-judge for validation:
 
-## Agentic authoring (bring an LLM backbone)
+| Type                    | What it does                                                  | Pass/fail?      |
+| ----------------------- | ------------------------------------------------------------- | ----------- |
+| **Deterministic** | Code computes PASS/FAIL (schema, splits, scoring round-trips) | ✅ Yes      |
+| **LLM-judged**    | An LLM grades a rubric → advisory findings with rationale    | ❌ Advises  |
+| **Attestation**   | Launch criteria only a human can certify                      | ❌ Surfaces |
 
-The authoring pipeline requires an LLM backend and is invoked as follows.
+When a fact is missing it reports *skipped, with instructions*. Every
+check cites its source (Pavão et al. or the Codabench schema). The full
+catalogue is in [`docs/autocodabench_checks.md`](docs/autocodabench_checks.md).
+
+**Executable checks with Docker container.** autocodabench *executes* the bundle's baseline and starting-kit notebook inside the competition's declared `docker_image`, mounted the way Codabench's
+worker mounts it, and iterates until both run.
+
+**Bring your own backbone.** The agent runs on Claude by default, but every
+agentic command takes `--backend` — local Ollama, OpenAI-compatible endpoints,
+or any `URL#model`:
 
 ```bash
-autocodabench auth status     # which Claude auth path is active, if any
-
-# Default model is Claude Sonnet 4.6.
-autocodabench plan-build-validate "Create a plankton image classification competition, balanced accuracy, \
-    two phases" --data ./sample_data/
-
-# Change the model with --model:
-autocodabench plan-build-validate "..." --model claude-opus-4-8
-#   (equivalently: --backend claude:claude-opus-4-8)
-
-# Use models from other providers with --backend:
-autocodabench plan-build-validate "..." --backend ollama:llama3.1      # local
-autocodabench plan-build-validate "..." --backend openai:gpt-4o        # OPENAI_API_KEY needed
-autocodabench validate bundle.zip --judged --backend ollama:llama3.1.  # local
+autocodabench validate bundle.zip                     # Claude (default)
+autocodabench validate bundle.zip --model claude-opus-4-8
+autocodabench validate bundle.zip --backend ollama:llama3.1     
+autocodabench validate bundle.zip --judged --backend openai:gpt-4o
 ```
 
-`plan-build-validate` (the `create` alias still works) runs two isolated agent
-sessions — plan, then build, then a validation pass — joined only
-by a locked, human-editable `implementation_plan.md`. The build agent acts
-exclusively through a typed MCP tool surface, so every authoring action is
-logged and the finished run is replayable.
+### The pipeline
 
-**Runtime fidelity through the platform's own container.** The build phase
-does not merely lint the bundle; it *executes* the bundle's baseline and
-starting-kit notebook inside the competition's declared `docker_image` — the
-same image, mounted the same way, that Codabench's worker uses — and iterates
-until both run. Two consequences make the result trustworthy. First, when the
-self-validation loop must change `docker_image` to obtain a working run (for
-instance, moving off a legacy image whose scikit-learn predates a needed
-symbol), the *final, proven* image is what `competition.yaml` records and what
-`create` reports — so the value uploaded to Codabench is the one already shown
-to work, not a guess. Second, autocodabench ships two purpose-built base
-images (see [`docker/`](docker/)) — `autocodabench-base-cpu` and
-`autocodabench-base-gpu`, derived from the Codabench `py312` and `gpu310`
-worker images and pre-loaded with the essential scientific-Python stack and a
-known-good notebook toolchain. Using them as the default starting point means
-the common case runs with no per-run installation, which both removes a
-frequent source of build-time failure and conserves the operator's model
-budget.
+Authoring runs in three phases you can chain or run on their own:
 
-We support two authentication paths, in order of preference for local use.
-If Claude Code is installed and logged in (Pro/Max), no further
-configuration is needed: usage draws from the plan's monthly Agent SDK
-credit. Otherwise, export `ANTHROPIC_API_KEY`. Hosted multi-user
-deployments (such as the HF Space) must use an API key — see
+```bash
+autocodabench plan  "<idea>" [--pdf proposal.pdf] [--data DIR]  # → implementation_plan.md
+autocodabench build --run-dir <dir>                             # plan → bundle + .zip
+autocodabench validate <bundle>                                 # pre-launch checks (keyless)
+```
+
+`plan-build-validate` (alias: `create`) runs all three as isolated agent
+sessions joined only by a locked, human-editable `implementation_plan.md`. The
+build agent acts exclusively through a typed MCP tool surface, so every action
+is logged and the finished run is replayable.
+
+## Authentication
+
+For the agentic commands, in order of preference for local use:
+
+1. **Claude subscription** — if Claude Code is installed and logged in (Pro/Max),
+   nothing else is needed; usage draws on the plan's Agent SDK credit.
+2. **API key** — export `ANTHROPIC_API_KEY`.
+
+`autocodabench auth status` shows which path is active. Hosted multi-user
+deployments **must** use an API key (Anthropic ToS) — see
 [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md).
 
 ## Web UI
 
-A Chainlit chat UI (`web/`) wraps the same library in a guided, three-phase
-workspace (plan → build → validate). There are two ways to use it.
+A Chainlit chat UI (`web/`) wraps the library in a guided plan → build →
+validate workspace.
 
-**Host it yourself.** Copy `.env.example` to `.env` and fill in at least
-`SHARED_PASSWORD` (gates the app) and a Claude auth path — a logged-in Claude
-Code subscription for local single-user use, or `ANTHROPIC_API_KEY` for any
-multi-user deployment. Then:
+**Host it yourself** — copy `.env.example` to `.env`, set `SHARED_PASSWORD` and
+a Claude auth path, then:
 
 ```bash
 pip install -e . && pip install -r web/requirements.txt
 cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h
 ```
 
-Open [http://127.0.0.1:8500](http://127.0.0.1:8500) and sign in with your `SHARED_PASSWORD`. See
-[`web/README.md`](web/README.md) for the full operator guide and
-[`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI for the
-walkthrough.
+Open [http://127.0.0.1:8500](http://127.0.0.1:8500). See
+[`web/README.md`](web/README.md) for the operator guide.
 
-**Or try our hosted demo.** Email
-[autocodabench@googlegroups.com](mailto:autocodabench@googlegroups.com) and we
-will set you up with an account — and a small amount of free credit — to log
-in at [https://ktgiahieu-autocodabench-alpha.hf.space/login](https://ktgiahieu-autocodabench-alpha.hf.space/login) and test the full
-pipeline without installing anything.
+**Or try the hosted demo** — email
+[autocodabench@googlegroups.com](mailto:autocodabench@googlegroups.com) for an
+account (with a little free credit) at the
+[hosted Space](https://ktgiahieu-autocodabench-alpha.hf.space/login), no install
+required.
 
-## Documentation pointers
+## Documentation
 
-The following table maps reader roles to the relevant documentation.
-
-| Reader                                                                    | Document                                                                                                                   |
-| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Evaluating this software** (demo walkthrough and repository tour) | [`docs/demo-for-reviewers.md`](docs/demo-for-reviewers.md)                                                                  |
-| Asking what is scientifically tested, and how                             | [`docs/scientific-validation.md`](docs/scientific-validation.md)                                                            |
-| Using the CLI or library                                                  | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md)                                                              |
-| Trying the Web UI (Space or local `chainlit run`)                       | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI, then [`web/README.md`](web/README.md) to operate it |
-| Working on the package internals                                          | [`docs/architecture.md`](docs/architecture.md)                                                                              |
-| Skill provenance (the origin of each `SKILL.md`)                        | [`src/autocodabench/skills/<name>/README.md`](src/autocodabench/skills/)                                                    |
-| The end-to-end benchmarks (any LLM backbone)                              | [`benchmark/README.md`](benchmark/README.md)                                                                                |
+| If you want to…                             | Read                                                            |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| Evaluate the software (demo + repo tour)     | [`docs/demo-for-reviewers.md`](docs/demo-for-reviewers.md)       |
+| Know what `validate` checks, by tier       | [`docs/autocodabench_checks.md`](docs/autocodabench_checks.md)   |
+| Understand what's scientifically tested      | [`docs/scientific-validation.md`](docs/scientific-validation.md) |
+| Use the CLI or library                       | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md)   |
+| Work on the package internals                | [`docs/architecture.md`](docs/architecture.md)                   |
+| Run the end-to-end benchmarks (any backbone) | [`benchmark/README.md`](benchmark/README.md)                     |
 
 ## Repository layout
 
-The table below summarizes the top-level structure of the repository.
-
-| Path                   | Contents                                                                                                                                                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI.                                                                                                                             |
-| `web/`               | Chainlit chat UI — a consumer of the library, deployed by this Space.                                                                                                                                                           |
-| `benchmark/`         | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle) and validate-bench (seeded-defect detection), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
-| `tests/`             | Unit suite — fast and fully keyless.                                                                                                                                                                                            |
-| `Dockerfile`         | Used by HF Spaces to build the image.                                                                                                                                                                                            |
+| Path                   | Contents                                                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI.                                                            |
+| `web/`               | Chainlit chat UI — a consumer of the library, deployed by the Space.                                                                                           |
+| `benchmark/`         | Pure-SDK end-to-end benchmarks (any backbone): create-bench and validate-bench, with ground-truth competitions and a reproducible, leakage-controlled pipeline. |
+| `tests/`             | Unit suite — fast and fully keyless.                                                                                                                           |
+| `Dockerfile`         | Builds the HF Spaces image.                                                                                                                                     |
 
 ## License
 
 MIT.
+`</content>`
+`</invoke>`

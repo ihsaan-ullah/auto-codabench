@@ -67,9 +67,20 @@ def _deterministic_on(clean: Path, workdir: Path, label: str) -> dict:
 # Judged tier — needs a backend; one LLM call per (check, sample)
 # --------------------------------------------------------------------------
 
-def _judged_fires(check: JudgedCheck, bundle_dir: Path, backend) -> bool:
+def _judged_fires(check: JudgedCheck, bundle_dir: Path, backend, *, attempts: int = 5) -> bool:
+    """Whether the judged check raises a FINDING. Retries on a transient backend
+    failure (rate limit / disconnect) so a throttled call is not silently scored
+    as 'did not fire' — that would corrupt both precision and recall."""
+    import time
     ctx = CheckContext.from_bundle_dir(bundle_dir)
-    results = asyncio.run(check.run_judged(ctx, backend))
+    results = []
+    for i in range(attempts):
+        results = asyncio.run(check.run_judged(ctx, backend))
+        transient = any(r.status == Status.SKIPPED and "judge run failed" in (r.message or "")
+                        for r in results)
+        if not transient:
+            break
+        time.sleep(min(45, 10 * (i + 1)))   # back off, then retry the throttled call
     return any(r.status == Status.FINDING for r in results)
 
 
@@ -212,8 +223,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default=None)
     ap.add_argument("--judged-runs", type=int, default=3,
                     help="repetitions per judged condition (consistency). Default 3.")
-    ap.add_argument("--instrument", default=str(DEFAULT_GT),
-                    help="path to a ground_truth/bundle used as the second instrument")
+    ap.add_argument("--instrument", nargs="+", default=[str(DEFAULT_GT)],
+                    help="one or more ground_truth/bundle paths used as extra "
+                         "instruments alongside the demo")
     ap.add_argument("--out", default=str(HERE / "COVERAGE_REPORT.md"))
     args = ap.parse_args(argv)
 
@@ -232,27 +244,30 @@ def main(argv: list[str] | None = None) -> int:
         demo = defects.build_clean_bundle(wd / "demo-build")
         det_results.append(_deterministic_on(demo, wd / "demo", "demo"))
 
-        clean_gt = None
-        gt_label = None
-        gt = Path(args.instrument)
-        if (gt / "competition.yaml").is_file():
-            gt_label = gt.resolve().parent.parent.name or gt.name
-            print(f"deterministic · {gt_label} instrument")
-            clean_gt = defects.build_clean_bundle_from_dir(gt, wd / "gt-build")
-            det_results.append(_deterministic_on(clean_gt, wd / "gt", gt_label))
-        else:
-            print(f"(skipping second instrument — not a bundle: {gt})")
+        # Extra real-bundle instruments (each a ground_truth/bundle dir).
+        gt_cleans: list[tuple[str, Path]] = []
+        for i, raw in enumerate(args.instrument):
+            gt = Path(raw)
+            if not (gt / "competition.yaml").is_file():
+                print(f"(skipping instrument — not a bundle: {gt})")
+                continue
+            label = gt.resolve().parent.parent.name or gt.name
+            print(f"deterministic · {label} instrument")
+            clean = defects.build_clean_bundle_from_dir(gt, wd / f"gt-build-{i}")
+            det_results.append(_deterministic_on(clean, wd / f"gt-{i}", label))
+            gt_cleans.append((label, clean))
 
         if backend is not None:
             runs = args.judged_runs
-            # Precision: clean-bundle FP on every judged check, per instrument
-            # (the rich GT bundle is the truer signal — it should be ~0).
+            # Precision: clean-bundle FP on every judged check, per instrument.
+            # A rich, well-formed bundle should show ~0 FP; the demo (minimal) may
+            # legitimately fire some completeness checks.
             clean_fp_by: dict = {}
             print(f"judged clean-FP · demo · {runs} run(s) each")
             clean_fp_by["demo"] = _judged_clean_fp(demo, backend, runs, "demo")
-            if clean_gt is not None:
-                print(f"judged clean-FP · {gt_label} · {runs} run(s) each")
-                clean_fp_by[gt_label] = _judged_clean_fp(clean_gt, backend, runs, gt_label)
+            for label, clean in gt_cleans:
+                print(f"judged clean-FP · {label} · {runs} run(s) each")
+                clean_fp_by[label] = _judged_clean_fp(clean, backend, runs, label)
             # Recall: seeded judged defects on the demo (its pages are what the
             # gutting mutations target).
             print(f"judged recall · demo · {runs} run(s) each")
