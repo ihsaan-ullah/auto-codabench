@@ -208,6 +208,32 @@ def test_judged_empty_findings_pass(demo_bundle):
     assert results and all(r.status == Status.PASS for r in results)
 
 
+def test_attestations_get_llm_tailored_detail(demo_bundle):
+    """With a backend, attestations stay human-confirmed (📋) but carry a
+    bundle-tailored note instead of the generic statement; deterministic
+    auto-pass (prizes=false) is preserved without an LLM verdict."""
+    import asyncio
+    from autocodabench.checks.base import CheckContext
+    from autocodabench.checks.attestations import run_attestation_assessments
+    ctx = CheckContext.from_bundle_dir(
+        demo_bundle, facts=CompetitionFacts.discover(demo_bundle))
+    note = "The data page states CC0 but no persistent DOI — add one before launch."
+    results = asyncio.run(run_attestation_assessments(ctx, _StubBackend(note)))
+    att = [r for r in results if r.status == Status.ATTESTATION_REQUIRED]
+    assert att and all(note in r.message for r in att)  # tailored, not generic
+    gos = [r for r in results if r.check_id == "attest-game-of-skill"]
+    assert gos and gos[0].status == Status.PASS  # prizes=false → auto-pass, no LLM
+
+
+def test_judged_validate_replaces_attestations_no_duplicates(demo_bundle):
+    from autocodabench.checks import REGISTRY, Tier
+    report = validate_bundle_path(demo_bundle, judged=True,
+                                  backend=_StubBackend('{"findings":[]}'))
+    att_ids = [r.check_id for r in report.results
+               if REGISTRY.get(r.check_id) and REGISTRY[r.check_id].tier == Tier.ATTESTATION]
+    assert att_ids and len(att_ids) == len(set(att_ids))  # replaced, not duplicated
+
+
 def test_terminal_render_is_box_tables_by_type(demo_bundle):
     """The CLI prints box tables grouped by validation type; the markdown (web)
     splits the same way with hyperlinked citations."""

@@ -407,11 +407,20 @@ Only report substantive omissions a participant would need.
 """
 
 
-async def run_judged_checks(ctx: CheckContext, backend: AgentBackend) -> list[CheckResult]:
+async def run_judged_checks(ctx: CheckContext, backend: AgentBackend,
+                            on_check=None) -> list[CheckResult]:
+    """Run every registered judged check. ``on_check`` (optional) receives
+    ``{"event": "start"|"done", "title": ..., "results": [...]}`` events so the
+    CLI can show live, per-check progress while the LLM works."""
     from .base import REGISTRY
 
     results: list[CheckResult] = []
     for check in REGISTRY.values():
         if isinstance(check, JudgedCheck):
-            results.extend(await check.run_judged(ctx, backend))
+            if on_check:
+                on_check({"event": "start", "title": check.title})
+            res = await check.run_judged(ctx, backend)
+            if on_check:
+                on_check({"event": "done", "title": check.title, "results": res})
+            results.extend(res)
     return results

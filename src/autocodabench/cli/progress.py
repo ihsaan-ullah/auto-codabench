@@ -319,9 +319,11 @@ class ProgressUI:
     backend's ``on_event`` hook.
     """
 
-    def __init__(self, *, debug: bool = False, interval: float = 0.09):
+    def __init__(self, *, debug: bool = False, interval: float = 0.09,
+                 verb: str = _VERB):
         self.debug = debug
         self.interval = interval
+        self.verb = verb
         self.animate = False          # set in __enter__ iff stdout is a TTY
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -400,7 +402,7 @@ class ProgressUI:
         elapsed = int(now - self._t0)
         width = shutil.get_terminal_size((80, 20)).columns
         status = _one_line(self._status, max(8, width - 44))
-        line = (f"{_CLEAR_LINE}{_ORANGE}{_VERB}…{_RESET} {self._blob()} "
+        line = (f"{_CLEAR_LINE}{_ORANGE}{self.verb}…{_RESET} {self._blob()} "
                 f"{_DIM}({elapsed}s · {status}){_RESET}")
         sys.stdout.write(line)
         sys.stdout.flush()

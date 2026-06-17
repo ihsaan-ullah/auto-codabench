@@ -166,6 +166,55 @@ def _maybe_prompt_emulation(preflight: dict, *, execute: bool) -> None:
         print("→ skipping execution tests; running the other checks.\n")
 
 
+def _maybe_prompt_judged(args: argparse.Namespace) -> bool:
+    """Whether to run the LLM-as-a-judge checks. ``--judged`` forces yes; a
+    non-interactive run or ``--json`` stays off; otherwise ask the user, default
+    yes (the LLM checks are the more thorough — but slower — review)."""
+    if args.judged:
+        return True
+    if args.as_json or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        ans = input(
+            "Also run LLM-as-a-judge checks for a more thorough review? "
+            "(needs LLM backend — adds ~50s/check) "
+            "[Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return ans in ("", "y", "yes")
+
+
+def _llm_done_line(title: str, results: list) -> str:
+    """A one-line result summary for a finished LLM check (shown live)."""
+    from ..checks import Status
+    st = [r.status for r in results]
+    if Status.FINDING in st:
+        n = sum(1 for s in st if s == Status.FINDING)
+        return f"⚠️  {title} — {n} finding(s)"
+    if Status.ATTESTATION_REQUIRED in st:
+        return f"📋 {title} — needs your review"
+    if st and all(s == Status.SKIPPED for s in st):
+        return f"•  {title} — skipped"
+    if Status.PASS in st:
+        return f"✅ {title} — no issues"
+    return f"•  {title}"
+
+
+def _make_llm_progress_cb(ui):
+    """Drive the live spinner/log from validate's per-check progress events."""
+    def cb(ev: dict) -> None:
+        kind = ev.get("event")
+        if kind == "phase":
+            ui.line("")
+            ui.line(f"  Running {ev.get('title')} (the LLM reads the bundle)…")
+        elif kind == "start":
+            ui.set_status(ev.get("title", "thinking"))
+        elif kind == "done":
+            ui.line("  " + _llm_done_line(ev.get("title", "check"),
+                                          ev.get("results") or []))
+    return cb
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
@@ -203,10 +252,15 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         # and the other checks run either way.
         _maybe_prompt_emulation(p, execute=args.execute)
 
-    if args.judged and not _require_live_claude_auth(args.backend):
-        return 2
+    # Offer the (slower, more thorough) LLM-as-a-judge checks — default yes when
+    # interactive. They need a live Claude session; if auth isn't available we
+    # continue with the deterministic + execution checks rather than abort.
+    judged = _maybe_prompt_judged(args)
+    if judged and not _require_live_claude_auth(args.backend):
+        print("  → continuing without LLM checks (the other checks still run).\n")
+        judged = False
     backend = None
-    if args.judged and (args.backend or args.model):
+    if judged and (args.backend or args.model):
         from ..backends import resolve_backend
         backend = resolve_backend(args.backend, model=args.model)
 
@@ -221,9 +275,22 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         run_dir = open_run(slug="validate", phase="phase3_validate",
                            session_dir=session.path).path
 
-    report = validate_bundle_path(args.bundle, facts_path=args.facts,
-                                  judged=args.judged, execute=args.execute,
-                                  backend=backend)
+    # When LLM checks run on a terminal, show the same live spinner + per-check
+    # progress as the agent phases (so the CLI isn't idle for 30–60s). Otherwise
+    # the plain synchronous path.
+    if judged and not args.as_json and sys.stdout.isatty():
+        from ..checks import validate_bundle_path_async
+        from .progress import ProgressUI
+        with ProgressUI(verb="Running LLM checks") as ui:
+            ui.set_status("running checks")
+            report = asyncio.run(validate_bundle_path_async(
+                args.bundle, facts_path=args.facts, judged=True,
+                execute=args.execute, backend=backend,
+                on_check=_make_llm_progress_cb(ui)))
+    else:
+        report = validate_bundle_path(args.bundle, facts_path=args.facts,
+                                      judged=judged, execute=args.execute,
+                                      backend=backend)
 
     # Optional Phase-1 design scorecard: explicit --assessment, else look in
     # the bundle dir (and its specs/). Absent/malformed → omitted gracefully.
