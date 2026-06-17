@@ -5,6 +5,8 @@ import yaml
 
 from autocodabench.checks import (
     CompetitionFacts,
+    Dimension,
+    REGISTRY,
     Status,
     Tier,
     checklist_coverage,
@@ -14,6 +16,13 @@ from autocodabench.checks import (
 
 def _statuses(report, check_id):
     return [r.status for r in report.results if r.check_id == check_id]
+
+
+def _set_yaml(bundle, mutate):
+    p = bundle / "competition.yaml"
+    comp = yaml.safe_load(p.read_text())
+    mutate(comp)
+    p.write_text(yaml.safe_dump(comp, sort_keys=False))
 
 
 def test_demo_bundle_passes_gates(demo_bundle):
@@ -105,6 +114,119 @@ def test_checklist_coverage_lists_all_tiers():
     tiers = {r["tier"] for r in rows}
     assert tiers == {t.value for t in Tier}
     assert all(r["citation"] for r in rows)
+
+
+def test_every_check_declares_a_dimension_and_citation():
+    """The §7.1 framework invariant: every registered check carries a
+    validation dimension (a valid Dimension) and a citation."""
+    valid = {d.value for d in Dimension}
+    for c in REGISTRY.values():
+        assert c.dimension.value in valid, f"{c.id} has no valid dimension"
+        assert c.citation, f"{c.id} has no citation"
+
+
+def test_metric_direction_passes_on_clean_demo(demo_bundle):
+    # Demo sorts accuracy/balanced_accuracy descending — both higher-is-better.
+    report = validate_bundle_path(demo_bundle)
+    assert Status.FINDING not in _statuses(report, "metric-direction-semantics")
+    assert Status.PASS in _statuses(report, "metric-direction-semantics")
+
+
+def test_metric_direction_flags_inverted_sort(demo_bundle):
+    _set_yaml(demo_bundle,
+              lambda c: c["leaderboards"][0]["columns"][0].__setitem__("sorting", "asc"))
+    report = validate_bundle_path(demo_bundle)
+    assert Status.FINDING in _statuses(report, "metric-direction-semantics")
+    assert report.ok  # advisory, not a gate
+
+
+def test_leaderboard_key_collision_gates(demo_bundle):
+    _set_yaml(demo_bundle, lambda c: c["leaderboards"][0]["columns"][1].__setitem__(
+        "key", c["leaderboards"][0]["columns"][0]["key"]))
+    report = validate_bundle_path(demo_bundle)
+    assert Status.FAIL in _statuses(report, "leaderboard-well-formed")
+    assert not report.ok
+
+
+def test_reference_data_leak_gates(demo_bundle):
+    (demo_bundle / "input_data").mkdir(exist_ok=True)
+    shutil.copy(demo_bundle / "reference_data" / "truth.csv",
+                demo_bundle / "input_data" / "truth.csv")
+    report = validate_bundle_path(demo_bundle)
+    assert Status.FAIL in _statuses(report, "reference-data-not-participant-visible")
+    assert not report.ok
+
+
+def test_docker_latest_tag_is_finding(demo_bundle):
+    _set_yaml(demo_bundle,
+              lambda c: c.__setitem__("docker_image", "codalab/codalab-legacy:latest"))
+    report = validate_bundle_path(demo_bundle)
+    assert Status.FINDING in _statuses(report, "docker-image-pinned")
+    assert report.ok  # advisory, not a gate
+
+
+# --- judged tier plumbing (keyless: a stub backend stands in for the LLM) ----
+
+class _StubResult:
+    def __init__(self, text):
+        self.ok, self.error, self.status, self.final_text = True, None, "ok", text
+
+
+class _StubBackend:
+    def __init__(self, text):
+        self._text = text
+
+    async def run(self, task):
+        return _StubResult(self._text)
+
+
+def _run_judged(demo_bundle, text):
+    import asyncio
+    from autocodabench.checks.base import CheckContext
+    from autocodabench.checks.judged import run_judged_checks
+    ctx = CheckContext.from_bundle_dir(demo_bundle)
+    return asyncio.run(run_judged_checks(ctx, _StubBackend(text)))
+
+
+def test_all_judged_checks_registered():
+    from autocodabench.checks.judged import JudgedCheck
+    judged = [c for c in REGISTRY.values() if isinstance(c, JudgedCheck)]
+    assert len(judged) >= 6  # docs-consistency + the five book-derived rubrics
+    assert all(c.citation and c.dimension for c in judged)
+
+
+def test_judged_findings_are_advisory_not_gates(demo_bundle):
+    results = _run_judged(demo_bundle, '{"findings":[{"where":"terms.md","message":"x"}]}')
+    assert len(results) >= 6
+    # Judged checks emit FINDINGs only — never FAIL, so they never gate.
+    assert all(r.status == Status.FINDING for r in results)
+    assert Status.FAIL not in {r.status for r in results}
+
+
+def test_judged_empty_findings_pass(demo_bundle):
+    results = _run_judged(demo_bundle, '{"findings":[]}')
+    assert results and all(r.status == Status.PASS for r in results)
+
+
+def test_terminal_render_is_box_tables_by_type(demo_bundle):
+    """The CLI prints box tables grouped by validation type; the markdown (web)
+    splits the same way with hyperlinked citations."""
+    from autocodabench.checks import render_report_terminal
+    report = validate_bundle_path(demo_bundle)
+    txt = render_report_terminal(report)
+    assert "Bundle validation —" in txt
+    assert "[1. Structural]" in txt                 # grouped by type
+    assert "LLM?" in txt                            # LLM-as-a-judge column
+    assert "│" in txt and "┌" in txt                # box table
+    assert "autocodabench checks" in txt            # pointer at the end
+    # User-friendly: internal ids are not shown.
+    assert "bundle-schema" not in txt
+    assert "Bundle schema and file references" in txt
+    # Markdown: per-type sections + LLM column + a clickable citation.
+    md = report.to_markdown()
+    assert "## 🔎 Checks" in md and "### 1. Structural" in md
+    assert "| Status | Short Description | LLM-as-a-judge | Detail |" in md
+    assert "](https://" in md  # hyperlinked citation
 
 
 def test_report_markdown_renders(demo_bundle):

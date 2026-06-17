@@ -12,6 +12,7 @@ from .base import (
     Check,
     CheckContext,
     CheckResult,
+    Dimension,
     REGISTRY,
     Severity,
     Status,
@@ -22,8 +23,11 @@ from .facts import CompetitionFacts
 from .report import ValidationReport, checklist_coverage
 from .render import (
     load_design_assessment,
+    render_checks_catalog_markdown,
+    render_checks_catalog_terminal,
     render_judged_section,
     render_report_markdown,
+    render_report_terminal,
 )
 
 __all__ = [
@@ -31,6 +35,7 @@ __all__ = [
     "CheckContext",
     "CheckResult",
     "CompetitionFacts",
+    "Dimension",
     "REGISTRY",
     "Severity",
     "Status",
@@ -39,8 +44,11 @@ __all__ = [
     "checklist_coverage",
     "load_design_assessment",
     "register",
+    "render_checks_catalog_markdown",
+    "render_checks_catalog_terminal",
     "render_judged_section",
     "render_report_markdown",
+    "render_report_terminal",
     "validate_bundle_path",
     "validate_bundle_path_async",
 ]

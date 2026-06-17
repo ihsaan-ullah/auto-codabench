@@ -137,6 +137,35 @@ def _print_research_status(config, backend) -> None:
               "tools — research is Claude-only.")
 
 
+def _maybe_prompt_emulation(preflight: dict, *, execute: bool) -> None:
+    """When execution is requested but the image would run under QEMU emulation,
+    ask the user whether to proceed (slow) or skip execution. Sets
+    ``AUTOCODABENCH_ALLOW_EMULATION`` for this process if they proceed.
+
+    Only prompts on an interactive terminal; non-interactive runs (CI, pipes)
+    fall through and the execution checks skip themselves with guidance."""
+    if not execute or preflight.get("runs_natively") is not False:
+        return
+    from ..runner import emulation_allowed
+    if emulation_allowed():
+        return  # already opted in via the env var
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return  # non-interactive: leave the self-skip + guidance in place
+    try:
+        ans = input(
+            "Execution tests need this image, which would run under slow emulation "
+            "(>20 min).\n"
+            "Proceed with execution anyway? The other checks run either way. "
+            "[y = proceed / N = skip]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ans = ""
+    if ans in ("y", "yes"):
+        os.environ["AUTOCODABENCH_ALLOW_EMULATION"] = "1"
+        print("→ proceeding with emulated execution (this can take >20 minutes)…\n")
+    else:
+        print("→ skipping execution tests; running the other checks.\n")
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
@@ -144,10 +173,17 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     # prerequisite for the run checks; with --no-execute it is informational
     # (static validation does not itself run Docker). Suppressed for --json.
     if not args.as_json:
+        from ..runner import docker_image_overridden
+        override = docker_image_overridden()
         declared = _bundle_declared_image(args.bundle)
-        image = declared or _default_docker_image()
-        src = ("declared in competition.yaml" if declared
-               else "bundle declares none — Codabench/autocodabench default")
+        if override:
+            image = override
+            src = ("AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE — a local substitute, "
+                   "not the bundle's declared image")
+        else:
+            image = declared or _default_docker_image()
+            src = ("declared in competition.yaml" if declared
+                   else "bundle declares none — Codabench/autocodabench default")
         if args.execute:
             note = (f"Codabench will run this bundle inside the image above ({src}). "
                     "This validation will run the bundle's baseline and starting-kit "
@@ -160,8 +196,12 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         # isn't reachable — but does NOT block: static checks still run and the
         # runtime checks report the missing-Docker error, so the user is informed
         # and can choose to install Docker (see the link) and re-run, or proceed.
-        _print_docker_preflight(image, required=args.execute, note=note)
+        p = _print_docker_preflight(image, required=args.execute, note=note)
         print()
+        # If execution would run under slow QEMU emulation, ask rather than
+        # silently skip — the user may still want the (slow) execution evidence,
+        # and the other checks run either way.
+        _maybe_prompt_emulation(p, execute=args.execute)
 
     if args.judged and not _require_live_claude_auth(args.backend):
         return 2
@@ -202,7 +242,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        print(md)
+        # The terminal gets a wrapped, aligned plain-text rendering; the markdown
+        # (`md`, saved above and rendered by the web UI) is unchanged.
+        from ..checks import render_report_terminal
+        print(render_report_terminal(report, design_assessment=assessment))
         if run_dir is not None:
             print(f"\nReport + run logs: {run_dir}")
     return 0 if report.ok else 1
@@ -238,7 +281,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     if bundles:
         print("\nRunning the validator over the rebuilt bundle:\n")
         report = validate_bundle_path(bundles[0])
-        print(report.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(report))
         return 0 if report.ok else 1
     return 0
 
@@ -371,11 +415,27 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
         src = "" if p["image_present_locally"] else " — Docker will pull it on first run"
         print(f"  image fit: {tag} includes {host} → runs natively{src}")
     elif p["runs_natively"] is False:
+        from ..runner import emulation_allowed
         only = "/".join(p["image_available_arches"])
-        print(f"  image fit: ⚠ {only}-only — host is {host}; runs under QEMU emulation (slow)")
-        print(f"             For local testing prefer a native {host} image, e.g.:")
-        print(f"               export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312")
-        print(f"             (a multi-arch tag Docker resolves to {host} here)")
+        forced = emulation_allowed()
+        print(f"  image fit: ⚠ {only}-only — host is {host}; would run under QEMU emulation (slow)")
+        if required and not forced:
+            # Execution would run under emulation (>20 min). The caller (validate)
+            # asks the user whether to proceed or skip; here we just lay out the
+            # cost and the faster alternative.
+            print(f"             ⚠ execution would run under slow emulation — an "
+                  f"emulated baseline +")
+            print(f"             starting-kit run takes >20 min. For a fast run, use a "
+                  f"native image:")
+            print(f"               export AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE=codalab/codalab-legacy:py312")
+            print(f"             then re-run; or pass --no-execute for static checks only.")
+        else:
+            print(f"             For a native {host} image, substitute one (wins over the")
+            print(f"             bundle's declared image):")
+            print(f"               export AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE=codalab/codalab-legacy:py312")
+            if forced:
+                print(f"             AUTOCODABENCH_ALLOW_EMULATION is set — the slow emulated "
+                      f"run will proceed.")
     else:  # architecture undetermined (not pulled, registry unreachable/private)
         err = (p["image_error"] or "").lower()
         if "denied" in err or "unauthorized" in err or "not found" in err:
@@ -567,7 +627,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
     print(f"  cost:      ${result.total_cost_usd:.2f}")
     if result.validation is not None:
         print()
-        print(result.validation.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(result.validation))
     if not result.ok:
         print(f"\ncreate failed: {result.error}", file=sys.stderr)
         return 1
@@ -823,7 +884,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
     print(f"  cost:      ${result.total_cost_usd:.2f}")
     if result.validation is not None:
         print()
-        print(result.validation.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(result.validation))
     if not result.ok:
         print(f"\nbuild failed: {result.error}", file=sys.stderr)
         return 1
@@ -930,19 +992,14 @@ def _cmd_auth(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _cmd_checks(args: argparse.Namespace) -> int:
-    from ..checks import checklist_coverage
+    from ..checks import checklist_coverage, render_checks_catalog_terminal
 
-    rows = checklist_coverage()
     if args.as_json:
-        print(json.dumps(rows, indent=2))
+        print(json.dumps(checklist_coverage(), indent=2))
         return 0
-    width = max(len(r["id"]) for r in rows)
-    tier = None
-    for r in rows:
-        if r["tier"] != tier:
-            tier = r["tier"]
-            print(f"\n[{tier}]")
-        print(f"  {r['id']:<{width}}  {r['title']}  ({r['citation']})")
+    # One box table per validation type; user-friendly (no internal ids), with
+    # an LLM-as-a-judge column and a clickable Sources footer.
+    print(render_checks_catalog_terminal())
     return 0
 
 

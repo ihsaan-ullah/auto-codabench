@@ -9,7 +9,6 @@ pinned: false
 license: mit
 short_description: Chat assistant for designing Codabench competitions.
 ---
-
 # autocodabench
 
 autocodabench is a library for agentic authoring and pre-launch validation of
@@ -82,17 +81,17 @@ The authoring pipeline requires an LLM backend and is invoked as follows.
 autocodabench auth status     # which Claude auth path is active, if any
 
 # Default model is Claude Sonnet 4.6.
-autocodabench plan-build-validate "Plankton image classification, balanced accuracy, \
-    two phases" --data ./plankton_sample/
+autocodabench plan-build-validate "Create a plankton image classification competition, balanced accuracy, \
+    two phases" --data ./sample_data/
 
-# Change the model with --model — e.g. Claude Opus 4.8 for harder builds:
+# Change the model with --model:
 autocodabench plan-build-validate "..." --model claude-opus-4-8
 #   (equivalently: --backend claude:claude-opus-4-8)
 
-# The backend is a slot too, not a hard binding — same tools, same audit trail:
-autocodabench plan-build-validate "..." --backend ollama:llama3.1      # local, keyless
-autocodabench plan-build-validate "..." --backend openai:gpt-4o
-autocodabench validate bundle.zip --judged --backend ollama:llama3.1
+# Use models from other providers with --backend:
+autocodabench plan-build-validate "..." --backend ollama:llama3.1      # local
+autocodabench plan-build-validate "..." --backend openai:gpt-4o        # OPENAI_API_KEY needed
+autocodabench validate bundle.zip --judged --backend ollama:llama3.1.  # local
 ```
 
 `plan-build-validate` (the `create` alias still works) runs two isolated agent
@@ -141,7 +140,7 @@ pip install -e . && pip install -r web/requirements.txt
 cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h
 ```
 
-Open <http://127.0.0.1:8500> and sign in with your `SHARED_PASSWORD`. See
+Open [http://127.0.0.1:8500](http://127.0.0.1:8500) and sign in with your `SHARED_PASSWORD`. See
 [`web/README.md`](web/README.md) for the full operator guide and
 [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI for the
 walkthrough.
@@ -149,34 +148,34 @@ walkthrough.
 **Or try our hosted demo.** Email
 [autocodabench@googlegroups.com](mailto:autocodabench@googlegroups.com) and we
 will set you up with an account — and a small amount of free credit — to log
-in at <https://ktgiahieu-autocodabench-alpha.hf.space/login> and test the full
+in at [https://ktgiahieu-autocodabench-alpha.hf.space/login](https://ktgiahieu-autocodabench-alpha.hf.space/login) and test the full
 pipeline without installing anything.
 
 ## Documentation pointers
 
 The following table maps reader roles to the relevant documentation.
 
-| Reader | Document |
-|--------|----------|
-| **Evaluating this software** (demo walkthrough and repository tour) | [`docs/demo-for-reviewers.md`](docs/demo-for-reviewers.md) |
-| Asking what is scientifically tested, and how | [`docs/scientific-validation.md`](docs/scientific-validation.md) |
-| Using the CLI or library | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) |
-| Trying the Web UI (Space or local `chainlit run`) | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI, then [`web/README.md`](web/README.md) to operate it |
-| Working on the package internals | [`docs/architecture.md`](docs/architecture.md) |
-| Skill provenance (the origin of each `SKILL.md`) | [`src/autocodabench/skills/<name>/README.md`](src/autocodabench/skills/) |
-| The end-to-end benchmarks (any LLM backbone) | [`benchmark/README.md`](benchmark/README.md) |
+| Reader                                                                    | Document                                                                                                                   |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Evaluating this software** (demo walkthrough and repository tour) | [`docs/demo-for-reviewers.md`](docs/demo-for-reviewers.md)                                                                  |
+| Asking what is scientifically tested, and how                             | [`docs/scientific-validation.md`](docs/scientific-validation.md)                                                            |
+| Using the CLI or library                                                  | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md)                                                              |
+| Trying the Web UI (Space or local `chainlit run`)                       | [`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md) §Web UI, then [`web/README.md`](web/README.md) to operate it |
+| Working on the package internals                                          | [`docs/architecture.md`](docs/architecture.md)                                                                              |
+| Skill provenance (the origin of each `SKILL.md`)                        | [`src/autocodabench/skills/<name>/README.md`](src/autocodabench/skills/)                                                    |
+| The end-to-end benchmarks (any LLM backbone)                              | [`benchmark/README.md`](benchmark/README.md)                                                                                |
 
 ## Repository layout
 
 The table below summarizes the top-level structure of the repository.
 
-| Path | Contents |
-|------|----------|
-| `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI. |
-| `web/` | Chainlit chat UI — a consumer of the library, deployed by this Space. |
-| `benchmark/` | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle) and validate-bench (seeded-defect detection), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
-| `tests/` | Unit suite — fast and fully keyless. |
-| `Dockerfile` | Used by HF Spaces to build the image. |
+| Path                   | Contents                                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/autocodabench/` | The library: core authoring, check framework, agent backends, plan→build pipeline, MCP server, CLI.                                                                                                                             |
+| `web/`               | Chainlit chat UI — a consumer of the library, deployed by this Space.                                                                                                                                                           |
+| `benchmark/`         | Pure-SDK end-to-end benchmarks (any LLM backbone): create-bench (proposal → working bundle) and validate-bench (seeded-defect detection), with ground-truth competitions and a leakage-controlled, fully reproducible pipeline. |
+| `tests/`             | Unit suite — fast and fully keyless.                                                                                                                                                                                            |
+| `Dockerfile`         | Used by HF Spaces to build the image.                                                                                                                                                                                            |
 
 ## License
 
