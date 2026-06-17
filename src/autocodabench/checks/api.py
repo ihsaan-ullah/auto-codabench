@@ -46,6 +46,7 @@ async def validate_bundle_path_async(
     judged: bool = False,
     execute: bool = False,
     backend=None,
+    on_check=None,
 ) -> ValidationReport:
     path = Path(bundle).expanduser().resolve()
     if not path.exists():
@@ -70,8 +71,15 @@ async def validate_bundle_path_async(
             if backend is None:
                 from ..backends import get_claude_backend
                 backend = get_claude_backend()
+            if on_check:
+                on_check({"event": "phase", "title": "LLM-as-a-judge checks"})
             from .judged import run_judged_checks
-            results.extend(await run_judged_checks(ctx, backend))
+            results.extend(await run_judged_checks(ctx, backend, on_check=on_check))
+            # Upgrade attestations to LLM-assisted, bundle-tailored assessments:
+            # replace the generic unchecked-box statements with specific guidance.
+            from .attestations import is_attestation_id, run_attestation_assessments
+            results = [r for r in results if not is_attestation_id(r.check_id)]
+            results.extend(await run_attestation_assessments(ctx, backend, on_check=on_check))
         # Report the user's original path, not the extraction tempdir.
         return ValidationReport(bundle_dir=path, results=results, facts=facts)
     finally:

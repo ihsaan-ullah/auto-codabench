@@ -46,10 +46,11 @@ COMPETITION = defects.SLUG
 _JUDGED_CHECK = "judged-docs-config-consistency"
 
 
-def _run_defects(clean: Path, workdir: Path, *, backend, judged_runs: int) -> list[dict]:
+def _run_defects(clean: Path, workdir: Path, *, backend, judged_runs: int,
+                 defect_list: list) -> list[dict]:
     """Seed every defect and record the catch count per tier."""
     rows: list[dict] = []
-    for d in defects.DEFECTS:
+    for d in defect_list:
         judged = d.tier == "judged"
         if judged and backend is None:
             rows.append({"defect": d.id, "tier": d.tier, "expect_check": d.expect_check,
@@ -118,14 +119,36 @@ def _render_report(record: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _build_instrument(workdir: Path, instrument: str | None):
+    """Return ``(clean_bundle_dir, competition_label, candidate_defects, skipped)``.
+
+    ``instrument`` is None for the shipped demo (all defects apply), or a path to
+    a competition's ``ground_truth/bundle`` — in which case the defect set
+    self-adapts to that bundle and the skipped defects are reported."""
+    if instrument is None:
+        clean = defects.build_clean_bundle(workdir)
+        return clean, COMPETITION, list(defects.DEFECTS), []
+    clean = defects.build_clean_bundle_from_dir(instrument, workdir)
+    label = Path(instrument).resolve().parent.parent.name or Path(instrument).name
+    applicable, skipped = defects.applicable_defects(clean, workdir / "_probe")
+    return clean, label, applicable, skipped
+
+
 def run_once(*, backend, backend_spec: str | None, model: str | None,
-             judged_runs: int, hardware_tag: str | None) -> dict:
+             judged_runs: int, hardware_tag: str | None,
+             instrument: str | None = None) -> dict:
     session = open_session(kind="validate-bench")
     print(f"  session: {session.path}")
     with tempfile.TemporaryDirectory(prefix="validate-bench-") as tmp:
         workdir = Path(tmp)
-        clean = defects.build_clean_bundle(workdir)
-        rows = _run_defects(clean, workdir, backend=backend, judged_runs=judged_runs)
+        clean, competition, defect_list, skipped = _build_instrument(workdir, instrument)
+        if skipped:
+            print(f"  instrument '{competition}': {len(defect_list)} applicable defect(s), "
+                  f"{len(skipped)} not applicable")
+            for s in skipped:
+                print(f"    - {s['defect']:<30} skipped: {s['reason']}")
+        rows = _run_defects(clean, workdir, backend=backend, judged_runs=judged_runs,
+                            defect_list=defect_list)
         clean_fp = _clean_false_positives(clean, backend=backend, runs=judged_runs)
 
     fp_count = clean_fp["false_positives"] if clean_fp else 0
@@ -133,12 +156,13 @@ def run_once(*, backend, backend_spec: str | None, model: str | None,
     metrics = {
         "tiers": defects.summarize(rows, clean_false_positives=fp_count, clean_runs=fp_runs),
         "per_defect": rows,
+        "defects_not_applicable": skipped,
         "judged_false_positive": clean_fp,
-        "n_defects": len(defects.DEFECTS),
+        "n_defects": len(defect_list),
         "runs_per_judged_condition": judged_runs,
     }
     record = results.new_result(
-        benchmark="validate", competition=COMPETITION,
+        benchmark="validate", competition=competition,
         backend=results.backend_descriptor(
             backend, spec=backend_spec or "deterministic-only", model=model),
         metrics=metrics, run_id=session.session_id, hardware_tag=hardware_tag,
@@ -165,6 +189,11 @@ def main(argv: list[str] | None = None) -> int:
                          "stochastic; >=3 recommended). Default 3.")
     ap.add_argument("--hardware-tag", default=None,
                     help="optional free-text hardware label recorded in results")
+    ap.add_argument("--instrument", default=None, metavar="BUNDLE_DIR",
+                    help="path to a clean competition ground_truth/bundle to use as "
+                         "the instrument instead of the shipped demo. Only the bundle "
+                         "is copied (never sample_submissions/expected_result.json), and "
+                         "the defect set self-adapts to it. Omit to use the demo.")
     args = ap.parse_args(argv)
 
     if args.backend:
@@ -172,9 +201,10 @@ def main(argv: list[str] | None = None) -> int:
         require_explicit_model(args.backend, args.model)
     backend = resolve_backend(args.backend, model=args.model) if args.backend else None
     print(f"validate-bench · backend={args.backend or 'deterministic-only'} "
-          f"· {len(defects.DEFECTS)} defect(s) · {args.runs} judged run(s)")
+          f"· instrument={args.instrument or 'demo'} · {args.runs} judged run(s)")
     record = run_once(backend=backend, backend_spec=args.backend, model=args.model,
-                      judged_runs=args.runs, hardware_tag=args.hardware_tag)
+                      judged_runs=args.runs, hardware_tag=args.hardware_tag,
+                      instrument=args.instrument)
     t = record["metrics"]["tiers"]
     for tier in defects.TIERS:
         tm = t.get(tier)

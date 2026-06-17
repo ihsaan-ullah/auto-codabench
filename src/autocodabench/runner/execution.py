@@ -171,7 +171,18 @@ def _docker_available() -> bool:
 
 
 def bundle_docker_image(slug: str, root_dir: str | None = None) -> str:
-    """The image competition.yaml declares; Codabench's default otherwise."""
+    """The image competition.yaml declares; Codabench's default otherwise.
+
+    ``AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE`` wins over *both* — a deliberate,
+    explicit local escape hatch (unlike ``AUTOCODABENCH_DOCKER_IMAGE``, which is
+    only the fallback when a bundle declares no image). It lets a user on an
+    incompatible host substitute a native image for the bundle's declared one
+    to test locally. Because the substitute differs from what the platform will
+    actually use, callers should surface that the run is a local convenience,
+    not a faithful platform validation."""
+    override = os.environ.get("AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE", "").strip()
+    if override:
+        return override
     yaml_path = resolve_bundle_dir(slug, root_dir) / "competition.yaml"
     if yaml_path.is_file():
         try:
@@ -182,6 +193,55 @@ def bundle_docker_image(slug: str, root_dir: str | None = None) -> str:
         except yaml.YAMLError:
             pass
     return _DEFAULT_DOCKER_IMAGE
+
+
+def docker_image_overridden() -> str | None:
+    """The override image if ``AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE`` is set."""
+    v = os.environ.get("AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE", "").strip()
+    return v or None
+
+
+def emulation_allowed() -> bool:
+    """Whether the user has explicitly opted in to the slow QEMU-emulated run
+    (``AUTOCODABENCH_ALLOW_EMULATION=1``)."""
+    return os.environ.get("AUTOCODABENCH_ALLOW_EMULATION", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+# A native, multi-arch CPU image: the Codabench base resolves to the host arch
+# on both amd64 and Apple-silicon, so it never emulates (see docker/README.md).
+_NATIVE_MULTIARCH_IMAGE = "codalab/codalab-legacy:py312"
+
+
+def emulation_guidance(preflight: dict[str, Any]) -> str | None:
+    """If the image would run under QEMU emulation on this host, return a verbose,
+    honest message (cost + remedies); else ``None``.
+
+    Pure function of a :func:`docker_preflight` dict, so it is unit-testable
+    without Docker."""
+    if preflight.get("emulated") is not True:
+        return None
+    host = preflight.get("host_arch") or "this host"
+    image = preflight.get("image") or "the declared image"
+    arches = preflight.get("image_available_arches") or []
+    only = "/".join(arches) if arches else (preflight.get("image_arch") or "a foreign arch")
+    return (
+        f"Docker image '{image}' is {only}-only, but this host is {host}. "
+        f"Running it requires QEMU emulation, which is very slow — a baseline + "
+        f"starting-kit validation typically takes well over 20 minutes. Execution "
+        f"was skipped rather than run silently under emulation.\n"
+        f"You can:\n"
+        f"  1. Use a native, multi-arch image (recommended) and re-run a fresh "
+        f"`autocodabench validate`:\n"
+        f"       export AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE={_NATIVE_MULTIARCH_IMAGE}\n"
+        f"     (the Codabench CPU base is amd64+arm64; or build the autocodabench "
+        f"base from docker/ — see docker/README.md). Note: a substitute image may "
+        f"lack libraries the bundle's declared image ships, so the baseline can "
+        f"fail on a missing dependency — that is a local-convenience run, not a "
+        f"faithful check against the platform's image.\n"
+        f"  2. Run static checks only (no Docker): add --no-execute.\n"
+        f"  3. Force the slow emulated run anyway: export AUTOCODABENCH_ALLOW_EMULATION=1"
+    )
 
 
 _NO_DOCKER_ERROR = (

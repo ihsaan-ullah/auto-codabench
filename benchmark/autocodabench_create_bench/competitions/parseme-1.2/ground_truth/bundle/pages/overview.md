@@ -1,0 +1,5 @@
+# Description
+
+The third edition of the PARSEME shared task on automatic identification of verbal multiword expressions (VMWEs) aims at identifying **verbal MWEs** in running texts. Verbal MWEs include, among others, verbal idioms *(to let the cat out of the bag)*, light-verb constructions (to make a decision), verb-particle constructions *(to give up)*, multi-verb constructions *(to make do)* and inherently reflexive verbs (*s'évanouir* 'to faint' in French). Their identification is a well-known challenge for NLP applications, due to their complex characteristics including discontinuity, overlaps, non-compositionality, heterogeneity and syntactic variability.
+
+Editions [1.0](http://multiword.sourceforge.net/sharedtask2017/) (2017) and [1.1](http://multiword.sourceforge.net/sharedtask2018/) (2018) have shown that, while some systems reach high performance (F1>0.7) for identifying VMWEs that were seen in training corpus, performance on unseen VMWEs is very low (F1<0.2). Hence this third edition **focuses on discovering VMWEs that were not seen in the training corpus**.

@@ -9,13 +9,32 @@ framework exists to maintain.
 """
 from __future__ import annotations
 
+import inspect
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .base import REGISTRY, CheckResult, Status, Tier
+from .base import REGISTRY, CheckResult, Status, Tier, tier_is_llm_judged
 from .facts import CompetitionFacts
+
+# Canonical sources behind the check citations, made clickable wherever a
+# citation is shown. The book PDF is the project's hosted copy (same URL the
+# authoring skills cite); the schema points at the Codabench docs.
+_BOOK_URL = "https://ai-competitions-book.github.io/ai-competitions-book-full-project.pdf"
+_CODABENCH_DOCS_URL = "https://github.com/codalab/codabench/tree/develop/documentation"
+
+
+def citation_url(citation: str | None) -> str | None:
+    """Map a citation string to a clickable source URL (or None)."""
+    if not citation:
+        return None
+    c = citation.lower()
+    if "pavão" in c or "pavao" in c:
+        return _BOOK_URL
+    if "codabench" in c or "schema" in c or "yaml-structure" in c:
+        return _CODABENCH_DOCS_URL
+    return None
 
 
 @dataclass
@@ -121,18 +140,37 @@ def _detail_lines(details: dict[str, Any] | None) -> list[str]:
     return out
 
 
-def checklist_coverage() -> list[dict[str, str]]:
-    """The implemented-check inventory: id, tier, title, citation.
+def checklist_coverage() -> list[dict[str, Any]]:
+    """The implemented-check inventory, grouped/ordered by validation *type*.
 
-    This is the docs/paper 'checklist coverage' table — what the validator
-    actually covers, by tier, with sources.
+    Each row carries everything the user-facing tables need: the type (number +
+    label), a user-friendly title, whether an LLM is involved
+    (``llm_judged``), how the check is performed (``how``), and the citation
+    with its clickable URL. The internal ``id`` and ``tier`` are kept for
+    tooling but are not shown to users.
     """
     return [
         {
             "id": c.id,
             "tier": c.tier.value,
+            "llm_judged": tier_is_llm_judged(c.tier),
+            "type_no": c.dimension.number,
+            "type": c.dimension.label,
+            "template_section": c.template_section or "",
             "title": c.title,
+            "description": _check_description(c),
+            "how": c.how or "",
             "citation": c.citation or "",
+            "citation_url": citation_url(c.citation),
         }
-        for c in sorted(REGISTRY.values(), key=lambda c: (c.tier.value, c.id))
+        for c in sorted(REGISTRY.values(),
+                        key=lambda c: (c.dimension.number, not tier_is_llm_judged(c.tier), c.id))
     ]
+
+
+def _check_description(check) -> str:
+    """A one-line, user-facing description of what the check verifies, taken
+    from the check class's docstring (first paragraph)."""
+    doc = inspect.getdoc(type(check)) or ""
+    first = doc.split("\n\n", 1)[0].replace("\n", " ").strip()
+    return first[:200].rstrip() + ("…" if len(first) > 200 else "")

@@ -29,6 +29,42 @@ class Tier(str, enum.Enum):
     ATTESTATION = "attestation"
 
 
+class Dimension(str, enum.Enum):
+    """The *type* of correctness a check inspects — the orthogonal axis to the
+    tier. The report groups checks by type so an organizer reads them by what
+    they concern. The six types are numbered for display (``1. Structural`` …
+    ``6. Governance``); see ``docs/validation-checklist-proposal.md`` (§2).
+    """
+    STRUCTURAL = "Structural"          # parses, uploads, internally consistent
+    EXECUTABLE = "Executable"          # runs and reproduces its claimed scores
+    METHODOLOGICAL = "Methodological"  # phases, submission economy, sizing
+    DATA = "Data & leakage"            # splits disjoint, no target/leakage exposure
+    DOCUMENTATION = "Documentation"    # pages complete, unambiguous, consistent
+    GOVERNANCE = "Governance"          # review, license, persistence, ethics
+
+    @property
+    def number(self) -> int:
+        """1-based type number, by declaration order."""
+        return list(Dimension).index(self) + 1
+
+    @property
+    def label(self) -> str:
+        """Display label, e.g. ``2. Executable``."""
+        return f"{self.number}. {self.value}"
+
+
+def tier_is_llm_judged(tier: "Tier") -> bool:
+    """Whether a check's verdict comes from (or is assisted by) an LLM.
+
+    User-facing surfaces show this as an ``LLM-as-a-judge: Yes/No`` column
+    instead of the internal tier name: deterministic checks compute their own
+    verdict in code (No); judged checks grade a rubric with an LLM (Yes); and
+    attestation checks — human-only criteria — are *assisted* by an LLM that
+    offers a guided suggestion rather than being left as a blank box (Yes).
+    """
+    return tier != Tier.DETERMINISTIC
+
+
 class Severity(str, enum.Enum):
     BLOCKER = "blocker"
     WARNING = "warning"
@@ -115,8 +151,21 @@ class Check:
     id: str = ""
     title: str = ""
     tier: Tier = Tier.DETERMINISTIC
+    dimension: Dimension = Dimension.STRUCTURAL
     severity: Severity = Severity.WARNING
     citation: str | None = None
+    # One brief, user-facing sentence on *how* the check is performed (what the
+    # code looks at / runs). Surfaced in the `autocodabench checks` table so an
+    # organizer understands the mechanism, not just the intent.
+    how: str = ""
+    # The section of the published challenge-proposal template (Pavão et al.,
+    # "Challenge design roadmap") this check covers, e.g. "T3" (Data) or "T5"
+    # (Metrics & evaluation). Documentation-only traceability: surfaced in
+    # ``checks --json`` / ``checklist_coverage()`` so coverage can be audited
+    # against that external standard, but NOT rendered as a table column. Empty
+    # for platform-integrity checks with no proposal-template counterpart. See
+    # ``docs/validation-checklist-proposal.md`` (§11).
+    template_section: str = ""
     # Fact names that must be present in CompetitionFacts; otherwise the
     # check reports SKIPPED with an actionable message instead of guessing.
     requires_facts: tuple[str, ...] = ()

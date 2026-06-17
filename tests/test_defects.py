@@ -47,6 +47,44 @@ def test_every_defect_targets_a_registered_check():
 
 
 # ---------------------------------------------------------------------------
+# Generalised instrument: corrupt any clean bundle into opaque bad variants
+# ---------------------------------------------------------------------------
+
+def test_build_clean_bundle_from_dir_copies_a_bundle(clean_bundle, tmp_path):
+    copied = defects.build_clean_bundle_from_dir(clean_bundle, tmp_path)
+    assert (copied / "competition.yaml").is_file()
+    assert copied.resolve() != clean_bundle.resolve()  # a copy, not the original
+
+
+def test_applicable_defects_self_adapt_and_report_skips(clean_bundle, tmp_path):
+    det = defects.defects_for_tier("deterministic")
+    applicable, skipped = defects.applicable_defects(clean_bundle, tmp_path, det)
+    # On the clean demo every deterministic defect both applies and is specific.
+    assert {d.id for d in applicable} == {d.id for d in det}
+    assert skipped == []
+
+
+def test_corrupt_bundle_labels_are_opaque_and_carry_an_answer_key(clean_bundle, tmp_path):
+    det = defects.defects_for_tier("deterministic")
+    variants, skipped = defects.corrupt_bundle(clean_bundle, tmp_path / "cases", det)
+    assert len(variants) == len(det)
+    for v in variants:
+        # The label a checker sees must not leak the flaw kind…
+        assert v.label.startswith("case-")
+        assert v.defect_id not in v.label and v.expect_check not in v.label
+        # …and the variant must be a real, corrupted bundle copy.
+        assert (v.path / "competition.yaml").is_file()
+    # The probe scratch dir is cleaned up; only the case-NN variants remain.
+    leftover = [p.name for p in (tmp_path / "cases").iterdir() if p.is_dir()]
+    assert all(name.startswith("case-") for name in leftover)
+    # The answer key actually catches its flaw (sanity: harness measures truth).
+    from autocodabench.checks import validate_bundle_path
+    v0 = variants[0]
+    report = validate_bundle_path(v0.path, execute=False)
+    assert defects.flagged(report, v0.expect_check)
+
+
+# ---------------------------------------------------------------------------
 # summarize() — precision / recall / F1 maths (pure, no bundle needed)
 # ---------------------------------------------------------------------------
 

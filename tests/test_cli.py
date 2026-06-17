@@ -167,8 +167,21 @@ def test_provenance_table_with_emoji_aligns():
 def test_checks_list(capsys):
     assert main(["checks", "list"]) == 0
     out = capsys.readouterr().out
-    assert "[deterministic]" in out
-    assert "bundle-schema" in out
+    # Grouped by validation type, user-friendly (no internal ids), with the
+    # LLM-as-a-judge column header.
+    assert "[1. Structural]" in out and "[6. Governance]" in out
+    assert "LLM?" in out
+    assert "bundle-schema" not in out  # internal id is hidden from users
+    assert "Bundle schema" in out      # the friendly title shows (may wrap)
+
+
+def test_checks_list_json_carries_type_and_llm(capsys):
+    assert main(["checks", "list", "--json"]) == 0
+    import json as _json
+    rows = _json.loads(capsys.readouterr().out)
+    r = next(x for x in rows if x["id"] == "bundle-schema")
+    assert r["type"] == "1. Structural" and r["llm_judged"] is False
+    assert r["how"] and r["citation_url"]
 
 
 def test_demo_then_validate(tmp_path, capsys):
@@ -251,6 +264,7 @@ def test_preflight_banner_native(monkeypatch, capsys):
 
 
 def test_preflight_banner_emulated_warns(monkeypatch, capsys):
+    monkeypatch.delenv("AUTOCODABENCH_ALLOW_EMULATION", raising=False)
     monkeypatch.setattr(_runner, "docker_preflight", lambda image: _fake_preflight(
         image="codalab/codalab-legacy:py39", image_arch="amd64",
         image_available_arches=["amd64"], image_present_locally=False,
@@ -258,7 +272,12 @@ def test_preflight_banner_emulated_warns(monkeypatch, capsys):
     _print_docker_preflight("codalab/codalab-legacy:py39", required=True)
     out = capsys.readouterr().out
     assert "QEMU emulation" in out
-    assert "AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312" in out
+    # When execution is required but the image emulates, the banner flags the slow
+    # emulated run and recommends the OVERRIDE env (which wins over a declared
+    # image) or --no-execute. (validate then prompts the user interactively.)
+    assert "would run under slow emulation" in out
+    assert "AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE=codalab/codalab-legacy:py312" in out
+    assert "--no-execute" in out
 
 
 def test_preflight_banner_no_daemon_warns_when_required(monkeypatch, capsys):

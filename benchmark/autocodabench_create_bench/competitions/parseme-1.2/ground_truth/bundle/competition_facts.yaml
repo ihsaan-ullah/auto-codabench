@@ -1,0 +1,9 @@
+# Declared competition facts (declare-then-verify side channel for checks that
+# cannot be decided from the bundle alone). Values marked (default) were chosen
+# by the maintainer when reformatting this bundle into ground truth and should
+# be confirmed against the upstream PARSEME 1.2 shared task.
+data_license: CC BY 4.0 (varies by language; see the per-language corpus READMEs)
+challenge_type: regular
+prizes: false
+task_type: verbal_mwe_identification
+dataset_name: PARSEME shared task 1.2 corpora

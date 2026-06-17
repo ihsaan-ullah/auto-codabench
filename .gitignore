@@ -43,3 +43,6 @@ web/public/sessions/
 
 experiments/bundle_creation_test/runs/*/
 trash_folder/
+
+benchmark/autocodabench_validate_bench/results/deterministic-only/*.json
+benchmark/autocodabench_validate_bench/*.md

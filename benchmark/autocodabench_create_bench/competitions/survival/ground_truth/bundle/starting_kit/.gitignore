@@ -1,0 +1,5 @@
+# Heavy raw competition data — NOT tracked in git (populate locally; see
+# ../../README.md → "Populating bundle/"). This .gitignore keeps the
+# directory alive in git so the path referenced from competition.yaml exists.
+*
+!.gitignore

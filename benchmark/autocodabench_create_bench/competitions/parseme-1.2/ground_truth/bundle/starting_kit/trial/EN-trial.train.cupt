@@ -1,0 +1,131 @@
+# global.columns = ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC PARSEME:MWE
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu email-enronsent34_01-0024
+# text = A little birdie told me that you were checking into tickets for Seoul.
+1	A	a	DET	DT	Definite=Ind|PronType=Art	3	det	3:det	_	1:VID
+2	little	little	ADJ	JJ	Degree=Pos	3	amod	3:amod	_	1
+3	birdie	birdie	NOUN	NN	Number=Sing	4	nsubj	4:nsubj	_	1
+4	told	tell	VERB	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	0	root	0:root	_	1
+5	me	I	PRON	PRP	Case=Acc|Number=Sing|Person=1|PronType=Prs	4	iobj	4:iobj	_	*
+6	that	that	SCONJ	IN	_	9	mark	9:mark	_	*
+7	you	you	PRON	PRP	Case=Nom|Person=2|PronType=Prs	9	nsubj	9:nsubj	_	*
+8	were	be	AUX	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	9	aux	9:aux	_	*
+9	checking	check	VERB	VBG	Tense=Pres|VerbForm=Part	4	ccomp	4:ccomp	_	2:VPC.semi
+10	into	into	ADP	IN	_	11	case	11:case	_	2
+11	tickets	ticket	NOUN	NNS	Number=Plur	9	obl	9:obl	_	*
+12	for	for	ADP	IN	_	13	case	13:case	_	*
+13	Seoul	Seoul	PROPN	NNP	Number=Sing	11	nmod	11:nmod	SpaceAfter=No	*
+14	.	.	PUNCT	.	_	4	punct	4:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-test.conllu answers-20111107214231AA68BMD_ans-0005
+# text = Wendi has worked for them have a look at her blog.
+1	Wendi	Wendi	PROPN	NNP	Number=Sing	3	nsubj	3:nsubj	_	*
+2	has	have	AUX	VBZ	Mood=Ind|Number=Sing|Person=3|Tense=Pres|VerbForm=Fin	3	aux	3:aux	_	*
+3	worked	work	VERB	VBN	Tense=Past|VerbForm=Part	0	root	0:root	_	*
+4	for	for	ADP	IN	_	5	case	5:case	_	*
+5	them	they	PRON	PRP	Case=Acc|Number=Plur|Person=3|PronType=Prs	3	obl	3:obl	_	*
+6	have	have	VERB	VB	Mood=Imp|VerbForm=Fin	3	parataxis	3:parataxis	_	1:LVC.full
+7	a	a	DET	DT	Definite=Ind|PronType=Art	8	det	8:det	_	1
+8	look	look	NOUN	NN	Number=Sing	6	obj	6:obj	_	1
+9	at	at	ADP	IN	_	11	case	11:case	_	*
+10	her	she	PRON	PRP$	Gender=Fem|Number=Sing|Person=3|Poss=Yes|PronType=Prs	11	nmod:poss	11:nmod:poss	_	*
+11	blog	blog	NOUN	NN	Number=Sing	8	nmod	8:nmod	SpaceAfter=No	*
+12	.	.	PUNCT	.	_	3	punct	3:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu newsgroup-groups.google.com_humanities.lit.authors.shakespeare_0018a7697318f71f_ENG_20031006_163200-0106
+# text = But they determined to get rid forever of Garcia.
+1	But	but	CCONJ	CC	_	3	cc	3:cc	_	*
+2	they	they	PRON	PRP	Case=Nom|Number=Plur|Person=3|PronType=Prs	3	nsubj	3:nsubj	_	*
+3	determined	determine	VERB	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	0	root	0:root	_	*
+4	to	to	PART	TO	_	5	mark	5:mark	_	*
+5	get	get	VERB	VB	VerbForm=Inf	3	xcomp	3:xcomp	_	1:VID;2:IAV
+6	rid	rid	ADJ	JJ	Degree=Pos	5	xcomp	5:xcomp	_	1;2
+7	forever	forever	ADV	RB	_	5	advmod	5:advmod	_	*
+8	of	of	ADP	IN	_	9	case	9:case	_	2
+9	Garcia	Garcia	PROPN	NNP	Number=Sing	6	obl	6:obl	SpaceAfter=No	*
+10	.	.	PUNCT	.	_	3	punct	3:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu answers-20111108110329AAxl1pb_ans-0028
+# text = give them time to set up their territories, and once you bring the new kitten out, pay a lot of attention to the male.
+1	give	give	VERB	VB	Mood=Imp|VerbForm=Fin	0	root	0:root	_	1:LVC.cause
+2	them	they	PRON	PRP	Case=Acc|Number=Plur|Person=3|PronType=Prs	1	iobj	1:iobj	_	*
+3	time	time	NOUN	NN	Number=Sing	1	obj	1:obj	_	1
+4	to	to	PART	TO	_	5	mark	5:mark	_	*
+5	set	set	VERB	VB	VerbForm=Inf	3	acl	3:acl	_	2:LVC.full
+6	up	up	ADP	RP	_	5	compound:prt	5:compound:prt	_	2
+7	their	they	PRON	PRP$	Number=Plur|Person=3|Poss=Yes|PronType=Prs	8	nmod:poss	8:nmod:poss	_	*
+8	territories	territory	NOUN	NNS	Number=Plur	5	obj	5:obj	SpaceAfter=No	*
+9	,	,	PUNCT	,	_	19	punct	19:punct	_	*
+10	and	and	CCONJ	CC	_	19	cc	19:cc	_	*
+11	once	once	SCONJ	IN	_	13	mark	13:mark	_	*
+12	you	you	PRON	PRP	Case=Nom|Person=2|PronType=Prs	13	nsubj	13:nsubj	_	*
+13	bring	bring	VERB	VB	VerbForm=Inf	19	advcl	19:advcl	_	*
+14	the	the	DET	DT	Definite=Def|PronType=Art	16	det	16:det	_	*
+15	new	new	ADJ	JJ	Degree=Pos	16	amod	16:amod	_	*
+16	kitten	kitten	NOUN	NN	Number=Sing	13	obj	13:obj	_	*
+17	out	out	ADP	RP	_	13	compound:prt	13:compound:prt	SpaceAfter=No	*
+18	,	,	PUNCT	,	_	19	punct	19:punct	_	*
+19	pay	pay	VERB	VB	Mood=Imp|VerbForm=Fin	1	conj	1:conj	_	3:LVC.full
+20	a	a	DET	DT	Definite=Ind|PronType=Art	21	det	21:det	_	*
+21	lot	lot	NOUN	NN	Number=Sing	19	obj	19:obj	_	*
+22	of	of	ADP	IN	_	23	case	23:case	_	*
+23	attention	attention	NOUN	NN	Number=Sing	21	nmod	21:nmod	_	3
+24	to	to	ADP	IN	_	26	case	26:case	_	*
+25	the	the	DET	DT	Definite=Def|PronType=Art	26	det	26:det	_	*
+26	male	male	NOUN	NN	Number=Sing	19	obl	19:obl	SpaceAfter=No	*
+27	.	.	PUNCT	.	_	1	punct	1:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu email-enronsent39_01-0040
+# text = Can we visit about what went on with Ursula at the PRC meeting when you catch up?
+1	Can	can	AUX	MD	VerbForm=Fin	3	aux	3:aux	_	*
+2	we	we	PRON	PRP	Case=Nom|Number=Plur|Person=1|PronType=Prs	3	nsubj	3:nsubj	_	*
+3	visit	visit	VERB	VB	VerbForm=Inf	0	root	0:root	_	1:IAV
+4	about	about	SCONJ	IN	_	6	mark	6:mark	_	1
+5	what	what	PRON	WP	PronType=Int	6	nsubj	6:nsubj	_	*
+6	went	go	VERB	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	3	advcl	3:advcl	_	2:VPC.semi
+7	on	on	ADV	RB	_	6	advmod	6:advmod	_	2
+8	with	with	ADP	IN	_	9	case	9:case	_	*
+9	Ursula	Ursula	PROPN	NNP	Number=Sing	6	obl	6:obl	_	*
+10	at	at	ADP	IN	_	13	case	13:case	_	*
+11	the	the	DET	DT	Definite=Def|PronType=Art	13	det	13:det	_	*
+12	PRC	PRC	PROPN	NNP	Number=Sing	13	compound	13:compound	_	*
+13	meeting	meeting	NOUN	NN	Number=Sing	6	obl	6:obl	_	*
+14	when	when	ADV	WRB	PronType=Int	16	mark	16:mark	_	*
+15	you	you	PRON	PRP	Case=Nom|Person=2|PronType=Prs	16	nsubj	16:nsubj	_	*
+16	catch	catch	VERB	VBP	Mood=Ind|Tense=Pres|VerbForm=Fin	3	advcl	3:advcl	_	3:VPC.semi
+17	up	up	ADP	RP	_	16	compound:prt	16:compound:prt	SpaceAfter=No	3
+18	?	?	PUNCT	.	_	3	punct	3:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu reviews-004574-0002
+# text = This restaurant is over-rated.
+1	This	this	DET	DT	Number=Sing|PronType=Dem	2	det	2:det	_	*
+2	restaurant	restaurant	NOUN	NN	Number=Sing	4	nsubj	4:nsubj	_	*
+3	is	be	AUX	VBZ	Mood=Ind|Number=Sing|Person=3|Tense=Pres|VerbForm=Fin	4	cop	4:cop	_	*
+4	over-rated	over-rated	ADJ	JJ	Degree=Pos	0	root	0:root	SpaceAfter=No	1:VPC.full
+5	.	.	PUNCT	.	_	4	punct	4:punct	_	*
+
+# source_sent_id = http://hdl.handle.net/11234/1-2515 UD_English/en-ud-train.conllu reviews-235423-0004
+# text = I called in my order and upon arriving to pick it up, they got my order confused with someone elses.
+1	I	I	PRON	PRP	Case=Nom|Number=Sing|Person=1|PronType=Prs	2	nsubj	2:nsubj	_	*
+2	called	call	VERB	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	0	root	0:root	_	1:VPC.full
+3	in	in	ADP	RP	_	2	compound:prt	2:compound:prt	_	1
+4	my	my	PRON	PRP$	Number=Sing|Person=1|Poss=Yes|PronType=Prs	5	nmod:poss	5:nmod:poss	_	*
+5	order	order	NOUN	NN	Number=Sing	2	obj	2:obj	_	*
+6	and	and	CCONJ	CC	_	15	cc	15:cc	_	*
+7	upon	upon	SCONJ	IN	_	8	mark	8:mark	_	*
+8	arriving	arrive	VERB	VBG	VerbForm=Ger	15	advcl	15:advcl	_	*
+9	to	to	PART	TO	_	10	mark	10:mark	_	*
+10	pick	pick	VERB	VB	VerbForm=Inf	8	advcl	8:advcl	_	2:VPC.full
+11	it	it	PRON	PRP	Case=Acc|Gender=Neut|Number=Sing|Person=3|PronType=Prs	10	obj	10:obj	_	*
+12	up	up	ADP	RP	_	10	compound:prt	10:compound:prt	SpaceAfter=No	2
+13	,	,	PUNCT	,	_	15	punct	15:punct	_	*
+14	they	they	PRON	PRP	Case=Nom|Number=Plur|Person=3|PronType=Prs	15	nsubj	15:nsubj	_	*
+15	got	get	VERB	VBD	Mood=Ind|Tense=Past|VerbForm=Fin	2	conj	2:conj	_	*
+16	my	my	PRON	PRP$	Number=Sing|Person=1|Poss=Yes|PronType=Prs	17	nmod:poss	17:nmod:poss	_	*
+17	order	order	NOUN	NN	Number=Sing	15	obj	15:obj	_	*
+18	confused	confuse	VERB	VBN	Tense=Past|VerbForm=Part	15	xcomp	15:xcomp	_	*
+19	with	with	ADP	IN	_	20	case	20:case	_	*
+20	someone	someone	PRON	NN	Number=Sing	18	obl	18:obl	_	*
+21	else	else	ADJ	JJ	Degree=Pos	20	amod	20:amod	SpaceAfter=No	*
+22	s	s	PART	POS	_	20	case	20:case	SpaceAfter=No	*
+23	.	.	PUNCT	.	_	2	punct	2:punct	_	*
+

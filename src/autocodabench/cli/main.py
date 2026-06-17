@@ -34,6 +34,11 @@ from pathlib import Path
 
 from .. import __version__
 
+# Where the human-readable prerequisites (Docker, Node/npx, git + install steps)
+# live. Surfaced in Docker-preflight messages so a user without Docker is pointed
+# straight at how to install it.
+_PREREQS_URL = "https://github.com/ktgiahieu/auto-codabench#prerequisites"
+
 
 def _require_live_claude_auth(backend_spec: str | None) -> bool:
     """Preflight before starting a live Claude session: if no auth path
@@ -132,6 +137,84 @@ def _print_research_status(config, backend) -> None:
               "tools — research is Claude-only.")
 
 
+def _maybe_prompt_emulation(preflight: dict, *, execute: bool) -> None:
+    """When execution is requested but the image would run under QEMU emulation,
+    ask the user whether to proceed (slow) or skip execution. Sets
+    ``AUTOCODABENCH_ALLOW_EMULATION`` for this process if they proceed.
+
+    Only prompts on an interactive terminal; non-interactive runs (CI, pipes)
+    fall through and the execution checks skip themselves with guidance."""
+    if not execute or preflight.get("runs_natively") is not False:
+        return
+    from ..runner import emulation_allowed
+    if emulation_allowed():
+        return  # already opted in via the env var
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return  # non-interactive: leave the self-skip + guidance in place
+    try:
+        ans = input(
+            "Execution tests need this image, which would run under slow emulation "
+            "(>20 min).\n"
+            "Proceed with execution anyway? The other checks run either way. "
+            "[y = proceed / N = skip]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ans = ""
+    if ans in ("y", "yes"):
+        os.environ["AUTOCODABENCH_ALLOW_EMULATION"] = "1"
+        print("→ proceeding with emulated execution (this can take >20 minutes)…\n")
+    else:
+        print("→ skipping execution tests; running the other checks.\n")
+
+
+def _maybe_prompt_judged(args: argparse.Namespace) -> bool:
+    """Whether to run the LLM-as-a-judge checks. ``--judged`` forces yes; a
+    non-interactive run or ``--json`` stays off; otherwise ask the user, default
+    yes (the LLM checks are the more thorough — but slower — review)."""
+    if args.judged:
+        return True
+    if args.as_json or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        ans = input(
+            "Also run LLM-as-a-judge checks for a more thorough review? "
+            "(needs LLM backend — adds ~50s/check) "
+            "[Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return ans in ("", "y", "yes")
+
+
+def _llm_done_line(title: str, results: list) -> str:
+    """A one-line result summary for a finished LLM check (shown live)."""
+    from ..checks import Status
+    st = [r.status for r in results]
+    if Status.FINDING in st:
+        n = sum(1 for s in st if s == Status.FINDING)
+        return f"⚠️  {title} — {n} finding(s)"
+    if Status.ATTESTATION_REQUIRED in st:
+        return f"📋 {title} — needs your review"
+    if st and all(s == Status.SKIPPED for s in st):
+        return f"•  {title} — skipped"
+    if Status.PASS in st:
+        return f"✅ {title} — no issues"
+    return f"•  {title}"
+
+
+def _make_llm_progress_cb(ui):
+    """Drive the live spinner/log from validate's per-check progress events."""
+    def cb(ev: dict) -> None:
+        kind = ev.get("event")
+        if kind == "phase":
+            ui.line("")
+            ui.line(f"  Running {ev.get('title')} (the LLM reads the bundle)…")
+        elif kind == "start":
+            ui.set_status(ev.get("title", "thinking"))
+        elif kind == "done":
+            ui.line("  " + _llm_done_line(ev.get("title", "check"),
+                                          ev.get("results") or []))
+    return cb
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from ..checks import validate_bundle_path
 
@@ -139,10 +222,17 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     # prerequisite for the run checks; with --no-execute it is informational
     # (static validation does not itself run Docker). Suppressed for --json.
     if not args.as_json:
+        from ..runner import docker_image_overridden
+        override = docker_image_overridden()
         declared = _bundle_declared_image(args.bundle)
-        image = declared or _default_docker_image()
-        src = ("declared in competition.yaml" if declared
-               else "bundle declares none — Codabench/autocodabench default")
+        if override:
+            image = override
+            src = ("AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE — a local substitute, "
+                   "not the bundle's declared image")
+        else:
+            image = declared or _default_docker_image()
+            src = ("declared in competition.yaml" if declared
+                   else "bundle declares none — Codabench/autocodabench default")
         if args.execute:
             note = (f"Codabench will run this bundle inside the image above ({src}). "
                     "This validation will run the bundle's baseline and starting-kit "
@@ -151,13 +241,26 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         else:
             note = (f"Codabench will run this bundle inside the image above ({src}). "
                     "Static validation only (--no-execute): the bundle is not run.")
-        _print_docker_preflight(image, required=args.execute, note=note)
+        # When executing, this surfaces a loud, link-bearing warning if Docker
+        # isn't reachable — but does NOT block: static checks still run and the
+        # runtime checks report the missing-Docker error, so the user is informed
+        # and can choose to install Docker (see the link) and re-run, or proceed.
+        p = _print_docker_preflight(image, required=args.execute, note=note)
         print()
+        # If execution would run under slow QEMU emulation, ask rather than
+        # silently skip — the user may still want the (slow) execution evidence,
+        # and the other checks run either way.
+        _maybe_prompt_emulation(p, execute=args.execute)
 
-    if args.judged and not _require_live_claude_auth(args.backend):
-        return 2
+    # Offer the (slower, more thorough) LLM-as-a-judge checks — default yes when
+    # interactive. They need a live Claude session; if auth isn't available we
+    # continue with the deterministic + execution checks rather than abort.
+    judged = _maybe_prompt_judged(args)
+    if judged and not _require_live_claude_auth(args.backend):
+        print("  → continuing without LLM checks (the other checks still run).\n")
+        judged = False
     backend = None
-    if args.judged and (args.backend or args.model):
+    if judged and (args.backend or args.model):
         from ..backends import resolve_backend
         backend = resolve_backend(args.backend, model=args.model)
 
@@ -172,9 +275,22 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         run_dir = open_run(slug="validate", phase="phase3_validate",
                            session_dir=session.path).path
 
-    report = validate_bundle_path(args.bundle, facts_path=args.facts,
-                                  judged=args.judged, execute=args.execute,
-                                  backend=backend)
+    # When LLM checks run on a terminal, show the same live spinner + per-check
+    # progress as the agent phases (so the CLI isn't idle for 30–60s). Otherwise
+    # the plain synchronous path.
+    if judged and not args.as_json and sys.stdout.isatty():
+        from ..checks import validate_bundle_path_async
+        from .progress import ProgressUI
+        with ProgressUI(verb="Running LLM checks") as ui:
+            ui.set_status("running checks")
+            report = asyncio.run(validate_bundle_path_async(
+                args.bundle, facts_path=args.facts, judged=True,
+                execute=args.execute, backend=backend,
+                on_check=_make_llm_progress_cb(ui)))
+    else:
+        report = validate_bundle_path(args.bundle, facts_path=args.facts,
+                                      judged=judged, execute=args.execute,
+                                      backend=backend)
 
     # Optional Phase-1 design scorecard: explicit --assessment, else look in
     # the bundle dir (and its specs/). Absent/malformed → omitted gracefully.
@@ -193,7 +309,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        print(md)
+        # The terminal gets a wrapped, aligned plain-text rendering; the markdown
+        # (`md`, saved above and rendered by the web UI) is unchanged.
+        from ..checks import render_report_terminal
+        print(render_report_terminal(report, design_assessment=assessment))
         if run_dir is not None:
             print(f"\nReport + run logs: {run_dir}")
     return 0 if report.ok else 1
@@ -229,7 +348,8 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     if bundles:
         print("\nRunning the validator over the rebuilt bundle:\n")
         report = validate_bundle_path(bundles[0])
-        print(report.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(report))
         return 0 if report.ok else 1
     return 0
 
@@ -362,11 +482,27 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
         src = "" if p["image_present_locally"] else " — Docker will pull it on first run"
         print(f"  image fit: {tag} includes {host} → runs natively{src}")
     elif p["runs_natively"] is False:
+        from ..runner import emulation_allowed
         only = "/".join(p["image_available_arches"])
-        print(f"  image fit: ⚠ {only}-only — host is {host}; runs under QEMU emulation (slow)")
-        print(f"             For local testing prefer a native {host} image, e.g.:")
-        print(f"               export AUTOCODABENCH_DOCKER_IMAGE=codalab/codalab-legacy:py312")
-        print(f"             (a multi-arch tag Docker resolves to {host} here)")
+        forced = emulation_allowed()
+        print(f"  image fit: ⚠ {only}-only — host is {host}; would run under QEMU emulation (slow)")
+        if required and not forced:
+            # Execution would run under emulation (>20 min). The caller (validate)
+            # asks the user whether to proceed or skip; here we just lay out the
+            # cost and the faster alternative.
+            print(f"             ⚠ execution would run under slow emulation — an "
+                  f"emulated baseline +")
+            print(f"             starting-kit run takes >20 min. For a fast run, use a "
+                  f"native image:")
+            print(f"               export AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE=codalab/codalab-legacy:py312")
+            print(f"             then re-run; or pass --no-execute for static checks only.")
+        else:
+            print(f"             For a native {host} image, substitute one (wins over the")
+            print(f"             bundle's declared image):")
+            print(f"               export AUTOCODABENCH_DOCKER_IMAGE_OVERRIDE=codalab/codalab-legacy:py312")
+            if forced:
+                print(f"             AUTOCODABENCH_ALLOW_EMULATION is set — the slow emulated "
+                      f"run will proceed.")
     else:  # architecture undetermined (not pulled, registry unreachable/private)
         err = (p["image_error"] or "").lower()
         if "denied" in err or "unauthorized" in err or "not found" in err:
@@ -386,6 +522,7 @@ def _print_docker_preflight(image, *, required: bool, note: str | None = None) -
         print()
         for w in warn:
             print(f"WARNING: {w}", file=sys.stderr)
+        print(f"WARNING: prerequisites & install steps → {_PREREQS_URL}", file=sys.stderr)
     return p
 
 
@@ -420,6 +557,11 @@ def _cmd_create(args: argparse.Namespace) -> int:
         return 2
     if args.pdf and not Path(args.pdf).expanduser().is_file():
         print(f"--pdf: not a file: {args.pdf}", file=sys.stderr)
+        return 2
+
+    # The pipeline's build phase self-validates inside Docker — fail fast on a
+    # missing daemon now, before the plan phase spends any model budget.
+    if not _require_docker():
         return 2
 
     if not _require_live_claude_auth(args.backend):
@@ -552,7 +694,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
     print(f"  cost:      ${result.total_cost_usd:.2f}")
     if result.validation is not None:
         print()
-        print(result.validation.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(result.validation))
     if not result.ok:
         print(f"\ncreate failed: {result.error}", file=sys.stderr)
         return 1
@@ -727,6 +870,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
             print(f"error: plan file not found: {plan_arg}", file=sys.stderr)
             return 2
 
+    # Phase 2 self-validates by running the bundle inside Docker — catch a
+    # missing daemon now, before any model spend, rather than mid-build.
+    if not _require_docker():
+        return 2
+
     if not _require_live_claude_auth(args.backend):
         return 2
 
@@ -803,7 +951,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
     print(f"  cost:      ${result.total_cost_usd:.2f}")
     if result.validation is not None:
         print()
-        print(result.validation.to_markdown())
+        from ..checks import render_report_terminal
+        print(render_report_terminal(result.validation))
     if not result.ok:
         print(f"\nbuild failed: {result.error}", file=sys.stderr)
         return 1
@@ -910,20 +1059,68 @@ def _cmd_auth(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _cmd_checks(args: argparse.Namespace) -> int:
-    from ..checks import checklist_coverage
+    from ..checks import checklist_coverage, render_checks_catalog_terminal
 
-    rows = checklist_coverage()
     if args.as_json:
-        print(json.dumps(rows, indent=2))
+        print(json.dumps(checklist_coverage(), indent=2))
         return 0
-    width = max(len(r["id"]) for r in rows)
-    tier = None
-    for r in rows:
-        if r["tier"] != tier:
-            tier = r["tier"]
-            print(f"\n[{tier}]")
-        print(f"  {r['id']:<{width}}  {r['title']}  ({r['citation']})")
+    # One box table per validation type; user-friendly (no internal ids), with
+    # an LLM-as-a-judge column and a clickable Sources footer.
+    print(render_checks_catalog_terminal())
     return 0
+
+
+# ---------------------------------------------------------------------------
+# doctor — system prerequisites (the bits pip cannot install)
+# ---------------------------------------------------------------------------
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from ..preflight import render_report, system_report
+
+    checks = system_report()
+    if getattr(args, "as_json", False):
+        print(json.dumps([c.as_dict() for c in checks], indent=2))
+    else:
+        print("autocodabench system check — prerequisites pip cannot install:\n")
+        print(render_report(checks))
+        print()
+
+    failed_required = [c for c in checks if c.required and c.status == "fail"]
+    optional_missing = [c for c in checks if not c.required and c.status != "ok"]
+    if args.as_json:
+        return 1 if failed_required else 0
+    if failed_required:
+        print(f"✗ {len(failed_required)} required prerequisite(s) missing — "
+              "phases 2-3 will not run until fixed.")
+        return 1
+    if optional_missing:
+        print(f"✓ required prerequisites OK; {len(optional_missing)} optional "
+              "item(s) missing (see ⚠️ above).")
+    else:
+        print("✓ all prerequisites satisfied.")
+    return 0
+
+
+def _require_docker() -> bool:
+    """Fail fast — before any model spend — when Docker isn't ready for phase 2/3.
+
+    Used by `build` / `plan-build-validate`, where the build phase self-validates
+    inside Docker and proceeding without it only wastes model budget. Returns
+    True if the command may proceed. (`validate` deliberately does NOT call this —
+    its static checks are useful without Docker; it only warns.)
+    """
+    from ..preflight import check_docker
+
+    c = check_docker()
+    if c.status == "fail":
+        print(f"\n{c.glyph} Docker is required for this command but is unavailable:",
+              file=sys.stderr)
+        print(f"   {c.detail}", file=sys.stderr)
+        print(f"   fix: {c.hint}", file=sys.stderr)
+        print(f"   prerequisites & install steps → {_PREREQS_URL}", file=sys.stderr)
+        print("   (run `autocodabench doctor` to check all prerequisites.)", file=sys.stderr)
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -950,6 +1147,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "utilities:\n"
             "  demo       rebuild + validate the shipped demo bundle, no keys  (keyless)\n"
             "  checks     list the registered checks by tier                   (keyless)\n"
+            "  doctor     check system prerequisites (Docker, Node/npx, git)   (keyless)\n"
             "  auth       report / choose / verify the Claude auth path\n"
             "\n"
             "backends: every agentic command accepts --backend — claude[:model] (default),\n"
@@ -1082,6 +1280,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["list"], nargs="?", default="list")
     p.add_argument("--json", action="store_true", dest="as_json")
     p.set_defaults(func=_cmd_checks)
+
+    p = sub.add_parser("doctor", help="check system prerequisites pip cannot "
+                                      "install (Docker, Node/npx, git)")
+    p.add_argument("--json", action="store_true", dest="as_json")
+    p.set_defaults(func=_cmd_doctor)
 
     return parser
 

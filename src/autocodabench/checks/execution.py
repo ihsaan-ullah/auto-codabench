@@ -30,7 +30,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .base import Check, CheckContext, CheckResult, Severity, Status, register
+from .base import (
+    Check,
+    CheckContext,
+    CheckResult,
+    Dimension,
+    Severity,
+    Status,
+    register,
+)
 
 
 def _arch_fit(ex, image: str | None) -> dict[str, Any]:
@@ -47,6 +55,20 @@ def _arch_fit(ex, image: str | None) -> dict[str, Any]:
         "image_available_arches": p.get("image_available_arches"),
         "emulated": p.get("emulated"),
     }
+
+
+def _emulation_skip(ex, image: str | None) -> str | None:
+    """When the declared image would run under QEMU emulation on this host and
+    the user has not opted in (``AUTOCODABENCH_ALLOW_EMULATION``), return the
+    honest skip message; otherwise ``None``. Computed before any fresh run, so
+    a >20-minute emulated execution is never started silently."""
+    if ex.emulation_allowed():
+        return None
+    try:
+        pf = ex.docker_preflight(image)
+    except Exception:
+        return None
+    return ex.emulation_guidance(pf)
 
 
 def _has_baseline(bundle_dir: Path) -> bool:
@@ -74,7 +96,9 @@ class BaselineExecution(Check):
     """
 
     id = "baseline-execution"
+    how = "Runs the baseline through ingestion+scoring in the declared Docker image and checks a score is produced."
     title = "Baseline runs end-to-end through scoring (in Docker)"
+    dimension = Dimension.EXECUTABLE
     severity = Severity.BLOCKER
     citation = "Pavão et al. (Ch. 5, Ch. 11)"
     requires_execution = True
@@ -104,6 +128,10 @@ class BaselineExecution(Check):
                 "and the bundle is unchanged since — reusing that run; a score was "
                 f"produced ({_scores_str(cached.get('scores'))})",
                 details, where="solutions/")]
+
+        block = _emulation_skip(ex, ex.bundle_docker_image(slug, root))
+        if block:
+            return [self.skipped(block, where="solutions/")]
 
         res = ex.run_baseline_submission(slug, root_dir=root)
         details = self._run_details(ex, res, ok=res.get("ok", False))
@@ -153,7 +181,9 @@ class StartingKitExecution(Check):
     """
 
     id = "starting-kit-execution"
+    how = "Executes the starting-kit notebook end-to-end in the declared Docker image."
     title = "Starting-kit notebook executes cleanly (in Docker)"
+    dimension = Dimension.EXECUTABLE
     severity = Severity.WARNING
     citation = "Pavão et al. (Ch. 5, Ch. 13)"
     requires_execution = True
@@ -182,6 +212,10 @@ class StartingKitExecution(Check):
                 "phase and the bundle is unchanged since — reusing that run "
                 f"({_cells(cached.get('cells_executed'))} executed)",
                 self._cache_details(ex, cached), where=_rel(ctx, nb))]
+
+        block = _emulation_skip(ex, ex.bundle_docker_image(slug, root))
+        if block:
+            return [self.skipped(block, where=_rel(ctx, nb))]
 
         res = ex.run_starting_kit(slug, root_dir=root)
         image = res.get("docker_image")
