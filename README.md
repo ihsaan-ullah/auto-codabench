@@ -2,7 +2,6 @@
 
 **Author and pre-launch test [Codabench](https://www.codabench.org) competition bundles — the way you test software.**
 
-[![PyPI](https://img.shields.io/badge/pypi-autocodabench-blue)](https://pypi.org/project/autocodabench)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
@@ -20,7 +19,9 @@ AutoCodabench helps organizers in two ways:
   PDF, with an LLM agent guiding you.
 
 ```bash
-pip install autocodabench
+git clone https://github.com/ihsaan-ullah/auto-codabench.git
+cd auto-codabench
+pip install -e .          # editable install; add '[dev]' to run the tests
 
 # Catch the bugs & missing best practices a checklist can catch.
 autocodabench validate ./my-competition.zip
@@ -36,8 +37,10 @@ autocodabench plan-build-validate "Plankton image classification, balanced \
 
 ## Requirements
 
-`pip install autocodabench` covers the Python side. Two phases also need tools
-pip can't install:
+`pip install -e .` from a checkout covers the Python side (library-only users
+can skip the clone with `pip install git+https://github.com/ktgiahieu/auto-codabench.git`, but the web UI, Docker
+image, and benchmarks all live in the repo). Two phases also need tools pip
+can't install:
 
 - **Docker** (daemon running) — for `build` and `validate --execute`, which run
   the bundle inside its `docker_image` exactly as Codabench does. Get
@@ -49,7 +52,9 @@ Run `autocodabench doctor` to check all three. Phase-1 planning and the keyless
 validator need none of it.
 
 ## Quick start
+
 ### Validation
+
 ```bash
 pip install autocodabench        # or: pip install -e . from a checkout
 
@@ -62,11 +67,11 @@ autocodabench checks list
 
 We use a combination of deterministic and LLM-as-a-judge for validation:
 
-| Type                    | What it does                                                  | Pass/fail?      |
-| ----------------------- | ------------------------------------------------------------- | ----------- |
-| **Deterministic** | Code computes PASS/FAIL (schema, splits, scoring round-trips) | ✅ Yes      |
-| **LLM-judged**    | An LLM grades a rubric → advisory findings with rationale    | ❌ Advises  |
-| **Attestation**   | Launch criteria only a human can certify                      | ❌ Surfaces |
+| Type                    | What it does                                                  |
+| ----------------------- | ------------------------------------------------------------- |
+| **Deterministic** | Code computes PASS/FAIL (schema, splits, scoring round-trips) |
+| **LLM-judged**    | An LLM grades a rubric → advisory findings with rationale    |
+| **Attestation**   | Criteria only a human can certify                             |
 
 When a fact is missing it reports *skipped, with instructions*. Every
 check cites its source (Pavão et al. or the Codabench schema). The full
@@ -82,7 +87,7 @@ or any `URL#model`:
 ```bash
 autocodabench validate bundle.zip                     # Claude (default)
 autocodabench validate bundle.zip --model claude-opus-4-8
-autocodabench validate bundle.zip --backend ollama:llama3.1     
+autocodabench validate bundle.zip --backend ollama:llama3.1   
 autocodabench validate bundle.zip --judged --backend openai:gpt-4o
 ```
 
