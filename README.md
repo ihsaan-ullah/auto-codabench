@@ -35,34 +35,27 @@ autocodabench plan-build-validate "Plankton image classification, balanced \
 > the YAML header above configures the Space (Docker SDK, port 7860). Don't
 > delete it; the prose below it is free to edit. -->
 
-## Requirements
+## Prerequisites
 
-`pip install -e .` from a checkout covers the Python side (library-only users
-can skip the clone with `pip install git+https://github.com/ktgiahieu/auto-codabench.git`, but the web UI, Docker
-image, and benchmarks all live in the repo). Two phases also need tools pip
-can't install:
-
-- **Docker** (daemon running) — for `build` and `validate --execute`, which run
-  the bundle inside its `docker_image` exactly as Codabench does. Get
+- **Docker** (daemon running) — for `build` and `validate --execute`. Get
   [Docker Desktop](https://www.docker.com/products/docker-desktop/) or
   [Docker Engine](https://docs.docker.com/engine/install/).
-- **Node/`npx`** (OpenAlex research) and **git** (Agent SDK) — optional.
-
-Run `autocodabench doctor` to check all three. Phase-1 planning and the keyless
-validator need none of it.
+- **Node/`npx`** for OpenAlex research
 
 ## Quick start
 
-### Validation
+## Installation
+
+``bash
+git clone https://github.com/ihsaan-ullah/auto-codabench.git
+cd auto-codabench
+pip install -e .
+``
+
+### Validating competition bundle
 
 ```bash
-pip install autocodabench        # or: pip install -e . from a checkout
-
-# Validate any bundle — including one you wrote by hand.
 autocodabench validate /path/to/bundle.zip
-
-# See exactly what gets checked, by tier, with citations.
-autocodabench checks list
 ```
 
 We use a combination of deterministic and LLM-as-a-judge for validation:
@@ -73,72 +66,63 @@ We use a combination of deterministic and LLM-as-a-judge for validation:
 | **LLM-judged**    | An LLM grades a rubric → advisory findings with rationale    |
 | **Attestation**   | Criteria only a human can certify                             |
 
-When a fact is missing it reports *skipped, with instructions*. Every
-check cites its source (Pavão et al. or the Codabench schema). The full
-catalogue is in [`docs/autocodabench_checks.md`](docs/autocodabench_checks.md).
+If a fact required for verification is missing, autocodabench reports *skipped*. 
+The full checklist can be found in [`docs/autocodabench_checks.md`](docs/autocodabench_checks.md), or by running:
+```bash
+autocodabench checks list
+```
 
-**Executable checks with Docker container.** autocodabench *executes* the bundle's baseline and starting-kit notebook inside the competition's declared `docker_image`, mounted the way Codabench's
-worker mounts it, and iterates until both run.
-
-**Bring your own backbone.** The agent runs on Claude by default, but every
-agentic command takes `--backend` — local Ollama, OpenAI-compatible endpoints,
-or any `URL#model`:
+**Choose another LLM:** 
+The agent runs on Claude by default, but you can change LLM backbone with `--backend`:
 
 ```bash
 autocodabench validate bundle.zip                     # Claude (default)
-autocodabench validate bundle.zip --model claude-opus-4-8
+autocodabench validate bundle.zip --backend claude:claude-opus-4-8
 autocodabench validate bundle.zip --backend ollama:llama3.1   
-autocodabench validate bundle.zip --judged --backend openai:gpt-4o
+autocodabench validate bundle.zip --backend openai:gpt-4o
 ```
 
-### The pipeline
-
-Authoring runs in three phases you can chain or run on their own:
+### Planning & creating competition bundle
 
 ```bash
 autocodabench plan  "<idea>" [--pdf proposal.pdf] [--data DIR]  # → implementation_plan.md
 autocodabench build --run-dir <dir>                             # plan → bundle + .zip
-autocodabench validate <bundle>                                 # pre-launch checks (keyless)
+
 ```
+You can also run:
+`plan-build-validate`: to execute all three commands at once.
 
-`plan-build-validate` (alias: `create`) runs all three as isolated agent
-sessions joined only by a locked, human-editable `implementation_plan.md`. The
-build agent acts exclusively through a typed MCP tool surface, so every action
-is logged and the finished run is replayable.
+## Claude authentication
 
-## Authentication
+Run this command to set up authentication if you are using Claude Code:
+``bash
+autocodabench auth status
+``
 
-For the agentic commands, in order of preference for local use:
+The package currently supports 2 options:
+1. **Claude subscription** — if Claude Code is installed and logged in (Pro/Max), usage draws on the plan's Agent SDK credit.
+2. **Claude API key** — export `ANTHROPIC_API_KEY` before running.
 
-1. **Claude subscription** — if Claude Code is installed and logged in (Pro/Max),
-   nothing else is needed; usage draws on the plan's Agent SDK credit.
-2. **API key** — export `ANTHROPIC_API_KEY`.
-
-`autocodabench auth status` shows which path is active. Hosted multi-user
-deployments **must** use an API key (Anthropic ToS) — see
-[`docs/INSTRUCTION_FOR_USER.md`](docs/INSTRUCTION_FOR_USER.md).
+`autocodabench auth status` shows which option is active.
 
 ## Web UI
 
-A Chainlit chat UI (`web/`) wraps the library in a guided plan → build →
-validate workspace.
+A web UI that wraps the library is available in (`web/`). You can either:
 
-**Host it yourself** — copy `.env.example` to `.env`, set `SHARED_PASSWORD` and
-a Claude auth path, then:
+1. **Host it yourself**: copy `.env.example` to `.env`, set `SHARED_PASSWORD` and a Claude auth path, then:
 
 ```bash
 pip install -e . && pip install -r web/requirements.txt
 cd web && chainlit run app.py --host 127.0.0.1 --port 8500 -h
 ```
 
-Open [http://127.0.0.1:8500](http://127.0.0.1:8500). See
-[`web/README.md`](web/README.md) for the operator guide.
+You can then open [http://127.0.0.1:8500](http://127.0.0.1:8500). See
+[`web/README.md`](web/README.md) for more details.
 
-**Or try the hosted demo** — email
+2. ** Try our hosted demo** — email
 [autocodabench@googlegroups.com](mailto:autocodabench@googlegroups.com) for an
 account (with a little free credit) at the
-[hosted Space](https://ktgiahieu-autocodabench-alpha.hf.space/login), no install
-required.
+[hosted Space](https://ktgiahieu-autocodabench-alpha.hf.space/login), no installation required.
 
 ## Documentation
 
