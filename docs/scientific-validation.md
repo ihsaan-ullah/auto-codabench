@@ -154,7 +154,7 @@ All subprocess stdout and stderr is streamed to disk as it is produced
 termination, so that failures are diagnosable from artifacts alone.
 
 **Evidence from the recorded pilot** (run directory retained;
-2026-06-12, `claude-sonnet-4-6`): starting from the one-line idea "Iris
+2026-06-12, `claude-sonnet-5`): starting from the one-line idea "Iris
 species classification…", the build agent encountered a genuine
 sandbox/ingestion mismatch, diagnosed it from stderr, repaired the
 bundle, and converged in 4 baseline attempts and 5 notebook attempts;

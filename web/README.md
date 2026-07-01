@@ -60,7 +60,7 @@ Open http://127.0.0.1:8500, enter your `SHARED_PASSWORD`, and start chatting.
 | `OPENALEX_MAILTO` | Yes | — | Email for OpenAlex polite-pool (alex-mcp). |
 | `CODABENCH_USERNAME` | For upload | — | Codabench account (can also be entered in the UI form). |
 | `CODABENCH_PASSWORD` | For upload | — | Codabench password (can also be entered in the UI form). |
-| `AUTOCODABENCH_DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Claude model to use. |
+| `AUTOCODABENCH_DEFAULT_MODEL` | No | `claude-sonnet-5` | Claude model to use. |
 | `MAX_USD_PER_SESSION` | No | `5.0` | Hard cost cap per session (USD). |
 | `AUTOCODABENCH_CONTEXT_WINDOW` | No | `200000` | Token denominator for context-% display. |
 | `HF_TOKEN` | For HF Spaces | — | Write-scoped HF token. Enables run upload to HF Dataset. |

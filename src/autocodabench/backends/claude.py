@@ -26,7 +26,7 @@ from .base import AgentRunResult, AgentTask
 
 log = logging.getLogger("autocodabench.backends.claude")
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 
 def _to_jsonable(obj: Any) -> Any:
